@@ -1,0 +1,34 @@
+wi_id: __WI_ID__
+goal: [one execution goal]
+scope:
+  - [what this work item may change]
+out_of_scope:
+  - [what must not be added]
+
+allowed_paths:
+  - src/**
+forbidden_paths:
+  - change/**
+  - versions/**
+
+phase_scope: Implementation
+
+spec_refs:
+  - REQ-001
+acceptance_refs:
+  - ACC-001
+derived_from: __DERIVED_FROM__
+dependency_refs: []
+dependency_type: strong
+contract_refs: []
+
+verification_profile: focused
+required_verification:
+  - [test or verification required before this WI is considered complete]
+
+stop_conditions:
+  - [when the session must stop and ask]
+reopen_triggers:
+  - [when spec/design must be reopened]
+hard_constraints:
+  - [non-negotiable constraint]

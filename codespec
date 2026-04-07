@@ -1,0 +1,406 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRAMEWORK_ROOT="$SCRIPT_DIR"
+
+log() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+require_yq() {
+  command -v yq >/dev/null 2>&1 || die "yq is required"
+}
+
+yaml_scalar() {
+  local file="$1"
+  local key="$2"
+  yq eval ".${key}" "$file"
+}
+
+yaml_list() {
+  local file="$1"
+  local key="$2"
+  yq eval ".${key}[]" "$file" 2>/dev/null || true
+}
+
+find_project_root() {
+  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ] && [ -f "${CODESPEC_PROJECT_ROOT}/.codespec/codespec" ]; then
+    printf '%s\n' "$CODESPEC_PROJECT_ROOT"
+    return
+  fi
+
+  local candidate
+  candidate="$(dirname "$FRAMEWORK_ROOT")"
+  if [ -f "$candidate/.codespec/codespec" ]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.codespec/codespec" ]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  die "could not locate project root containing .codespec/codespec"
+}
+
+list_containers() {
+  local project_root="$1"
+  local dir
+  if [ ! -d "$project_root/change" ]; then
+    return
+  fi
+  for dir in "$project_root"/change/*; do
+    [ -d "$dir" ] || continue
+    basename "$dir"
+  done
+}
+
+detect_container() {
+  local project_root="$1"
+  if [ -n "${CODESPEC_CONTAINER:-}" ] && [ -d "$project_root/change/$CODESPEC_CONTAINER" ]; then
+    printf '%s\n' "$CODESPEC_CONTAINER"
+    return
+  fi
+
+  if [[ "$PWD" == "$project_root/change/"* ]]; then
+    local rel
+    rel="${PWD#"$project_root/change/"}"
+    printf '%s\n' "${rel%%/*}"
+    return
+  fi
+
+  local containers=()
+  local item
+  while IFS= read -r item; do
+    [ -n "$item" ] && containers+=("$item")
+  done < <(list_containers "$project_root")
+
+  if [ "${#containers[@]}" -eq 1 ]; then
+    printf '%s\n' "${containers[0]}"
+    return
+  fi
+
+  die "could not determine current container; set CODESPEC_CONTAINER or run inside change/<container>"
+}
+
+render_template() {
+  local src="$1"
+  local dest="$2"
+  local content
+  content="$(<"$src")"
+  content="${content//__DATE__/${RENDER_DATE:-}}"
+  content="${content//__CONTAINER__/${RENDER_CONTAINER:-}}"
+  content="${content//__CHANGE_ID__/${RENDER_CHANGE_ID:-}}"
+  content="${content//__BASE_VERSION__/${RENDER_BASE_VERSION:-}}"
+  content="${content//__FEATURE_BRANCH__/${RENDER_FEATURE_BRANCH:-}}"
+  content="${content//__EXECUTION_GROUP__/${RENDER_EXECUTION_GROUP:-}}"
+  content="${content//__EXECUTION_BRANCH__/${RENDER_EXECUTION_BRANCH:-}}"
+  content="${content//__UPDATED_BY__/${RENDER_UPDATED_BY:-}}"
+  content="${content//__PHASE__/${RENDER_PHASE:-}}"
+  content="${content//__STATUS__/${RENDER_STATUS:-}}"
+  content="${content//__FOCUS_WORK_ITEM__/${RENDER_FOCUS_WORK_ITEM:-}}"
+  content="${content//__ACTIVE_WORK_ITEMS__/${RENDER_ACTIVE_WORK_ITEMS:-[]}}"
+  content="${content//__WI_ID__/${RENDER_WI_ID:-}}"
+  content="${content//__DERIVED_FROM__/${RENDER_DERIVED_FROM:-}}"
+  printf '%s\n' "$content" > "$dest"
+}
+
+ensure_root_assets() {
+  local project_root="$1"
+  mkdir -p "$project_root/change" "$project_root/versions"
+
+  if [ ! -f "$project_root/lessons_learned.md" ]; then
+    RENDER_DATE="$(date +%F)" render_template "$FRAMEWORK_ROOT/templates/lessons_learned.md" "$project_root/lessons_learned.md"
+  fi
+
+  if [ ! -f "$project_root/CLAUDE.md" ]; then
+    RENDER_CONTAINER="${2:-main}" render_template "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$project_root/CLAUDE.md"
+  fi
+}
+
+create_container_from_template() {
+  local project_root="$1"
+  local container="$2"
+  local change_id="$3"
+  local base_version="$4"
+  local execution_group="$5"
+  local execution_branch="$6"
+  local phase="$7"
+  local status="$8"
+  local focus_work_item="$9"
+
+  local container_root="$project_root/change/$container"
+  mkdir -p "$container_root/work-items" "$container_root/contracts" "$container_root/design-appendices" "$container_root/spec-appendices"
+
+  local today
+  today="$(date +%F)"
+
+  RENDER_DATE="$today" \
+  RENDER_CONTAINER="$container" \
+  RENDER_CHANGE_ID="$change_id" \
+  RENDER_BASE_VERSION="$base_version" \
+  RENDER_FEATURE_BRANCH="feature/$change_id" \
+  RENDER_EXECUTION_GROUP="$execution_group" \
+  RENDER_EXECUTION_BRANCH="$execution_branch" \
+  RENDER_UPDATED_BY="codespec-init" \
+  RENDER_PHASE="$phase" \
+  RENDER_STATUS="$status" \
+  RENDER_FOCUS_WORK_ITEM="$focus_work_item" \
+  RENDER_ACTIVE_WORK_ITEMS="[]" \
+  render_template "$FRAMEWORK_ROOT/templates/meta.yaml" "$container_root/meta.yaml"
+
+  [ -f "$container_root/spec.md" ] || cp "$FRAMEWORK_ROOT/templates/spec.md" "$container_root/spec.md"
+  [ -f "$container_root/design.md" ] || cp "$FRAMEWORK_ROOT/templates/design.md" "$container_root/design.md"
+  [ -f "$container_root/testing.md" ] || cp "$FRAMEWORK_ROOT/templates/testing.md" "$container_root/testing.md"
+}
+
+init_project() {
+  require_yq
+  local container="${1:-main}"
+  local change_id="${2:-baseline}"
+  local base_version="${3:-null}"
+  local project_root
+  project_root="$(find_project_root)"
+
+  ensure_root_assets "$project_root" "$container"
+
+  if [ ! -d "$project_root/change/$container" ]; then
+    create_container_from_template "$project_root" "$container" "$change_id" "$base_version" "null" "null" "Proposal" "in_progress" "null"
+  fi
+
+  log "initialized project"
+  log "project_root: $project_root"
+  log "container: $container"
+  log "change_id: $change_id"
+}
+
+init_change() {
+  require_yq
+  local container="${1:?usage: codespec init-change <container> [change_id] [base_version]}"
+  local change_id="${2:-$container}"
+  local base_version="${3:-null}"
+  local project_root
+  project_root="$(find_project_root)"
+
+  ensure_root_assets "$project_root" "$container"
+  [ ! -d "$project_root/change/$container" ] || die "container already exists: $container"
+  create_container_from_template "$project_root" "$container" "$change_id" "$base_version" "null" "null" "Proposal" "in_progress" "null"
+
+  log "initialized change container: change/$container"
+}
+
+add_container() {
+  require_yq
+  local new_container="${1:?usage: codespec add-container <container> [source-container]}"
+  local project_root
+  project_root="$(find_project_root)"
+
+  local source_container="${2:-$(detect_container "$project_root")}"
+  local source_root="$project_root/change/$source_container"
+  [ -d "$source_root" ] || die "source container not found: $source_container"
+  [ ! -d "$project_root/change/$new_container" ] || die "container already exists: $new_container"
+
+  local change_id base_version
+  change_id="$(yaml_scalar "$source_root/meta.yaml" change_id)"
+  base_version="$(yaml_scalar "$source_root/meta.yaml" base_version)"
+
+  create_container_from_template "$project_root" "$new_container" "$change_id" "$base_version" "$new_container" "group/$new_container" "Implementation" "in_progress" "null"
+
+  cp "$source_root/spec.md" "$project_root/change/$new_container/spec.md"
+  cp "$source_root/design.md" "$project_root/change/$new_container/design.md"
+  cp "$source_root/testing.md" "$project_root/change/$new_container/testing.md"
+
+  if [ -d "$source_root/work-items" ]; then
+    cp -R "$source_root/work-items/." "$project_root/change/$new_container/work-items/"
+  fi
+  if [ -d "$source_root/contracts" ]; then
+    cp -R "$source_root/contracts/." "$project_root/change/$new_container/contracts/"
+  fi
+  if [ -d "$source_root/design-appendices" ]; then
+    cp -R "$source_root/design-appendices/." "$project_root/change/$new_container/design-appendices/"
+  fi
+  if [ -d "$source_root/spec-appendices" ]; then
+    cp -R "$source_root/spec-appendices/." "$project_root/change/$new_container/spec-appendices/"
+  fi
+
+  log "added container: change/$new_container"
+  log "cloned dossier from: change/$source_container"
+}
+
+add_work_item() {
+  require_yq
+  local wi_id="${1:?usage: codespec add-work-item <WI-ID> [container]}"
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${2:-$(detect_container "$project_root")}"
+  local wi_file="$project_root/change/$container/work-items/$wi_id.yaml"
+  [ ! -f "$wi_file" ] || die "work item already exists: $wi_id"
+
+  RENDER_WI_ID="$wi_id" \
+  RENDER_DERIVED_FROM="design.md#work-item-derivation" \
+  render_template "$FRAMEWORK_ROOT/templates/work-item.yaml" "$wi_file"
+
+  log "created work item: change/$container/work-items/$wi_id.yaml"
+}
+
+materialize_deployment() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${1:-$(detect_container "$project_root")}"
+  local target="$project_root/change/$container/deployment.md"
+  [ ! -f "$target" ] || die "deployment.md already exists: change/$container/deployment.md"
+  cp "$FRAMEWORK_ROOT/templates/deployment.md" "$target"
+  log "created deployment file: change/$container/deployment.md"
+}
+
+install_hooks() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  "$FRAMEWORK_ROOT/scripts/install-hooks.sh" "$project_root"
+}
+
+status_cmd() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container
+  container="$(detect_container "$project_root")"
+  local meta="$project_root/change/$container/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml for container $container"
+
+  local git_branch="none"
+  if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git_branch="$(git -C "$project_root" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
+  fi
+
+  printf 'project_root: %s\n' "$project_root"
+  printf 'container: %s\n' "$container"
+  printf 'phase: %s\n' "$(yaml_scalar "$meta" phase)"
+  printf 'status: %s\n' "$(yaml_scalar "$meta" status)"
+  printf 'focus_work_item: %s\n' "$(yaml_scalar "$meta" focus_work_item)"
+  printf 'feature_branch: %s\n' "$(yaml_scalar "$meta" feature_branch)"
+  printf 'execution_group: %s\n' "$(yaml_scalar "$meta" execution_group)"
+  printf 'execution_branch: %s\n' "$(yaml_scalar "$meta" execution_branch)"
+  printf 'git_branch: %s\n' "$git_branch"
+}
+
+readset_cmd() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container
+  container="$(detect_container "$project_root")"
+  local container_root="$project_root/change/$container"
+  local meta="$container_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml for container $container"
+
+  local focus_wi
+  focus_wi="$(yaml_scalar "$meta" focus_work_item)"
+
+  printf 'readset:\n'
+  printf -- '- change/%s/meta.yaml\n' "$container"
+  printf -- '- change/%s/spec.md (read to <!-- SKELETON-END --> first)\n' "$container"
+  printf -- '- change/%s/design.md (read Default Read Layer first)\n' "$container"
+
+  if [ "$focus_wi" != "null" ] && [ -f "$container_root/work-items/$focus_wi.yaml" ]; then
+    printf -- '- change/%s/work-items/%s.yaml\n' "$container" "$focus_wi"
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      [ "$ref" != "null" ] || continue
+      printf -- '- change/%s/%s\n' "$container" "$ref"
+    done < <(yaml_list "$container_root/work-items/$focus_wi.yaml" contract_refs)
+  fi
+
+  printf -- '- change/%s/spec-appendices/* (only when default layer is insufficient)\n' "$container"
+  printf -- '- change/%s/design-appendices/* (only when current slice requires drill-down)\n' "$container"
+}
+
+check_gate_cmd() {
+  require_yq
+  local gate="${1:?usage: codespec check-gate <name>}"
+  exec "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$gate"
+}
+
+install_cmd() {
+  require_yq
+  local target_root="${1:-$PWD}"
+  local container="${2:-main}"
+  local change_id="${3:-baseline}"
+  local base_version="${4:-null}"
+  exec "$FRAMEWORK_ROOT/scripts/install.sh" "$target_root" "$container" "$change_id" "$base_version"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  codespec install [target_root] [container] [change_id] [base_version]
+  codespec init-project [container] [change_id] [base_version]
+  codespec init-change <container> [change_id] [base_version]
+  codespec add-container <container> [source-container]
+  codespec add-work-item <WI-ID> [container]
+  codespec install-hooks
+  codespec check-gate <name>
+  codespec status
+  codespec readset
+  codespec materialize-deployment [container]
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+
+  case "$cmd" in
+    install)
+      install_cmd "$@"
+      ;;
+    init-project)
+      init_project "$@"
+      ;;
+    init-change)
+      init_change "$@"
+      ;;
+    add-container)
+      add_container "$@"
+      ;;
+    add-work-item)
+      add_work_item "$@"
+      ;;
+    install-hooks)
+      install_hooks "$@"
+      ;;
+    check-gate)
+      check_gate_cmd "$@"
+      ;;
+    status)
+      status_cmd "$@"
+      ;;
+    readset)
+      readset_cmd "$@"
+      ;;
+    materialize-deployment)
+      materialize_deployment "$@"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      die "unknown command: $cmd"
+      ;;
+  esac
+}
+
+main "$@"

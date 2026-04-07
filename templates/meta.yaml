@@ -1,0 +1,19 @@
+change_id: __CHANGE_ID__
+base_version: __BASE_VERSION__
+created_at: __DATE__
+
+phase: __PHASE__
+status: __STATUS__
+focus_work_item: __FOCUS_WORK_ITEM__
+
+execution_group: __EXECUTION_GROUP__
+execution_branch: __EXECUTION_BRANCH__
+active_work_items: __ACTIVE_WORK_ITEMS__
+
+feature_branch: __FEATURE_BRANCH__
+
+blocked_reason: null
+blocked_by: null
+
+updated_at: __DATE__
+updated_by: __UPDATED_BY__
