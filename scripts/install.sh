@@ -49,5 +49,11 @@ chmod +x "$TARGET_ROOT/.codespec/codespec" \
 
 CODESPEC_PROJECT_ROOT="$TARGET_ROOT" "$TARGET_ROOT/.codespec/codespec" init-project "$CONTAINER" "$CHANGE_ID" "$BASE_VERSION"
 
+if git -C "$TARGET_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  "$TARGET_ROOT/.codespec/scripts/install-hooks.sh" "$TARGET_ROOT"
+else
+  log 'skipped git hooks installation (target is not a git repository yet)'
+fi
+
 log "installed .codespec runtime assets"
 log "target_root: $TARGET_ROOT"
