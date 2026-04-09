@@ -3,10 +3,12 @@
 ## Default Read Layer
 
 ### Goal / Scope Link
-- spec_refs:
+- requirement_refs:
   - REQ-001
 - acceptance_refs:
   - ACC-001
+- verification_refs:
+  - VO-001
 - spec_alignment_check:
   - spec_ref: REQ-001
     aligned: true
@@ -40,8 +42,14 @@
 
 ### Work Item Derivation
 - wi_id: WI-001
+  input_refs:
+    - docs/inputs/example.md#intent
+  requirement_refs:
+    - REQ-001
   goal: [execution slice goal]
   covered_acceptance_refs: [ACC-001]
+  verification_refs:
+    - VO-001
   dependency_refs: []
   contract_needed: false
   notes_on_boundary: [boundary note]
@@ -96,15 +104,24 @@
 - DS-001:
   - appendix_ref: design-appendices/DD-001.md
   - scope: [slice scope]
+  - requirement_refs: [REQ-001]
   - acceptance_refs: [ACC-001]
+  - verification_refs: [VO-001]
 
 ## Work Item Derivation
 - wi_id: WI-001
+  input_refs:
+    - docs/inputs/example.md#intent
+  requirement_refs:
+    - REQ-001
   goal: [execution slice goal]
   covered_acceptance_refs: [ACC-001]
+  verification_refs:
+    - VO-001
   dependency_refs: []
   contract_needed: false
   notes_on_boundary: [boundary note]
+  work_item_alignment: keep equal to work-items/WI-001.yaml acceptance_refs
 
 ## Contract Needs
 - contract_id: [optional]

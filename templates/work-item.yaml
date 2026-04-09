@@ -13,14 +13,22 @@ forbidden_paths:
 
 phase_scope: Implementation
 
-spec_refs:
+input_refs:
+  - docs/inputs/example.md#intent
+requirement_refs:
   - REQ-001
 acceptance_refs:
   - ACC-001
+verification_refs:
+  - VO-001
+# keep acceptance_refs aligned with design.md Work Item Derivation.covered_acceptance_refs
+# keep requirement_refs / verification_refs aligned with design.md Goal / Scope Link and Work Item Derivation
 derived_from: __DERIVED_FROM__
 dependency_refs: []
 dependency_type: strong
 contract_refs: []
+
+evidence_refs: []
 
 verification_profile: focused
 required_verification:

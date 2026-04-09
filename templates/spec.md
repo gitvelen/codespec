@@ -19,6 +19,14 @@
 - Unresolved Decisions:
   - [D1]
 
+### Input Intake Summary
+- input_maturity: L1
+- input_refs:
+  - docs/inputs/example.md#intent
+- input_owner: human
+- approval_basis: owner approved intake for scope refinement
+- normalization_status: anchored
+
 ### Requirements Quick Index
 - Proposal Coverage Map: maintain in `## Requirements`
 - Clarification Status: maintain in `## Requirements`
@@ -62,6 +70,14 @@
 ### Unresolved Decisions
 - [Decision 1]
 
+### Input Intake
+- input_maturity: L1
+- input_refs:
+  - docs/inputs/example.md#intent
+- input_owner: human
+- approval_basis: owner approved intake for scope refinement
+- normalization_status: anchored
+
 ### Testing Priority Rules
 - P0: must be automated for safety, money, data integrity, or core flow
 - P1: prefer automated; otherwise must have manual or equivalent pass evidence
@@ -70,10 +86,38 @@
 ## Requirements
 
 ### Proposal Coverage Map
-- [Intent anchor] -> REQ-001
+- source_ref: docs/inputs/example.md#intent
+  anchor_ref: [Goal 1]
+  target_ref: REQ-001
+  status: covered
+- source_ref: docs/inputs/example.md#intent
+  anchor_ref: [Anchor 1]
+  target_ref: REQ-001
+  status: covered
+- source_ref: docs/inputs/example.md#intent
+  anchor_ref: [Prohibition 1]
+  target_ref: REQ-001
+  status: covered
+- source_ref: docs/inputs/example.md#intent
+  anchor_ref: [Success anchor 1]
+  target_ref: REQ-001
+  status: covered
+- source_ref: docs/inputs/example.md#intent
+  anchor_ref: [Boundary alert 1]
+  target_ref: REQ-001
+  status: covered
+- source_ref: docs/inputs/example.md#intent
+  anchor_ref: [Decision 1]
+  target_ref: CLR-001
+  status: needs-clarification
 
 ### Clarification Status
-- [Open/Closed] [topic] [owner or next action]
+- clr_id: CLR-001
+  source_ref: docs/inputs/example.md#intent
+  status: deferred
+  impact: medium
+  owner: human
+  next_action: resolve before design freeze
 
 ### Functional Requirements
 - REQ-001

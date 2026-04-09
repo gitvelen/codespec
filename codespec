@@ -116,6 +116,106 @@ render_template() {
   printf '%s\n' "$content" > "$dest"
 }
 
+copy_dir_contents() {
+  local src="$1"
+  local dest="$2"
+  mkdir -p "$dest"
+  if [ -d "$src" ]; then
+    cp -R "$src/." "$dest/"
+  fi
+}
+
+current_git_branch() {
+  local project_root="$1"
+  if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$project_root" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached'
+    return
+  fi
+  printf 'none'
+}
+
+branch_alignment_status() {
+  local project_root="$1"
+  local expected_branch="$2"
+  local actual_branch
+  actual_branch="$(current_git_branch "$project_root")"
+
+  if [ "$expected_branch" = "null" ]; then
+    printf 'not_applicable'
+    return
+  fi
+
+  [ "$actual_branch" = "$expected_branch" ] && printf 'aligned' || printf 'mismatch'
+}
+
+meta_update() {
+  local meta_file="$1"
+  shift
+  TODAY="$(date +%F)" UPDATED_BY="codespec-cli" yq eval "$* | .updated_at = env(TODAY) | .updated_by = env(UPDATED_BY)" -i "$meta_file"
+}
+
+resolve_container_and_meta() {
+  local project_root="$1"
+  local container="$2"
+  RESOLVED_CONTAINER_ROOT="$project_root/change/$container"
+  RESOLVED_META="$RESOLVED_CONTAINER_ROOT/meta.yaml"
+  [ -d "$RESOLVED_CONTAINER_ROOT" ] || die "container not found: change/$container"
+  [ -f "$RESOLVED_META" ] || die "missing meta.yaml for container $container"
+}
+
+assert_phase_transition() {
+  local current_phase="$1"
+  local target_phase="$2"
+  local current_status="$3"
+
+  case "$target_phase" in
+    Requirements)
+      [ "$current_phase" = 'Proposal' ] || die "cannot move from ${current_phase} to ${target_phase}"
+      ;;
+    Design)
+      [ "$current_phase" = 'Requirements' ] || die "cannot move from ${current_phase} to ${target_phase}"
+      ;;
+    Implementation)
+      [ "$current_phase" = 'Design' ] || die "cannot move from ${current_phase} to ${target_phase}"
+      ;;
+    Testing)
+      [ "$current_phase" = 'Implementation' ] || die "cannot move from ${current_phase} to ${target_phase}"
+      ;;
+    Deployment)
+      if [ "$current_phase" = 'Deployment' ] && [ "$current_status" = 'completed' ]; then
+        return
+      fi
+      [ "$current_phase" = 'Testing' ] || die "cannot move from ${current_phase} to ${target_phase}"
+      ;;
+    *)
+      die "unsupported target phase: ${target_phase}"
+      ;;
+  esac
+}
+
+parse_active_work_items_arg() {
+  local raw="$1"
+  if [ "$raw" = '[]' ]; then
+    printf '[]'
+    return
+  fi
+
+  local output='['
+  local first=1
+  local item
+  IFS=',' read -r -a items <<< "$raw"
+  for item in "${items[@]}"; do
+    [ -n "$item" ] || continue
+    if [ "$first" -eq 0 ]; then
+      output+=', '
+    fi
+    output+="\"$item\""
+    first=0
+  done
+  output+=']'
+  printf '%s' "$output"
+}
+
 ensure_root_assets() {
   local project_root="$1"
   mkdir -p "$project_root/change" "$project_root/versions"
@@ -126,6 +226,14 @@ ensure_root_assets() {
 
   if [ ! -f "$project_root/CLAUDE.md" ]; then
     RENDER_CONTAINER="${2:-main}" render_template "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$project_root/CLAUDE.md"
+  fi
+}
+
+ensure_container_claude() {
+  local container_root="$1"
+  local container="$2"
+  if [ ! -f "$container_root/CLAUDE.md" ]; then
+    RENDER_CONTAINER="$container" render_template "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$container_root/CLAUDE.md"
   fi
 }
 
@@ -160,6 +268,7 @@ create_container_from_template() {
   RENDER_ACTIVE_WORK_ITEMS="[]" \
   render_template "$FRAMEWORK_ROOT/templates/meta.yaml" "$container_root/meta.yaml"
 
+  ensure_container_claude "$container_root" "$container"
   [ -f "$container_root/spec.md" ] || cp "$FRAMEWORK_ROOT/templates/spec.md" "$container_root/spec.md"
   [ -f "$container_root/design.md" ] || cp "$FRAMEWORK_ROOT/templates/design.md" "$container_root/design.md"
   [ -f "$container_root/testing.md" ] || cp "$FRAMEWORK_ROOT/templates/testing.md" "$container_root/testing.md"
@@ -215,7 +324,7 @@ add_container() {
   change_id="$(yaml_scalar "$source_root/meta.yaml" change_id)"
   base_version="$(yaml_scalar "$source_root/meta.yaml" base_version)"
 
-  create_container_from_template "$project_root" "$new_container" "$change_id" "$base_version" "$new_container" "group/$new_container" "Implementation" "in_progress" "null"
+  create_container_from_template "$project_root" "$new_container" "$change_id" "$base_version" "$new_container" "group/$new_container" "Design" "in_progress" "null"
 
   cp "$source_root/spec.md" "$project_root/change/$new_container/spec.md"
   cp "$source_root/design.md" "$project_root/change/$new_container/design.md"
@@ -248,6 +357,7 @@ add_work_item() {
   [ ! -f "$wi_file" ] || die "work item already exists: $wi_id"
 
   RENDER_WI_ID="$wi_id" \
+  RENDER_CONTAINER="$container" \
   RENDER_DERIVED_FROM="design.md#work-item-derivation" \
   render_template "$FRAMEWORK_ROOT/templates/work-item.yaml" "$wi_file"
 
@@ -265,8 +375,182 @@ materialize_deployment() {
   log "created deployment file: change/$container/deployment.md"
 }
 
-install_hooks() {
+start_requirements() {
   require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${1:-$(detect_container "$project_root")}"
+  local current_phase current_status
+  resolve_container_and_meta "$project_root" "$container"
+  current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  current_status="$(yaml_scalar "$RESOLVED_META" status)"
+  assert_phase_transition "$current_phase" 'Requirements' "$current_status"
+
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" proposal-maturity >/dev/null
+
+  meta_update "$RESOLVED_META" '.phase = "Requirements" | .status = "in_progress"'
+  log "started Requirements phase: change/$container"
+}
+
+start_design() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${1:-$(detect_container "$project_root")}"
+  local current_phase current_status
+  resolve_container_and_meta "$project_root" "$container"
+  current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  current_status="$(yaml_scalar "$RESOLVED_META" status)"
+  assert_phase_transition "$current_phase" 'Design' "$current_status"
+
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" requirements-approval >/dev/null
+
+  meta_update "$RESOLVED_META" '.phase = "Design" | .status = "in_progress"'
+  log "started Design phase: change/$container"
+}
+
+start_implementation() {
+  require_yq
+  local wi_id="${1:?usage: codespec start-implementation <WI-ID> [container]}"
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${2:-$(detect_container "$project_root")}"
+  local current_phase current_status active_count
+  resolve_container_and_meta "$project_root" "$container"
+  [ -f "$RESOLVED_CONTAINER_ROOT/work-items/$wi_id.yaml" ] || die "missing work item: $RESOLVED_CONTAINER_ROOT/work-items/$wi_id.yaml"
+  current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  current_status="$(yaml_scalar "$RESOLVED_META" status)"
+  assert_phase_transition "$current_phase" 'Implementation' "$current_status"
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_FOCUS_WI="$wi_id" "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-ready >/dev/null
+
+  active_count="$(yq eval '.active_work_items | length' "$RESOLVED_META")"
+  if [ "$active_count" = '0' ]; then
+    meta_update "$RESOLVED_META" ".phase = \"Implementation\" | .status = \"in_progress\" | .focus_work_item = \"$wi_id\" | .active_work_items = [\"$wi_id\"]"
+  else
+    if ! yq eval '.active_work_items[]' "$RESOLVED_META" 2>/dev/null | grep -Fxq "$wi_id"; then
+      meta_update "$RESOLVED_META" ".phase = \"Implementation\" | .status = \"in_progress\" | .focus_work_item = \"$wi_id\" | .active_work_items += [\"$wi_id\"]"
+    else
+      meta_update "$RESOLVED_META" ".phase = \"Implementation\" | .status = \"in_progress\" | .focus_work_item = \"$wi_id\""
+    fi
+  fi
+  log "started Implementation phase: change/$container focus=$wi_id"
+}
+
+start_testing() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${1:-$(detect_container "$project_root")}"
+  local current_phase current_status
+  resolve_container_and_meta "$project_root" "$container"
+  current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  current_status="$(yaml_scalar "$RESOLVED_META" status)"
+  assert_phase_transition "$current_phase" 'Testing' "$current_status"
+
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
+
+  meta_update "$RESOLVED_META" '.phase = "Testing" | .status = "in_progress" | .focus_work_item = null | .active_work_items = []'
+  log "started Testing phase: change/$container"
+}
+
+start_deployment() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${1:-$(detect_container "$project_root")}"
+  local current_phase current_status
+  resolve_container_and_meta "$project_root" "$container"
+  current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  current_status="$(yaml_scalar "$RESOLVED_META" status)"
+  assert_phase_transition "$current_phase" 'Deployment' "$current_status"
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_REQUIRE_DEPLOYMENT_FILE=1 "$FRAMEWORK_ROOT/scripts/check-gate.sh" deployment-readiness >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
+
+  meta_update "$RESOLVED_META" '.phase = "Deployment" | .status = "in_progress" | .focus_work_item = null | .active_work_items = []'
+  log "started Deployment phase: change/$container"
+}
+
+complete_change() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${1:-$(detect_container "$project_root")}"
+  local current_phase
+  resolve_container_and_meta "$project_root" "$container"
+  current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  [ "$current_phase" = 'Deployment' ] || die 'complete-change requires Deployment phase'
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" promotion-criteria >/dev/null
+
+  meta_update "$RESOLVED_META" '.status = "completed" | .focus_work_item = null | .active_work_items = []'
+  log "completed change: change/$container"
+}
+
+set_active_work_items() {
+  require_yq
+  local raw="${1:?usage: codespec set-active-work-items <WI-001,WI-002|[]> [container]}"
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${2:-$(detect_container "$project_root")}"
+  local yaml_array item
+  resolve_container_and_meta "$project_root" "$container"
+  yaml_array="$(parse_active_work_items_arg "$raw")"
+  local phase focus_wi
+  phase="$(yaml_scalar "$RESOLVED_META" phase)"
+  focus_wi="$(yaml_scalar "$RESOLVED_META" focus_work_item)"
+  if [ "$phase" = 'Implementation' ] && [ "$yaml_array" = '[]' ] && [ "$focus_wi" != 'null' ]; then
+    die 'cannot clear active_work_items while focus_work_item is set in Implementation phase'
+  fi
+  if [ "$phase" = 'Implementation' ] && [ "$focus_wi" != 'null' ] && [ "$yaml_array" != '[]' ]; then
+    printf '%s\n' "$raw" | tr ',' '\n' | grep -Fxq "$focus_wi" || die "focus_work_item ${focus_wi} must be included in active_work_items"
+  fi
+  if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
+    [ "$yaml_array" = '[]' ] || die "${phase} phase requires active_work_items = []"
+  fi
+
+  meta_update "$RESOLVED_META" ".active_work_items = ${yaml_array}"
+  log "updated active work items: change/$container"
+}
+
+promote_version() {
+  require_yq
+  local stable_version="${1:?usage: codespec promote-version <stable-version> [container]}"
+  local project_root
+  project_root="$(find_project_root)"
+  local container="${2:-$(detect_container "$project_root")}"
+  local container_root="$project_root/change/$container"
+  local meta="$container_root/meta.yaml"
+  [ -d "$container_root" ] || die "container not found: change/$container"
+  [ -f "$meta" ] || die "missing meta.yaml for container $container"
+
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" promotion >/dev/null
+
+  local target_root="$project_root/versions/$stable_version"
+  [ ! -e "$target_root" ] || die "target version already exists: versions/$stable_version"
+
+  mkdir -p "$target_root"
+  cp "$container_root/meta.yaml" "$target_root/meta.yaml"
+  cp "$container_root/spec.md" "$target_root/spec.md"
+  cp "$container_root/design.md" "$target_root/design.md"
+  [ -f "$container_root/testing.md" ] && cp "$container_root/testing.md" "$target_root/testing.md"
+  [ -f "$container_root/deployment.md" ] && cp "$container_root/deployment.md" "$target_root/deployment.md"
+  [ -f "$container_root/CLAUDE.md" ] && cp "$container_root/CLAUDE.md" "$target_root/CLAUDE.md"
+  copy_dir_contents "$container_root/work-items" "$target_root/work-items"
+  copy_dir_contents "$container_root/contracts" "$target_root/contracts"
+  copy_dir_contents "$container_root/spec-appendices" "$target_root/spec-appendices"
+  copy_dir_contents "$container_root/design-appendices" "$target_root/design-appendices"
+
+  if [ -d "$container_root/src" ]; then
+    copy_dir_contents "$container_root/src" "$target_root/src"
+  fi
+
+  TODAY="$(date +%F)" yq eval '.status = "completed" | .focus_work_item = null | .updated_at = env(TODAY) | .updated_by = "codespec-promote"' -i "$target_root/meta.yaml"
+
+  log "promoted container dossier"
+  log "source: change/$container"
+  log "target: versions/$stable_version"
+}
+
+install_hooks() {
   local project_root
   project_root="$(find_project_root)"
   "$FRAMEWORK_ROOT/scripts/install-hooks.sh" "$project_root"
@@ -281,10 +565,10 @@ status_cmd() {
   local meta="$project_root/change/$container/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml for container $container"
 
-  local git_branch="none"
-  if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git_branch="$(git -C "$project_root" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
-  fi
+  local git_branch execution_branch branch_alignment
+  git_branch="$(current_git_branch "$project_root")"
+  execution_branch="$(yaml_scalar "$meta" execution_branch)"
+  branch_alignment="$(branch_alignment_status "$project_root" "$execution_branch")"
 
   printf 'project_root: %s\n' "$project_root"
   printf 'container: %s\n' "$container"
@@ -293,8 +577,9 @@ status_cmd() {
   printf 'focus_work_item: %s\n' "$(yaml_scalar "$meta" focus_work_item)"
   printf 'feature_branch: %s\n' "$(yaml_scalar "$meta" feature_branch)"
   printf 'execution_group: %s\n' "$(yaml_scalar "$meta" execution_group)"
-  printf 'execution_branch: %s\n' "$(yaml_scalar "$meta" execution_branch)"
+  printf 'execution_branch: %s\n' "$execution_branch"
   printf 'git_branch: %s\n' "$git_branch"
+  printf 'branch_alignment: %s\n' "$branch_alignment"
 }
 
 readset_cmd() {
@@ -311,6 +596,8 @@ readset_cmd() {
   focus_wi="$(yaml_scalar "$meta" focus_work_item)"
 
   printf 'readset:\n'
+  printf -- '- lessons_learned.md\n'
+  printf -- '- change/%s/CLAUDE.md\n' "$container"
   printf -- '- change/%s/meta.yaml\n' "$container"
   printf -- '- change/%s/spec.md (read to <!-- SKELETON-END --> first)\n' "$container"
   printf -- '- change/%s/design.md (read Default Read Layer first)\n' "$container"
@@ -351,11 +638,45 @@ Usage:
   codespec init-change <container> [change_id] [base_version]
   codespec add-container <container> [source-container]
   codespec add-work-item <WI-ID> [container]
+  codespec start-requirements [container]
+  codespec start-design [container]
+  codespec start-implementation <WI-ID> [container]
+  codespec set-active-work-items <WI-001,WI-002|[]> [container]
+  codespec start-testing [container]
+  codespec start-deployment [container]
+  codespec complete-change [container]
   codespec install-hooks
   codespec check-gate <name>
   codespec status
   codespec readset
   codespec materialize-deployment [container]
+  codespec promote-version <stable-version> [container]
+
+Gate views:
+  spec-completeness -> proposal-maturity + requirements-approval
+  design-structure-complete -> design artifacts are structurally complete and aligned with work item derivation
+  design-readiness -> alias of design-structure-complete
+  implementation-ready -> design-structure-complete + implementation-start
+  scope -> staged changes stay within allowed_paths / outside forbidden_paths
+  boundary -> contract refs resolve and frozen contracts stay unchanged
+  trace-consistency -> REQ->ACC->VO, ACC->WI, approved ACC testing records in Testing/Deployment
+  verification -> dependency/current WI pass checks; adds testing-coverage in Testing/Deployment
+  promotion -> deployment-readiness + promotion-criteria
+
+Lifecycle commands:
+  start-requirements -> Proposal -> Requirements
+  start-design -> Requirements -> Design
+  start-implementation -> Design -> Implementation and set focus_work_item
+  set-active-work-items -> update active_work_items explicitly
+  start-testing -> Implementation -> Testing and clear active work items
+  start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment in_progress reopen)
+  complete-change -> mark Deployment change completed
+
+Internal gates:
+  branch-alignment | feature-sync | metadata-consistency
+  proposal-maturity | requirements-approval | design-structure-complete (alias: design-readiness)
+  implementation-ready | implementation-start
+  testing-coverage | deployment-readiness | promotion-criteria
 EOF
 }
 
@@ -379,6 +700,27 @@ main() {
     add-work-item)
       add_work_item "$@"
       ;;
+    start-requirements)
+      start_requirements "$@"
+      ;;
+    start-design)
+      start_design "$@"
+      ;;
+    start-implementation)
+      start_implementation "$@"
+      ;;
+    set-active-work-items)
+      set_active_work_items "$@"
+      ;;
+    start-testing)
+      start_testing "$@"
+      ;;
+    start-deployment)
+      start_deployment "$@"
+      ;;
+    complete-change)
+      complete_change "$@"
+      ;;
     install-hooks)
       install_hooks "$@"
       ;;
@@ -393,6 +735,9 @@ main() {
       ;;
     materialize-deployment)
       materialize_deployment "$@"
+      ;;
+    promote-version)
+      promote_version "$@"
       ;;
     help|-h|--help)
       usage
