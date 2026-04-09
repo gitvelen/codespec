@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-本文件只负责当前 change dossier 的导航与决策路由；禁止用worktree；需求 / 验收 / 验证义务以 `spec.md` 为准，设计 / 边界 / Work Item 派生以 `design.md` 为准，执行范围 / 禁改范围 / 依赖以 `work-items/*.yaml` 为准，验证记录以 `testing.md` 为准，部署结论 / 回滚 / 监控以 `deployment.md` 为准，接口边界以 `contracts/*.md` 为准，硬规则以 `../../lessons_learned.md` 为准。
+本文件只负责当前 change dossier 的导航与决策路由；禁止用worktree；尽量用简体中文交流（包括文档，除非涉及专业术语）；需求 / 验收 / 验证义务以 `spec.md` 为准，设计 / 边界 / Work Item 派生以 `design.md` 为准，执行范围 / 禁改范围 / 依赖以 `work-items/*.yaml` 为准，验证记录以 `testing.md` 为准，部署结论 / 回滚 / 监控以 `deployment.md` 为准，接口边界以 `contracts/*.md` 为准，硬规则以 `../../lessons_learned.md` 为准。
 
 ## 核心原则
 1. 先澄清再动手：目标/边界/约束/风险/验收，不清楚先问；范围变更必须说明代价并重新确认。

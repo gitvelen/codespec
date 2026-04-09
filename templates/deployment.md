@@ -1,7 +1,7 @@
 # deployment.md
 
 ## Deployment Plan
-target_env: STAGING
+target_env: [STAGING/PRODUCTION]
 deployment_date: YYYY-MM-DD
 deployment_method: manual
 
@@ -12,31 +12,31 @@ deployment_method: manual
 - [ ] smoke checks prepared
 
 ## Deployment Steps
-1. [step]
-2. [step]
+1. [replace with real step]
+2. [replace with real step]
 
 ## Verification Results
-- smoke_test: fail
-- key_features: []
-- performance: []
+- smoke_test: pass
+- key_features: [replace with verified features]
+- performance: [replace with observed result]
 
 ## Acceptance Conclusion
-status: fail
-notes: [deployment conclusion]
-approved_by: [name]
+status: pass
+notes: [replace with deployment conclusion]
+approved_by: [replace with approver]
 approved_at: YYYY-MM-DD
 
 ## Rollback Plan
 trigger_conditions:
-  - [condition]
+  - [replace with real condition]
 rollback_steps:
-  1. [step]
+  1. [replace with real step]
 
 ## Monitoring
 metrics:
-  - [metric]
+  - [replace with real metric]
 alerts:
-  - [alert]
+  - [replace with real alert]
 
 ## Post-deployment Actions
 - [ ] update related docs

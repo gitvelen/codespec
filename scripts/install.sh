@@ -28,6 +28,7 @@ cp "$FRAMEWORK_ROOT/hooks/pre-push" "$TARGET_ROOT/.codespec/hooks/pre-push"
 cp "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$TARGET_ROOT/.codespec/scripts/check-gate.sh"
 cp "$FRAMEWORK_ROOT/scripts/install-hooks.sh" "$TARGET_ROOT/.codespec/scripts/install-hooks.sh"
 cp "$FRAMEWORK_ROOT/scripts/install.sh" "$TARGET_ROOT/.codespec/scripts/install.sh"
+cp "$FRAMEWORK_ROOT/scripts/smoke.sh" "$TARGET_ROOT/.codespec/scripts/smoke.sh"
 cp "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$TARGET_ROOT/.codespec/templates/CLAUDE.md"
 cp "$FRAMEWORK_ROOT/templates/meta.yaml" "$TARGET_ROOT/.codespec/templates/meta.yaml"
 cp "$FRAMEWORK_ROOT/templates/spec.md" "$TARGET_ROOT/.codespec/templates/spec.md"
@@ -43,7 +44,8 @@ chmod +x "$TARGET_ROOT/.codespec/codespec" \
   "$TARGET_ROOT/.codespec/hooks/pre-push" \
   "$TARGET_ROOT/.codespec/scripts/check-gate.sh" \
   "$TARGET_ROOT/.codespec/scripts/install-hooks.sh" \
-  "$TARGET_ROOT/.codespec/scripts/install.sh"
+  "$TARGET_ROOT/.codespec/scripts/install.sh" \
+  "$TARGET_ROOT/.codespec/scripts/smoke.sh"
 
 CODESPEC_PROJECT_ROOT="$TARGET_ROOT" "$TARGET_ROOT/.codespec/codespec" init-project "$CONTAINER" "$CHANGE_ID" "$BASE_VERSION"
 
