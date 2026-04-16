@@ -194,18 +194,25 @@ codespec complete-change
 | `design.md` | 只在 parent feature 分支修改 | 架构设计是全局的 |
 | `work-items/*.yaml` | 只在 parent feature 分支修改 | WI 定义是全局的 |
 | `contracts/*.md` | 只在 parent feature 分支修改 | 契约是全局的 |
-| `testing.md` | 只在 parent feature 分支修改 | 集成测试记录是全局的 |
 | `deployment.md` | 只在 parent feature 分支修改 | 部署计划是全局的 |
+| `testing.md` | 各执行分支可以修改 | 测试证据账本，记录单元测试和集成测试 |
 | `meta.yaml` | 各执行分支可以修改 | 记录当前执行上下文 |
 | `src/**` | 各执行分支可以修改 | 业务代码，各分支独立开发 |
+
+**testing.md 的特殊说明**：
+- 执行分支在 Implementation 阶段记录单元测试和局部集成测试（test_scope: unit / local-integration）
+- Parent feature 分支在 Testing Phase 记录完整集成测试（test_scope: full-integration）
+- 合并时保留所有测试记录，最终验收看 full-integration 结果
+- 合并冲突是正常的，按 merge_order 顺序合并并保留所有记录
 
 **工作流**：
 1. 在 parent feature 分支（main/ 目录）修改 spec.md, design.md
 2. 提交并推送到远程仓库
 3. 各执行分支（sanguoA/, sanguoB/）通过 `git pull origin feature/xxx` 同步
-4. 执行分支只修改 src/** 和 meta.yaml
-5. 执行分支完成后，合并回 parent feature 分支
-6. 如果执行分支修改了受限文件，pre-commit hook 会报错
+4. 执行分支修改 src/**, meta.yaml, testing.md（记录单元测试）
+5. 执行分支完成后，合并回 parent feature 分支（testing.md 可能冲突，保留所有记录）
+6. 在 parent feature 分支进行 Testing Phase，记录完整集成测试
+7. 如果执行分支修改了受限文件，pre-commit hook 会报错
 
 ## 常用命令
 

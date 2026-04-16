@@ -16,20 +16,26 @@ Files that should ONLY be modified in parent feature branch:
 - `design.md` - Architecture design is global
 - `work-items/*.yaml` - WI definitions are global
 - `contracts/*.md` - Contracts are global
-- `testing.md` - Integration test records are global
 - `deployment.md` - Deployment plan is global
 
 Files that CAN be modified in execution branches:
+- `testing.md` - Test evidence ledger, records unit tests and integration tests
 - `meta.yaml` - Records current execution context (focus_work_item, execution_branch)
 - `src/**` - Business code, developed independently in each branch
+
+**testing.md special notes**:
+- Execution branches record unit tests and local integration tests during Implementation (test_scope: unit / local-integration)
+- Parent feature branch records full integration tests during Testing Phase (test_scope: full-integration)
+- Merge conflicts are expected - keep all test records, final acceptance uses full-integration results
 
 **Workflow**:
 1. Modify spec.md, design.md in parent feature branch (main/ directory)
 2. Commit and push to remote
 3. Execution branches (sanguoA/, sanguoB/) sync via `git pull origin feature/xxx`
-4. Execution branches only modify src/** and meta.yaml
-5. After execution branches complete, merge back to parent feature branch
-6. If you try to modify restricted files in execution branch, pre-commit hook will error
+4. Execution branches modify src/**, meta.yaml, testing.md (record unit tests)
+5. After execution branches complete, merge back to parent feature branch (testing.md may conflict, keep all records)
+6. Conduct Testing Phase in parent feature branch, record full integration tests
+7. If you try to modify restricted files in execution branch, pre-commit hook will error
 
 ## Authority
 - `phase-review-policy.md`：阶段切换、gate、严格复审。

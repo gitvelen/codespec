@@ -60,7 +60,6 @@ if [ -n "$current_branch" ] && command -v yq >/dev/null 2>&1; then
       "design.md"
       "work-items/"
       "contracts/"
-      "testing.md"
       "deployment.md"
     )
 
