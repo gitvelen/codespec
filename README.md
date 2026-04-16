@@ -209,9 +209,12 @@ codespec complete-change
 | `src/**` | 各执行分支可以修改 | 业务代码，各分支独立开发 |
 
 **testing.md 的特殊说明**：
-- 执行分支在 Implementation 阶段记录单元测试和局部集成测试（test_scope: unit / local-integration）
-- Parent feature 分支在 Testing Phase 记录完整集成测试（test_scope: full-integration）
-- 合并时保留所有测试记录，最终验收看 full-integration 结果
+- 测试类型（test_type）：unit（单元测试）、integration（集成测试）、e2e（端到端测试）、performance（性能测试）、security（安全测试）、manual（手工测试）
+- 测试范围（test_scope）：branch-local（执行分支局部测试）、full-integration（完整集成测试）
+- 执行分支在 Implementation 阶段记录 branch-local 测试（单元测试、集成测试等）
+- Parent feature 分支在 Testing Phase 记录 full-integration 测试（重新运行所有测试类型 + e2e/性能/安全测试）
+- 每个 acceptance 可以有多条测试记录，覆盖不同的测试类型
+- 合并时保留所有测试记录，最终验收要求每个 acceptance 至少有一条 test_scope=full-integration 且 result=PASS 的记录
 - 合并冲突是正常的，按 merge_order 顺序合并并保留所有记录
 
 **工作流**：

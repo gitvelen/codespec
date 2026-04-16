@@ -24,9 +24,13 @@ Files that CAN be modified in execution branches:
 - `src/**` - Business code, developed independently in each branch
 
 **testing.md special notes**:
-- Execution branches record unit tests and local integration tests during Implementation (test_scope: unit / local-integration)
-- Parent feature branch records full integration tests during Testing Phase (test_scope: full-integration)
-- Merge conflicts are expected - keep all test records, final acceptance uses full-integration results
+- Test types (test_type): unit, integration, e2e, performance, security, manual
+- Test scope (test_scope): branch-local (execution branch), full-integration (parent feature branch)
+- Execution branches record branch-local tests during Implementation (unit, integration, etc.)
+- Parent feature branch records full-integration tests during Testing Phase (re-run all test types + e2e/performance/security)
+- Each acceptance can have multiple test records covering different test types
+- Merge conflicts are expected - keep all test records
+- Final acceptance requires at least one test_scope=full-integration and result=PASS record per acceptance
 
 **Workflow**:
 1. Modify spec.md, design.md in parent feature branch (main/ directory)
