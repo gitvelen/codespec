@@ -1,32 +1,52 @@
-# Agent Entry
+# Agent Entry (Workspace Root)
 
 ## Hard Rules
 - 禁止使用 worktree；默认使用简体中文。
-- 需要并行不同 Git 分支时，使用多个独立 clone 目录；不要把同一仓库副本里的不同 container 当成不同分支承载点。
+- 需要并行不同 Git 分支时，使用多个独立 clone 目录。
 - 先澄清后执行；目标、边界、验收不清楚时先问。
 - 最小必要变更；涉及线上行为变化时必须能回滚。
 - 证据驱动；结论附命令或输出，完成前先看 diff 和验证结果。
 - 偏离即停；方向变了、连续失败或复杂度失控时先回看权威文件。
 
-## 这是根目录导航入口，不是 dossier 执行入口
-- 先选择 container，再进入 `change/<container>/` 作为当前工作上下文。
-- 单 container 项目可以直接在项目根运行 `codespec status` / `codespec readset`，runtime 会自动解析当前 container。
-- 多 container 项目必须先设置 `CODESPEC_CONTAINER`，或直接进入 `change/<container>/` 后再执行命令。
-- 真正执行前，读取 `change/<container>/AGENTS.md` 或 `change/<container>/CLAUDE.md` 之一，不要把根目录入口当成 dossier authority。
+## 这是工作区根目录导航入口，不是项目执行入口
+- 工作区（workspace）包含共享资源：`.codespec/`, `lessons_learned.md`, `phase-review-policy.md`, `versions/`
+- 项目（project）是独立的 Git clone，包含 dossier 文件：`spec.md`, `design.md`, `meta.yaml`, `work-items/` 等
+- 真正执行前，进入项目目录并读取 `AGENTS.md` 或 `CLAUDE.md` 之一，不要把工作区根目录入口当成 dossier authority
 
-## Root Navigation
-- 用 `./.codespec/codespec status` 查看当前 phase、focus work item、branch 对齐状态。
-- 用 `./.codespec/codespec readset` 或 `readset --json` 获取当前 container 的最小阅读集。
-- 若当前项目有多个 container 且你在项目根目录，先设置 `CODESPEC_CONTAINER=__CONTAINER__`，或进入对应 `change/<container>/`。
-- 若要新增独立变更，使用 `./.codespec/codespec init-change <container> [change_id] [base_version]`。
-- 若要从 baseline / source container 派生执行线，使用 `./.codespec/codespec add-container <container> [source-container]`。
+## Workspace Navigation
+- 工作区结构：
+  ```
+  workspace/
+  ├── .codespec/           # 共享 runtime
+  ├── lessons_learned.md   # 共享经验教训
+  ├── phase-review-policy.md  # 共享审查策略
+  ├── versions/            # 共享版本快照
+  ├── main/                # Git clone（项目 1）
+  │   ├── spec.md
+  │   ├── design.md
+  │   └── src/
+  └── projectB/            # Git clone（项目 2，可选）
+  ```
+
+- 查看项目状态：进入项目目录后运行 `codespec status`
+- 获取阅读集：进入项目目录后运行 `codespec readset`
+- 初始化新项目：
+  1. `cd workspace/`
+  2. `git clone <REPO_URL> project-name` 或 `git init project-name`
+  3. `cd project-name`
+  4. `../codespec/scripts/init-dossier.sh`
 
 ## Authority Routing
-- 根目录 `phase-review-policy.md`：阶段切换规则、最低 gate 与严格复审口径。
-- `change/<container>/spec.md`：需求、验收、verification obligations。
-- `change/<container>/design.md`：边界、切片、Work Item 派生。
-- `change/<container>/work-items/*.yaml`：允许修改范围、禁改范围、依赖。
-- `change/<container>/testing.md` / `deployment.md` / `contracts/*.md`：验证、部署、契约。
+- 工作区级：
+  - `lessons_learned.md`：跨项目共享的经验教训
+  - `phase-review-policy.md`：阶段切换规则、最低 gate 与严格复审口径
+  - `versions/`：已发布版本快照
+- 项目级（进入项目目录后）：
+  - `spec.md`：需求、验收、verification obligations
+  - `design.md`：边界、切片、Work Item 派生
+  - `work-items/*.yaml`：允许修改范围、禁改范围、依赖
+  - `testing.md` / `deployment.md` / `contracts/*.md`：验证、部署、契约
+  - `AGENTS.md` / `CLAUDE.md`：项目级 agent 入口（二选一）
 
 ## Compact
 1. 架构决策

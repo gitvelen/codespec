@@ -7,13 +7,19 @@ out_of_scope:
 
 allowed_paths:
   - src/**
-  - change/__CONTAINER__/testing.md
+  - meta.yaml
 forbidden_paths:
   - versions/**
+  - spec.md
+  - design.md
+  - work-items/**
+  - contracts/**
+  - testing.md
+  - deployment.md
 
 branch_execution:
-  container: __CONTAINER__
-  execution_branch: group/__CONTAINER__
+  execution_group: null
+  execution_branch: null
   owned_paths:
     - src/[owned-slice]/**
   shared_paths:

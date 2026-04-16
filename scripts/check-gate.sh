@@ -753,7 +753,7 @@ collect_spec_ids() {
 
 work_item_refs_acceptance() {
   local file
-  for file in "$CONTAINER_ROOT"/work-items/*.yaml; do
+  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
     [ -f "$file" ] || continue
     yaml_list "$file" acceptance_refs
   done | grep -E '^ACC-[0-9]{3}$' | sort -u || true
@@ -761,7 +761,7 @@ work_item_refs_acceptance() {
 
 work_item_refs_requirements() {
   local file
-  for file in "$CONTAINER_ROOT"/work-items/*.yaml; do
+  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
     [ -f "$file" ] || continue
     yaml_list "$file" requirement_refs
   done | grep -E '^REQ-[0-9]{3}$' | sort -u || true
@@ -769,7 +769,7 @@ work_item_refs_requirements() {
 
 work_item_refs_verification() {
   local file
-  for file in "$CONTAINER_ROOT"/work-items/*.yaml; do
+  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
     [ -f "$file" ] || continue
     yaml_list "$file" verification_refs
   done | grep -E '^VO-[0-9]{3}$' | sort -u || true
@@ -1149,67 +1149,6 @@ design_work_item_block() {
   ' "$DESIGN_FILE"
 }
 
-design_branch_plan_blocks() {
-  awk '
-    function flush_block() {
-      if (in_branch_plan && block != "") {
-        printf "%s%c", block, 0
-      }
-      block = ""
-    }
-
-    /^## Work Item Execution Strategy$/ {
-      in_execution = 1
-      in_branch_plan = 0
-      block = ""
-      next
-    }
-
-    /^## / {
-      if (in_execution) {
-        flush_block()
-      }
-      in_execution = 0
-      in_branch_plan = 0
-      next
-    }
-
-    !in_execution { next }
-
-    /^### Branch Plan$/ {
-      flush_block()
-      in_branch_plan = 1
-      next
-    }
-
-    /^### / {
-      if (in_branch_plan) {
-        flush_block()
-      }
-      in_branch_plan = 0
-      next
-    }
-
-    !in_branch_plan { next }
-
-    /^[[:space:]]*-[[:space:]]*container:[[:space:]]*/ {
-      flush_block()
-      block = $0
-      next
-    }
-
-    block != "" {
-      block = block ORS $0
-    }
-
-    END {
-      if (in_branch_plan) {
-        flush_block()
-      }
-    }
-  ' "$DESIGN_FILE"
-}
-
 block_scalar_value() {
   local key="$1"
   awk -v key="$key" '
@@ -1492,30 +1431,6 @@ gate_design_structure_complete() {
   mapfile -t derivation_rows < <(design_work_item_acceptance_rows)
   [ "${#derivation_rows[@]}" -gt 0 ] || die 'design.md has no concrete WI derivation rows yet'
 
-  local branch_blocks=()
-  if grep -q '^### Branch Plan$' "$DESIGN_FILE"; then
-    mapfile -d '' -t branch_blocks < <(design_branch_plan_blocks)
-  fi
-  if [ "${#branch_blocks[@]}" -gt 0 ]; then
-    local block container execution_branch
-    local work_items_count owned_paths_count forbidden_paths_count
-    for block in "${branch_blocks[@]}"; do
-      container="$(block_scalar_value container <<< "$block")"
-      [ -n "$container" ] || die 'design branch_plan entry missing container'
-      execution_branch="$(block_scalar_value execution_branch <<< "$block")"
-      [ -n "$execution_branch" ] || die 'design branch_plan entry missing execution_branch'
-      mapfile -t tmp_list < <(block_list_values work_items <<< "$block" | grep -vE '^(|null)$' || true)
-      work_items_count="${#tmp_list[@]}"
-      [ "$work_items_count" -gt 0 ] || die 'design branch_plan entry missing work_items'
-      mapfile -t tmp_list < <(block_list_values owned_paths <<< "$block" | grep -vE '^(|null)$' || true)
-      owned_paths_count="${#tmp_list[@]}"
-      [ "$owned_paths_count" -gt 0 ] || die 'design branch_plan entry missing owned_paths'
-      mapfile -t tmp_list < <(block_list_values forbidden_paths <<< "$block" | grep -vE '^(|null)$' || true)
-      forbidden_paths_count="${#tmp_list[@]}"
-      [ "$forbidden_paths_count" -gt 0 ] || die 'design branch_plan entry missing forbidden_paths'
-    done
-  fi
-
   check_design_work_item_acceptance_alignment
   log '✓ design-structure-complete gate passed'
 }
@@ -1605,8 +1520,6 @@ gate_implementation_start() {
   [ "${#stop_conditions[@]}" -gt 0 ] || die "$FOCUS_WI missing stop_conditions"
   [ "${#reopen_triggers[@]}" -gt 0 ] || die "$FOCUS_WI missing reopen_triggers"
   [ "${#branch_owned_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing branch_execution.owned_paths"
-  [ "$(yaml_scalar "$WI_FILE" branch_execution.container)" != 'null' ] || die "$FOCUS_WI missing branch_execution.container"
-  [ "$(yaml_scalar "$WI_FILE" branch_execution.execution_branch)" != 'null' ] || die "$FOCUS_WI missing branch_execution.execution_branch"
   [ "$(yaml_scalar "$WI_FILE" derived_from)" != 'null' ] || die "$FOCUS_WI missing derived_from"
 
   check_focus_wi_design_alignment
@@ -1731,7 +1644,7 @@ gate_contract_boundary() {
     done < <(yaml_list "$WI_FILE" contract_refs)
   fi
 
-  local rel_contract_root="change/$CONTAINER/contracts/"
+  local rel_contract_root="contracts/"
   local file head_status index_status diff_lines
   while IFS= read -r file; do
     [[ "$file" == ${rel_contract_root}* ]] || continue

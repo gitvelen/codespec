@@ -732,12 +732,21 @@ check_gate_cmd() {
 }
 
 install_cmd() {
-  require_yq
-  local target_root="${1:-$PWD}"
-  local container="${2:-main}"
-  local change_id="${3:-baseline}"
-  local base_version="${4:-null}"
-  exec "$FRAMEWORK_ROOT/scripts/install.sh" "$target_root" "$container" "$change_id" "$base_version"
+  cat >&2 <<'EOF'
+ERROR: The 'install' command has been removed in v2.0.
+
+Please use the new two-step installation:
+
+1. Install workspace (shared resources):
+   /path/to/.codespec/scripts/install-workspace.sh /path/to/workspace
+
+2. Initialize dossier (in project directory):
+   cd /path/to/workspace/project
+   /path/to/workspace/.codespec/scripts/init-dossier.sh
+
+See README.md for details.
+EOF
+  exit 1
 }
 
 usage() {
@@ -839,6 +848,9 @@ main() {
       ;;
     promote-version)
       promote_version "$@"
+      ;;
+    render-template)
+      render_template "$@"
       ;;
     help|-h|--help)
       usage

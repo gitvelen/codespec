@@ -60,11 +60,11 @@ cp "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md" "$PROJECT_ROOT/AGENTS.md"
 
 # 创建 meta.yaml
 TODAY="$(date +%F)"
+CURRENT_BRANCH="$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
 cat > "$PROJECT_ROOT/meta.yaml" <<EOF
-container: main
 change_id: baseline
 base_version: null
-feature_branch: main
+feature_branch: $CURRENT_BRANCH
 execution_group: null
 execution_branch: null
 phase: Proposal
