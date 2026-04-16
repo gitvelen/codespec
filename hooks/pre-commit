@@ -79,6 +79,61 @@ if [ -n "$current_branch" ] && command -v yq >/dev/null 2>&1; then
   fi
 fi
 
+# Check work item dependencies
+if command -v yq >/dev/null 2>&1; then
+  focus_wi=$(yq eval '.focus_work_item' "$PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "null")
+
+  if [ "$focus_wi" != "null" ] && [ -n "$focus_wi" ]; then
+    wi_file="$PROJECT_ROOT/work-items/$focus_wi.yaml"
+
+    if [ -f "$wi_file" ]; then
+      # Read dependency_refs
+      mapfile -t dep_refs < <(yq eval '.dependency_refs[]' "$wi_file" 2>/dev/null || true)
+
+      if [ "${#dep_refs[@]}" -gt 0 ]; then
+        for dep_wi in "${dep_refs[@]}"; do
+          [ -n "$dep_wi" ] || continue
+          [ "$dep_wi" != "null" ] || continue
+
+          # Check if dependency WI exists
+          dep_wi_file="$PROJECT_ROOT/work-items/$dep_wi.yaml"
+          if [ ! -f "$dep_wi_file" ]; then
+            printf 'WARNING: %s depends on %s, but %s does not exist\n' "$focus_wi" "$dep_wi" "$dep_wi" >&2
+            continue
+          fi
+
+          # Check if dependency WI has been implemented (has test records)
+          if [ -f "$PROJECT_ROOT/testing.md" ]; then
+            # Get acceptance_refs from dependency WI
+            mapfile -t dep_accs < <(yq eval '.acceptance_refs[]' "$dep_wi_file" 2>/dev/null || true)
+
+            if [ "${#dep_accs[@]}" -gt 0 ]; then
+              has_pass_record=false
+              for acc in "${dep_accs[@]}"; do
+                [ -n "$acc" ] || continue
+                [ "$acc" != "null" ] || continue
+
+                # Check if testing.md has a PASS record for this acceptance
+                if grep -q "acceptance_ref: $acc" "$PROJECT_ROOT/testing.md" 2>/dev/null; then
+                  if grep -A 10 "acceptance_ref: $acc" "$PROJECT_ROOT/testing.md" | grep -q "result: PASS"; then
+                    has_pass_record=true
+                    break
+                  fi
+                fi
+              done
+
+              if [ "$has_pass_record" = false ]; then
+                printf 'WARNING: %s depends on %s, but %s has no PASS test records yet\n' "$focus_wi" "$dep_wi" "$dep_wi" >&2
+                printf 'Consider implementing %s first, or verify the dependency is correct\n' "$dep_wi" >&2
+              fi
+            fi
+          fi
+        done
+      fi
+    fi
+  fi
+fi
+
 # Run standard gates
 CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" branch-alignment || true
 CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" metadata-consistency || true

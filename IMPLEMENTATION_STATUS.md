@@ -53,15 +53,16 @@
 - [x] 更新 `status_cmd()` 和 `readset_cmd()` 去掉 container 检测
 - [x] 更新 `usage()` 反映新的命令签名
 
-### ⏳ Phase 5: 依赖分析增强（未完成）
-需要完成的工作：
-- [ ] 更新 `templates/design.md` 添加 `confidence` 字段（已在 Phase 3 完成基础结构）
-- [ ] 更新 `hooks/pre-commit` 添加依赖检测逻辑
+### ✅ Phase 5: 依赖分析增强（已完成）
+- [x] 更新 `templates/design.md` 添加 `confidence` 字段（已在 Phase 3 完成基础结构）
+- [x] 更新 `hooks/pre-commit` 添加依赖检测逻辑
+  - 检查 focus_work_item 的 dependency_refs
+  - 验证依赖 WI 是否有 PASS 测试记录
+  - 如果依赖 WI 未完成，输出警告（不阻止提交）
 
-### ⏳ 更新文档（未完成）
-需要完成的工作：
-- [ ] 更新 `README.md` 反映新的工作流和目录结构
-- [ ] 更新所有示例代码
+### ✅ 更新文档（已完成）
+- [x] 更新 `README.md` 反映新的工作流和目录结构
+- [x] 更新所有示例代码
 
 ## 剩余工作量估算
 
