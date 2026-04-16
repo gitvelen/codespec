@@ -4,14 +4,36 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_CHECK_SCRIPT="$(cd "$SCRIPT_DIR/.." && pwd)/scripts/check-gate.sh"
 
-if [ -n "${CODESPEC_PROJECT_ROOT:-}" ] && [ -x "${CODESPEC_PROJECT_ROOT}/.codespec/scripts/check-gate.sh" ]; then
-  PROJECT_ROOT="$CODESPEC_PROJECT_ROOT"
-  CHECK_SCRIPT="$PROJECT_ROOT/.codespec/scripts/check-gate.sh"
+# Find workspace root
+find_workspace_root() {
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.codespec/codespec" ]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+# Find project root
+find_project_root() {
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    git rev-parse --show-toplevel
+    return
+  fi
+  printf '%s\n' "$PWD"
+}
+
+WORKSPACE_ROOT="$(find_workspace_root || echo "")"
+PROJECT_ROOT="$(find_project_root)"
+
+if [ -n "$WORKSPACE_ROOT" ] && [ -x "$WORKSPACE_ROOT/.codespec/scripts/check-gate.sh" ]; then
+  CHECK_SCRIPT="$WORKSPACE_ROOT/.codespec/scripts/check-gate.sh"
 elif [ -x "$LOCAL_CHECK_SCRIPT" ]; then
-  PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
   CHECK_SCRIPT="$LOCAL_CHECK_SCRIPT"
 else
-  PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   CHECK_SCRIPT="$PROJECT_ROOT/.codespec/scripts/check-gate.sh"
 fi
 
@@ -20,9 +42,50 @@ fi
   exit 1
 }
 
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" branch-alignment
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" metadata-consistency
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" scope
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" boundary
+# Check if meta.yaml exists
+if [ ! -f "$PROJECT_ROOT/meta.yaml" ]; then
+  printf 'WARNING: meta.yaml not found, skipping codespec checks\n' >&2
+  exit 0
+fi
+
+# Check restricted files (files that should only be modified in parent feature branch)
+current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+if [ -n "$current_branch" ] && command -v yq >/dev/null 2>&1; then
+  feature_branch=$(yq eval '.feature_branch' "$PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "")
+
+  if [ -n "$feature_branch" ] && [ "$current_branch" != "$feature_branch" ]; then
+    # Current branch is an execution branch, not parent feature branch
+    restricted_files=(
+      "spec.md"
+      "design.md"
+      "work-items/"
+      "contracts/"
+      "testing.md"
+      "deployment.md"
+    )
+
+    for pattern in "${restricted_files[@]}"; do
+      if git diff --cached --name-only | grep -q "^${pattern}"; then
+        printf 'ERROR: Cannot modify %s in execution branch.\n' "$pattern" >&2
+        printf 'This file should only be modified in parent feature branch: %s\n' "$feature_branch" >&2
+        printf '\n' >&2
+        printf 'If you need to update this file:\n' >&2
+        printf '1. Switch to parent feature branch (in main/ directory)\n' >&2
+        printf '2. Make changes there\n' >&2
+        printf '3. Push to remote\n' >&2
+        printf '4. Pull into execution branches\n' >&2
+        exit 1
+      fi
+    done
+  fi
+fi
+
+# Run standard gates
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" branch-alignment || true
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" metadata-consistency || true
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" phase-capability || true
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" scope || true
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" contract-boundary || true
 
 printf '✓ pre-commit checks passed\n'
+

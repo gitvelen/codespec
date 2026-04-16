@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRAMEWORK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+log() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+# 查找工作区根目录
+find_workspace_root() {
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.codespec/codespec" ]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  die "could not locate workspace root (directory containing .codespec/)"
+}
+
+# 查找项目根目录
+find_project_root() {
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    git rev-parse --show-toplevel
+    return
+  fi
+  printf '%s\n' "$PWD"
+}
+
+WORKSPACE_ROOT="$(find_workspace_root)"
+PROJECT_ROOT="$(find_project_root)"
+
+[ -d "$PROJECT_ROOT" ] || die "project root does not exist: $PROJECT_ROOT"
+
+# 检查是否已经初始化
+if [ -f "$PROJECT_ROOT/meta.yaml" ]; then
+  die "dossier already initialized in $PROJECT_ROOT"
+fi
+
+# 创建 dossier 目录结构
+mkdir -p "$PROJECT_ROOT/work-items" \
+  "$PROJECT_ROOT/contracts" \
+  "$PROJECT_ROOT/design-appendices" \
+  "$PROJECT_ROOT/spec-appendices"
+
+# 复制模板文件
+cp "$WORKSPACE_ROOT/.codespec/templates/spec.md" "$PROJECT_ROOT/spec.md"
+cp "$WORKSPACE_ROOT/.codespec/templates/design.md" "$PROJECT_ROOT/design.md"
+cp "$WORKSPACE_ROOT/.codespec/templates/testing.md" "$PROJECT_ROOT/testing.md"
+cp "$WORKSPACE_ROOT/.codespec/templates/CLAUDE.md" "$PROJECT_ROOT/CLAUDE.md"
+cp "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md" "$PROJECT_ROOT/AGENTS.md"
+
+# 创建 meta.yaml
+TODAY="$(date +%F)"
+cat > "$PROJECT_ROOT/meta.yaml" <<EOF
+container: main
+change_id: baseline
+base_version: null
+feature_branch: main
+execution_group: null
+execution_branch: null
+phase: Proposal
+status: in_progress
+focus_work_item: null
+active_work_items: []
+created_at: $TODAY
+updated_at: $TODAY
+updated_by: codespec-init
+EOF
+
+# 安装 Git hooks（如果是 Git 仓库）
+if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  "$WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh" "$PROJECT_ROOT"
+else
+  log "skipped git hooks installation (not a git repository)"
+fi
+
+log "initialized dossier in: $PROJECT_ROOT"
+log ""
+log "Next steps:"
+log "1. Edit spec.md to define requirements"
+log "2. Run: codespec start-requirements"

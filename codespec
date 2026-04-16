@@ -29,9 +29,135 @@ yaml_list() {
   yq eval ".${key}[]" "$file" 2>/dev/null || true
 }
 
-find_project_root() {
-  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ] && [ -f "${CODESPEC_PROJECT_ROOT}/.codespec/codespec" ]; then
-    printf '%s\n' "$CODESPEC_PROJECT_ROOT"
+json_string_array() {
+  local first=1
+  printf '['
+  while [ "$#" -gt 0 ]; do
+    if [ "$first" -eq 0 ]; then
+      printf ', '
+    fi
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()), end="")'
+    first=0
+    shift
+  done
+  printf ']'
+}
+
+json_object() {
+  printf '{'
+  local first=1
+  while [ "$#" -gt 0 ]; do
+    local key="$1"
+    local value="$2"
+    if [ "$first" -eq 0 ]; then
+      printf ', '
+    fi
+    printf '%s' "$key" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()), end="")'
+    printf ': %s' "$value"
+    first=0
+    shift 2
+  done
+  printf '}'
+}
+
+json_quote() {
+  printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()), end="")'
+}
+
+json_path_entry_object() {
+  local path="$1"
+  local when_clause="${2:-}"
+  local read_hint="${3:-}"
+  local args=("path" "$(json_quote "$path")")
+  if [ -n "$when_clause" ]; then
+    args+=("when" "$(json_quote "$when_clause")")
+  fi
+  if [ -n "$read_hint" ]; then
+    args+=("read_hint" "$(json_quote "$read_hint")")
+  fi
+  json_object "${args[@]}"
+}
+
+json_path_entries() {
+  local first=1
+  printf '['
+  while [ "$#" -gt 0 ]; do
+    local path="$1"
+    local when_clause="${2:-}"
+    local read_hint="${3:-}"
+    if [ "$first" -eq 0 ]; then
+      printf ', '
+    fi
+    printf '%s' "$(json_path_entry_object "$path" "$when_clause" "$read_hint")"
+    first=0
+    shift 3
+  done
+  printf ']'
+}
+
+render_text_entry_line() {
+  local path="$1"
+  local read_hint="${2:-}"
+  if [ -n "$read_hint" ]; then
+    printf -- '- %s (%s)\n' "$path" "$read_hint"
+  else
+    printf -- '- %s\n' "$path"
+  fi
+}
+
+render_text_triplets() {
+  local -n entries_ref="$1"
+  local idx
+  for ((idx=0; idx<${#entries_ref[@]}; idx+=3)); do
+    render_text_entry_line "${entries_ref[idx]}" "${entries_ref[idx+2]}"
+  done
+}
+
+render_text_entry_choice() {
+  local -n entries_ref="$1"
+  local idx joined when_clause
+  when_clause="${entries_ref[1]:-}"
+  joined=""
+  for ((idx=0; idx<${#entries_ref[@]}; idx+=3)); do
+    if [ -n "$joined" ]; then
+      joined+=" or "
+    fi
+    joined+="${entries_ref[idx]}"
+  done
+  printf -- '- %s (%s)\n' "$joined" "$when_clause"
+}
+
+render_text_string_list() {
+  local -n items_ref="$1"
+  local item
+  for item in "${items_ref[@]}"; do
+    printf -- '- %s\n' "$item"
+  done
+}
+
+json_bool() {
+  if [ "$1" = 'true' ]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+find_optional_arg() {
+  local needle="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [ "$arg" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_workspace_root() {
+  if [ -n "${CODESPEC_WORKSPACE_ROOT:-}" ] && [ -f "${CODESPEC_WORKSPACE_ROOT}/.codespec/codespec" ]; then
+    printf '%s\n' "$CODESPEC_WORKSPACE_ROOT"
     return
   fi
 
@@ -51,47 +177,25 @@ find_project_root() {
     dir="$(dirname "$dir")"
   done
 
-  die "could not locate project root containing .codespec/codespec"
+  die "could not locate workspace root (directory containing .codespec/)"
 }
 
-list_containers() {
-  local project_root="$1"
-  local dir
-  if [ ! -d "$project_root/change" ]; then
-    return
-  fi
-  for dir in "$project_root"/change/*; do
-    [ -d "$dir" ] || continue
-    basename "$dir"
-  done
-}
-
-detect_container() {
-  local project_root="$1"
-  if [ -n "${CODESPEC_CONTAINER:-}" ] && [ -d "$project_root/change/$CODESPEC_CONTAINER" ]; then
-    printf '%s\n' "$CODESPEC_CONTAINER"
+find_project_root() {
+  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ]; then
+    if git -C "$CODESPEC_PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git -C "$CODESPEC_PROJECT_ROOT" rev-parse --show-toplevel
+      return
+    fi
+    printf '%s\n' "$CODESPEC_PROJECT_ROOT"
     return
   fi
 
-  if [[ "$PWD" == "$project_root/change/"* ]]; then
-    local rel
-    rel="${PWD#"$project_root/change/"}"
-    printf '%s\n' "${rel%%/*}"
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    git rev-parse --show-toplevel
     return
   fi
 
-  local containers=()
-  local item
-  while IFS= read -r item; do
-    [ -n "$item" ] && containers+=("$item")
-  done < <(list_containers "$project_root")
-
-  if [ "${#containers[@]}" -eq 1 ]; then
-    printf '%s\n' "${containers[0]}"
-    return
-  fi
-
-  die "could not determine current container; set CODESPEC_CONTAINER or run inside change/<container>"
+  printf '%s\n' "$PWD"
 }
 
 render_template() {
@@ -224,16 +328,21 @@ ensure_root_assets() {
     RENDER_DATE="$(date +%F)" render_template "$FRAMEWORK_ROOT/templates/lessons_learned.md" "$project_root/lessons_learned.md"
   fi
 
-  if [ ! -f "$project_root/CLAUDE.md" ]; then
-    RENDER_CONTAINER="${2:-main}" render_template "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$project_root/CLAUDE.md"
+  if [ ! -f "$project_root/phase-review-policy.md" ]; then
+    render_template "$FRAMEWORK_ROOT/templates/phase-review-policy.md" "$project_root/phase-review-policy.md"
   fi
 }
 
-ensure_container_claude() {
-  local container_root="$1"
+ensure_container_agent_entry_files() {
+  local target_root="$1"
   local container="$2"
-  if [ ! -f "$container_root/CLAUDE.md" ]; then
-    RENDER_CONTAINER="$container" render_template "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$container_root/CLAUDE.md"
+
+  if [ ! -f "$target_root/CLAUDE.md" ]; then
+    RENDER_CONTAINER="$container" render_template "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$target_root/CLAUDE.md"
+  fi
+
+  if [ ! -f "$target_root/AGENTS.md" ]; then
+    RENDER_CONTAINER="$container" render_template "$FRAMEWORK_ROOT/templates/AGENTS.md" "$target_root/AGENTS.md"
   fi
 }
 
@@ -268,7 +377,7 @@ create_container_from_template() {
   RENDER_ACTIVE_WORK_ITEMS="[]" \
   render_template "$FRAMEWORK_ROOT/templates/meta.yaml" "$container_root/meta.yaml"
 
-  ensure_container_claude "$container_root" "$container"
+  ensure_container_agent_entry_files "$container_root" "$container"
   [ -f "$container_root/spec.md" ] || cp "$FRAMEWORK_ROOT/templates/spec.md" "$container_root/spec.md"
   [ -f "$container_root/design.md" ] || cp "$FRAMEWORK_ROOT/templates/design.md" "$container_root/design.md"
   [ -f "$container_root/testing.md" ] || cp "$FRAMEWORK_ROOT/templates/testing.md" "$container_root/testing.md"
@@ -328,7 +437,6 @@ add_container() {
 
   cp "$source_root/spec.md" "$project_root/change/$new_container/spec.md"
   cp "$source_root/design.md" "$project_root/change/$new_container/design.md"
-  cp "$source_root/testing.md" "$project_root/change/$new_container/testing.md"
 
   if [ -d "$source_root/work-items" ]; then
     cp -R "$source_root/work-items/." "$project_root/change/$new_container/work-items/"
@@ -386,7 +494,8 @@ start_requirements() {
   current_status="$(yaml_scalar "$RESOLVED_META" status)"
   assert_phase_transition "$current_phase" 'Requirements' "$current_status"
 
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" proposal-maturity >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_TARGET_PHASE='Requirements' "$FRAMEWORK_ROOT/scripts/check-gate.sh" proposal-maturity >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_TARGET_PHASE='Requirements' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
   meta_update "$RESOLVED_META" '.phase = "Requirements" | .status = "in_progress"'
   log "started Requirements phase: change/$container"
@@ -403,7 +512,8 @@ start_design() {
   current_status="$(yaml_scalar "$RESOLVED_META" status)"
   assert_phase_transition "$current_phase" 'Design' "$current_status"
 
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" requirements-approval >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" requirements-approval >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
   meta_update "$RESOLVED_META" '.phase = "Design" | .status = "in_progress"'
   log "started Design phase: change/$container"
@@ -421,7 +531,8 @@ start_implementation() {
   current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
   current_status="$(yaml_scalar "$RESOLVED_META" status)"
   assert_phase_transition "$current_phase" 'Implementation' "$current_status"
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_FOCUS_WI="$wi_id" "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-ready >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_FOCUS_WI="$wi_id" CODESPEC_TARGET_PHASE='Implementation' "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-ready >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_TARGET_PHASE='Implementation' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
   active_count="$(yq eval '.active_work_items | length' "$RESOLVED_META")"
   if [ "$active_count" = '0' ]; then
@@ -447,6 +558,11 @@ start_testing() {
   current_status="$(yaml_scalar "$RESOLVED_META" status)"
   assert_phase_transition "$current_phase" 'Testing' "$current_status"
 
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" metadata-consistency >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" branch-alignment >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" feature-sync >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" contract-boundary >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
 
   meta_update "$RESOLVED_META" '.phase = "Testing" | .status = "in_progress" | .focus_work_item = null | .active_work_items = []'
@@ -458,13 +574,18 @@ start_deployment() {
   local project_root
   project_root="$(find_project_root)"
   local container="${1:-$(detect_container "$project_root")}"
-  local current_phase current_status
+  local current_phase current_status deployment_file
   resolve_container_and_meta "$project_root" "$container"
   current_phase="$(yaml_scalar "$RESOLVED_META" phase)"
   current_status="$(yaml_scalar "$RESOLVED_META" status)"
   assert_phase_transition "$current_phase" 'Deployment' "$current_status"
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" CODESPEC_REQUIRE_DEPLOYMENT_FILE=1 "$FRAMEWORK_ROOT/scripts/check-gate.sh" deployment-readiness >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" trace-consistency >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTAINER="$container" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
+
+  deployment_file="$RESOLVED_CONTAINER_ROOT/deployment.md"
+  if [ ! -f "$deployment_file" ]; then
+    cp "$FRAMEWORK_ROOT/templates/deployment.md" "$deployment_file"
+  fi
 
   meta_update "$RESOLVED_META" '.phase = "Deployment" | .status = "in_progress" | .focus_work_item = null | .active_work_items = []'
   log "started Deployment phase: change/$container"
@@ -534,6 +655,7 @@ promote_version() {
   [ -f "$container_root/testing.md" ] && cp "$container_root/testing.md" "$target_root/testing.md"
   [ -f "$container_root/deployment.md" ] && cp "$container_root/deployment.md" "$target_root/deployment.md"
   [ -f "$container_root/CLAUDE.md" ] && cp "$container_root/CLAUDE.md" "$target_root/CLAUDE.md"
+  [ -f "$container_root/AGENTS.md" ] && cp "$container_root/AGENTS.md" "$target_root/AGENTS.md"
   copy_dir_contents "$container_root/work-items" "$target_root/work-items"
   copy_dir_contents "$container_root/contracts" "$target_root/contracts"
   copy_dir_contents "$container_root/spec-appendices" "$target_root/spec-appendices"
@@ -565,6 +687,8 @@ status_cmd() {
   local meta="$project_root/change/$container/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml for container $container"
 
+  build_readset_model "$project_root" "$container"
+
   local git_branch execution_branch branch_alignment
   git_branch="$(current_git_branch "$project_root")"
   execution_branch="$(yaml_scalar "$meta" execution_branch)"
@@ -580,6 +704,145 @@ status_cmd() {
   printf 'execution_branch: %s\n' "$execution_branch"
   printf 'git_branch: %s\n' "$git_branch"
   printf 'branch_alignment: %s\n' "$branch_alignment"
+  printf 'phase_capabilities.allowed:\n'
+  render_text_string_list READSET_MODEL_PHASE_CAP_ALLOWED
+  printf 'phase_capabilities.forbidden:\n'
+  render_text_string_list READSET_MODEL_PHASE_CAP_FORBIDDEN
+  printf 'authority.phase_policy: %s\n' "$READSET_MODEL_PHASE_POLICY"
+}
+
+build_readset_model() {
+  local project_root="$1"
+  local container="$2"
+  local container_root="$project_root/change/$container"
+  local meta="$container_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml for container $container"
+
+  READSET_MODEL_PHASE="$(yaml_scalar "$meta" phase)"
+  READSET_MODEL_FOCUS_WI="$(yaml_scalar "$meta" focus_work_item)"
+  READSET_MODEL_WORK_ITEM_PATH='null'
+  READSET_MODEL_PHASE_POLICY='phase-review-policy.md'
+  READSET_MODEL_PHASE_CAP_ALLOWED=()
+  READSET_MODEL_PHASE_CAP_FORBIDDEN=()
+
+  READSET_MODEL_ENTRY_FILES=(
+    "change/$container/AGENTS.md" "read exactly one" ""
+    "change/$container/CLAUDE.md" "read exactly one" ""
+  )
+  READSET_MODEL_MINIMAL_READSET=(
+    "lessons_learned.md" "" ""
+    "phase-review-policy.md" "" ""
+    "change/$container/meta.yaml" "" ""
+    "change/$container/spec.md" "" "read to <!-- SKELETON-END --> first"
+    "change/$container/design.md" "" "read Default Read Layer first"
+  )
+  READSET_MODEL_WORK_ITEM_ENTRY=()
+  READSET_MODEL_CONTRACT_REFS=()
+  READSET_MODEL_PHASE_DOCS=()
+  READSET_MODEL_APPENDIX_SPEC=("change/$container/spec-appendices/*" "only when default layer is insufficient" "")
+  READSET_MODEL_APPENDIX_DESIGN=("change/$container/design-appendices/*" "only when current slice requires drill-down" "")
+
+  case "$READSET_MODEL_PHASE" in
+    Proposal)
+      READSET_MODEL_MINIMAL_READSET=(
+        "lessons_learned.md" "" ""
+        "phase-review-policy.md" "" ""
+        "change/$container/meta.yaml" "" ""
+        "change/$container/spec.md" "" "read to <!-- SKELETON-END --> first"
+      )
+      READSET_MODEL_PHASE_CAP_ALLOWED=(
+        "authoritative dossier edits"
+      )
+      READSET_MODEL_PHASE_CAP_FORBIDDEN=(
+        "src/** and Dockerfile only"
+      )
+      ;;
+    Requirements)
+      READSET_MODEL_PHASE_CAP_ALLOWED=(
+        "authoritative dossier edits"
+      )
+      READSET_MODEL_PHASE_CAP_FORBIDDEN=(
+        "src/** and Dockerfile only"
+      )
+      ;;
+  esac
+
+  if [ "$READSET_MODEL_FOCUS_WI" != "null" ] && [ -f "$container_root/work-items/$READSET_MODEL_FOCUS_WI.yaml" ]; then
+    READSET_MODEL_WORK_ITEM_PATH="change/$container/work-items/$READSET_MODEL_FOCUS_WI.yaml"
+    READSET_MODEL_WORK_ITEM_ENTRY=("$READSET_MODEL_WORK_ITEM_PATH" "when focus_work_item is set" "")
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      [ "$ref" != "null" ] || continue
+      READSET_MODEL_CONTRACT_REFS+=("change/$container/$ref" "when current work item contract_refs is non-empty" "")
+    done < <(yaml_list "$container_root/work-items/$READSET_MODEL_FOCUS_WI.yaml" contract_refs)
+  fi
+
+  case "$READSET_MODEL_PHASE" in
+    Testing)
+      READSET_MODEL_PHASE_DOCS+=("change/$container/testing.md" "during Testing phase" "")
+      READSET_MODEL_PHASE_DOCS+=("change/$container/work-items/*.yaml" "during Testing phase" "")
+      ;;
+    Deployment)
+      READSET_MODEL_PHASE_DOCS+=("change/$container/testing.md" "during Deployment phase" "")
+      READSET_MODEL_PHASE_DOCS+=("change/$container/deployment.md" "during Deployment phase" "")
+      ;;
+  esac
+}
+
+render_readset_json() {
+  printf '{\n'
+  printf '  "phase": %s,\n' "$(json_quote "$READSET_MODEL_PHASE")"
+  printf '  "entry_files": %s,\n' "$(json_path_entries "${READSET_MODEL_ENTRY_FILES[@]}")"
+  printf '  "read_one_entry_file": %s,\n' "$(json_bool true)"
+  printf '  "minimal_readset": %s,\n' "$(json_path_entries "${READSET_MODEL_MINIMAL_READSET[@]}")"
+  printf '  "phase_capabilities": {\n'
+  printf '    "allowed": %s,\n' "$(json_string_array "${READSET_MODEL_PHASE_CAP_ALLOWED[@]}")"
+  printf '    "forbidden": %s\n' "$(json_string_array "${READSET_MODEL_PHASE_CAP_FORBIDDEN[@]}")"
+  printf '  },\n'
+  printf '  "authority": {\n'
+  printf '    "phase_policy": %s\n' "$(json_quote "$READSET_MODEL_PHASE_POLICY")"
+  printf '  },\n'
+  printf '  "focus_work_item": '
+  if [ "$READSET_MODEL_FOCUS_WI" = 'null' ]; then
+    printf 'null'
+  else
+    printf '%s' "$(json_quote "$READSET_MODEL_FOCUS_WI")"
+  fi
+  printf ',\n'
+  printf '  "work_item": '
+  if [ "$READSET_MODEL_WORK_ITEM_PATH" = 'null' ]; then
+    printf 'null'
+  else
+    printf '%s' "$(json_path_entry_object "${READSET_MODEL_WORK_ITEM_ENTRY[0]}" "${READSET_MODEL_WORK_ITEM_ENTRY[1]}" "${READSET_MODEL_WORK_ITEM_ENTRY[2]}")"
+  fi
+  printf ',\n'
+  printf '  "contract_refs": %s,\n' "$(json_path_entries "${READSET_MODEL_CONTRACT_REFS[@]}")"
+  printf '  "phase_docs": %s,\n' "$(json_path_entries "${READSET_MODEL_PHASE_DOCS[@]}")"
+  printf '  "appendix_rules": {\n'
+  printf '    "spec": %s,\n' "$(json_path_entry_object "${READSET_MODEL_APPENDIX_SPEC[0]}" "${READSET_MODEL_APPENDIX_SPEC[1]}" "${READSET_MODEL_APPENDIX_SPEC[2]}")"
+  printf '    "design": %s\n' "$(json_path_entry_object "${READSET_MODEL_APPENDIX_DESIGN[0]}" "${READSET_MODEL_APPENDIX_DESIGN[1]}" "${READSET_MODEL_APPENDIX_DESIGN[2]}")"
+  printf '  }\n'
+  printf '}\n'
+}
+
+render_readset_text() {
+  printf 'readset:\n'
+  render_text_entry_line 'lessons_learned.md'
+  render_text_entry_line 'phase-review-policy.md'
+  render_text_entry_choice READSET_MODEL_ENTRY_FILES
+  render_text_triplets READSET_MODEL_MINIMAL_READSET
+  printf 'phase_capabilities.allowed:\n'
+  render_text_string_list READSET_MODEL_PHASE_CAP_ALLOWED
+  printf 'phase_capabilities.forbidden:\n'
+  render_text_string_list READSET_MODEL_PHASE_CAP_FORBIDDEN
+  printf 'authority.phase_policy: %s\n' "$READSET_MODEL_PHASE_POLICY"
+  if [ "$READSET_MODEL_WORK_ITEM_PATH" != 'null' ]; then
+    render_text_triplets READSET_MODEL_WORK_ITEM_ENTRY
+    render_text_triplets READSET_MODEL_CONTRACT_REFS
+  fi
+  render_text_triplets READSET_MODEL_PHASE_DOCS
+  render_text_triplets READSET_MODEL_APPENDIX_SPEC
+  render_text_triplets READSET_MODEL_APPENDIX_DESIGN
 }
 
 readset_cmd() {
@@ -588,31 +851,19 @@ readset_cmd() {
   project_root="$(find_project_root)"
   local container
   container="$(detect_container "$project_root")"
-  local container_root="$project_root/change/$container"
-  local meta="$container_root/meta.yaml"
-  [ -f "$meta" ] || die "missing meta.yaml for container $container"
-
-  local focus_wi
-  focus_wi="$(yaml_scalar "$meta" focus_work_item)"
-
-  printf 'readset:\n'
-  printf -- '- lessons_learned.md\n'
-  printf -- '- change/%s/CLAUDE.md\n' "$container"
-  printf -- '- change/%s/meta.yaml\n' "$container"
-  printf -- '- change/%s/spec.md (read to <!-- SKELETON-END --> first)\n' "$container"
-  printf -- '- change/%s/design.md (read Default Read Layer first)\n' "$container"
-
-  if [ "$focus_wi" != "null" ] && [ -f "$container_root/work-items/$focus_wi.yaml" ]; then
-    printf -- '- change/%s/work-items/%s.yaml\n' "$container" "$focus_wi"
-    while IFS= read -r ref; do
-      [ -n "$ref" ] || continue
-      [ "$ref" != "null" ] || continue
-      printf -- '- change/%s/%s\n' "$container" "$ref"
-    done < <(yaml_list "$container_root/work-items/$focus_wi.yaml" contract_refs)
+  local output_json=false
+  if find_optional_arg '--json' "$@"; then
+    output_json=true
   fi
 
-  printf -- '- change/%s/spec-appendices/* (only when default layer is insufficient)\n' "$container"
-  printf -- '- change/%s/design-appendices/* (only when current slice requires drill-down)\n' "$container"
+  build_readset_model "$project_root" "$container"
+
+  if [ "$output_json" = true ]; then
+    render_readset_json
+    return
+  fi
+
+  render_readset_text
 }
 
 check_gate_cmd() {
@@ -658,7 +909,7 @@ Gate views:
   design-readiness -> alias of design-structure-complete
   implementation-ready -> design-structure-complete + implementation-start
   scope -> staged changes stay within allowed_paths / outside forbidden_paths
-  boundary -> contract refs resolve and frozen contracts stay unchanged
+  contract-boundary -> contract refs resolve and frozen contracts stay unchanged
   trace-consistency -> REQ->ACC->VO, ACC->WI, approved ACC testing records in Testing/Deployment
   verification -> dependency/current WI pass checks; adds testing-coverage in Testing/Deployment
   promotion -> deployment-readiness + promotion-criteria
@@ -667,10 +918,13 @@ Lifecycle commands:
   start-requirements -> Proposal -> Requirements
   start-design -> Requirements -> Design
   start-implementation -> Design -> Implementation and set focus_work_item
-  set-active-work-items -> update active_work_items explicitly
+  set-active-work-items -> update active_work_items explicitly (design/manual branch execution set; runtime does not provide complete multi-WI union enforcement)
   start-testing -> Implementation -> Testing and clear active work items
-  start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment in_progress reopen)
+  start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment in_progress reopen; auto-materializes deployment.md if missing)
   complete-change -> mark Deployment change completed
+
+Review rule:
+  check-gate pass != semantic review pass; phase advancement still requires phase-review-policy/rfr approval
 
 Internal gates:
   branch-alignment | feature-sync | metadata-consistency

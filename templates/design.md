@@ -30,12 +30,52 @@
   - [constraint]
 
 ### Work Item Execution Strategy
-- dependency_summary:
-  - WI-001: no dependency
-- parallel_recommendation:
-  - Group A: WI-001
-- notes:
-  - [execution note]
+
+#### Dependency Analysis
+dependency_graph:
+  WI-001:
+    depends_on: []
+    blocks: []
+    confidence: high
+
+#### Parallel Recommendation
+parallel_groups:
+  - group: G1
+    work_items: [WI-001]
+    can_parallel: false
+    rationale: [rationale]
+
+#### Branch Strategy Recommendation
+recommended_branch_count: 1
+rationale: |
+  [Why single branch is recommended]
+
+alternative_if_parallel_needed: |
+  [Alternative parallel strategy if needed]
+
+**Note**: The above three sections (Dependency Analysis, Parallel Recommendation, Branch Strategy Recommendation) 
+are suggestions only, not enforced by gates. User decides the actual execution strategy.
+
+#### Shared Surface Analysis
+potentially_conflicting_files:
+  - path: [file-path]
+    reason: [why multiple WIs might modify this]
+    recommendation: [how to avoid conflicts]
+
+conflict_risk_assessment:
+  high_risk: []
+  medium_risk: []
+  low_risk: []
+
+#### Pre-work for Parent Feature Branch
+tasks:
+  - task: [task description]
+    content: |
+      [code or content to add]
+    rationale: [why this prevents conflicts]
+
+#### Notes
+- [execution note]
 
 ### Design Slice Index
 - DS-001 -> [slice summary]
@@ -91,11 +131,48 @@
 
 ## Work Item Execution Strategy
 
-### Dependency Summary
-- WI-001: no dependency
+### Dependency Analysis
+dependency_graph:
+  WI-001:
+    depends_on: []
+    blocks: []
+    confidence: high
 
 ### Parallel Recommendation
-- Group A: WI-001
+parallel_groups:
+  - group: G1
+    work_items: [WI-001]
+    can_parallel: false
+    rationale: [rationale]
+
+### Branch Strategy Recommendation
+recommended_branch_count: 1
+rationale: |
+  [Why single branch is recommended]
+
+alternative_if_parallel_needed: |
+  [Alternative parallel strategy if needed]
+
+**Note**: The above three sections (Dependency Analysis, Parallel Recommendation, Branch Strategy Recommendation) 
+are suggestions only, not enforced by gates. User decides the actual execution strategy.
+
+### Shared Surface Analysis
+potentially_conflicting_files:
+  - path: [file-path]
+    reason: [why multiple WIs might modify this]
+    recommendation: [how to avoid conflicts]
+
+conflict_risk_assessment:
+  high_risk: []
+  medium_risk: []
+  low_risk: []
+
+### Pre-work for Parent Feature Branch
+tasks:
+  - task: [task description]
+    content: |
+      [code or content to add]
+    rationale: [why this prevents conflicts]
 
 ### Notes
 - [execution note]
@@ -128,6 +205,26 @@
   required: false
   reason: [why]
   consumers: []
+
+## Implementation Readiness Baseline
+
+### Environment Configuration Matrix
+- [environment config item]
+
+### Security Baseline
+- [security baseline item]
+
+### Data / Migration Strategy
+- [data or migration strategy item]
+
+### Operability / Health Checks
+- [operability or health check item]
+
+### Backup / Restore
+- [backup or restore item]
+
+### UX / Experience Readiness
+- [only required when spec defines Experience Acceptance]
 
 ## Verification Design
 - ACC-001:
