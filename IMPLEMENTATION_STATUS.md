@@ -33,11 +33,12 @@
 - [x] 创建 `MIGRATION.md` - 详细的迁移指南
 - [x] 创建 `IMPLEMENTATION_STATUS.md` - 本文件
 
-### ⏳ Phase 2: 命令改革（未完成）
-需要完成的工作：
-- [ ] 删除 `add-container` 命令及相关函数
-- [ ] 更新 `init-change` 命令（改名为 `init-dossier`）
-- [ ] 更新所有生命周期命令，去掉 `[container]` 参数
+### ✅ Phase 2: 命令改革（已完成）
+- [x] 删除 `add-container` 命令及相关函数
+- [x] 删除 `init-project`, `init-change` 命令（已被 `install-workspace`, `init-dossier` 替代）
+- [x] 删除 `resolve_container_and_meta()` 函数
+- [x] 删除 `ensure_root_assets()`, `ensure_container_agent_entry_files()`, `create_container_from_template()` 函数
+- [x] 更新所有生命周期命令，去掉 `[container]` 参数
   - `start-requirements`
   - `start-design`
   - `start-implementation`
@@ -48,6 +49,9 @@
   - `add-work-item`
   - `materialize-deployment`
   - `promote-version`
+- [x] 更新 `build_readset_model()` 去掉 container 参数
+- [x] 更新 `status_cmd()` 和 `readset_cmd()` 去掉 container 检测
+- [x] 更新 `usage()` 反映新的命令签名
 
 ### ⏳ Phase 5: 依赖分析增强（未完成）
 需要完成的工作：
@@ -62,20 +66,8 @@
 ## 剩余工作量估算
 
 ### 高优先级（核心功能）
-1. **更新 check-gate.sh**（约 2-3 小时）
-   - 去掉所有 `change/` 路径引用
-   - 去掉 `detect_container()` 调用
-   - 更新路径为直接使用 `$PROJECT_ROOT/`
-   - 约 50+ 处修改
-
-2. **更新 codespec 主脚本**（约 2-3 小时）
-   - 删除 `add-container` 函数
-   - 删除 `detect_container` 函数
-   - 删除 `list_containers` 函数
-   - 更新所有命令去掉 container 参数
-   - 更新所有路径引用
-   - 约 50+ 处修改
-
+1. ~~**更新 check-gate.sh**~~（已完成）
+2. ~~**更新 codespec 主脚本**~~（已完成）
 3. **更新 README.md**（约 1 小时）
    - 重写工作流说明
    - 更新所有示例
@@ -103,13 +95,14 @@
 - 文件修改规则检查（pre-commit hook）
 - 新的 design.md 模板
 - 迁移指南
+- 所有生命周期命令（已去掉 container 参数）
+- check-gate 使用新的路径结构
 
 ### ⚠️ 部分可用的功能
-- 旧的命令仍然可以使用，但使用旧的目录结构（`change/`）
-- check-gate 仍然使用旧的路径
+- 旧的 `install` 命令仍然存在（但应该使用新的 install-workspace 和 init-dossier）
 
 ### ❌ 不可用的功能
-- 完整的新工作流（因为 codespec 主脚本和 check-gate.sh 未完全更新）
+- 无（核心功能已完成）
 
 ## 建议的完成策略
 
