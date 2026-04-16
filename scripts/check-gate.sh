@@ -1858,7 +1858,9 @@ gate_deployment_readiness() {
 
 gate_promotion_criteria() {
   gate_metadata_consistency
-  [ -d "$PROJECT_ROOT/versions" ] || die 'versions directory is missing'
+  local workspace_root
+  workspace_root="$(find_workspace_root)" || die 'could not locate workspace root'
+  [ -d "$workspace_root/versions" ] || die 'versions directory is missing in workspace root'
   local phase status
   phase="$(yaml_scalar "$META_FILE" phase)"
   status="$(yaml_scalar "$META_FILE" status)"
