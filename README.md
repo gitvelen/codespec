@@ -135,11 +135,13 @@ git clone <REPO_URL> sanguoB
 cd sanguoA
 git checkout feature/add-auth
 git checkout -b group/sanguoA
+yq eval '.execution_group = "parallel-impl"' -i meta.yaml
 yq eval '.execution_branch = "group/sanguoA"' -i meta.yaml
 
 cd ../sanguoB
 git checkout feature/add-auth
 git checkout -b group/sanguoB
+yq eval '.execution_group = "parallel-impl"' -i meta.yaml
 yq eval '.execution_branch = "group/sanguoB"' -i meta.yaml
 
 # 6. 并行实现
@@ -155,6 +157,13 @@ codespec start-implementation WI-002
 cd /home/admin/sanguo/main
 git merge group/sanguoA
 git merge group/sanguoB
+
+# 重置 meta.yaml 的执行上下文（合并后会带有 branch-local 的 execution_group/execution_branch）
+yq eval '.execution_group = null' -i meta.yaml
+yq eval '.execution_branch = null' -i meta.yaml
+yq eval '.focus_work_item = null' -i meta.yaml
+git add meta.yaml
+git commit -m "chore: reset execution context after merge"
 
 # 8. Testing → Deployment 在 main clone
 codespec start-testing
