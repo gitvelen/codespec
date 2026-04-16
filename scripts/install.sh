@@ -20,7 +20,7 @@ BASE_VERSION="${4:-null}"
 
 [ -d "$TARGET_ROOT" ] || die "target root does not exist: $TARGET_ROOT"
 
-mkdir -p "$TARGET_ROOT/.codespec" "$TARGET_ROOT/.codespec/hooks" "$TARGET_ROOT/.codespec/scripts" "$TARGET_ROOT/.codespec/templates"
+mkdir -p "$TARGET_ROOT/.codespec" "$TARGET_ROOT/.codespec/hooks" "$TARGET_ROOT/.codespec/scripts" "$TARGET_ROOT/.codespec/templates" "$TARGET_ROOT/.codespec/skills"
 
 cp "$FRAMEWORK_ROOT/codespec" "$TARGET_ROOT/.codespec/codespec"
 cp "$FRAMEWORK_ROOT/hooks/pre-commit" "$TARGET_ROOT/.codespec/hooks/pre-commit"
@@ -29,15 +29,18 @@ cp "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$TARGET_ROOT/.codespec/scripts/check
 cp "$FRAMEWORK_ROOT/scripts/install-hooks.sh" "$TARGET_ROOT/.codespec/scripts/install-hooks.sh"
 cp "$FRAMEWORK_ROOT/scripts/install.sh" "$TARGET_ROOT/.codespec/scripts/install.sh"
 cp "$FRAMEWORK_ROOT/scripts/smoke.sh" "$TARGET_ROOT/.codespec/scripts/smoke.sh"
+cp "$FRAMEWORK_ROOT/templates/AGENTS.md" "$TARGET_ROOT/.codespec/templates/AGENTS.md"
 cp "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$TARGET_ROOT/.codespec/templates/CLAUDE.md"
 cp "$FRAMEWORK_ROOT/templates/meta.yaml" "$TARGET_ROOT/.codespec/templates/meta.yaml"
 cp "$FRAMEWORK_ROOT/templates/spec.md" "$TARGET_ROOT/.codespec/templates/spec.md"
 cp "$FRAMEWORK_ROOT/templates/design.md" "$TARGET_ROOT/.codespec/templates/design.md"
+cp "$FRAMEWORK_ROOT/templates/phase-review-policy.md" "$TARGET_ROOT/.codespec/templates/phase-review-policy.md"
 cp "$FRAMEWORK_ROOT/templates/work-item.yaml" "$TARGET_ROOT/.codespec/templates/work-item.yaml"
 cp "$FRAMEWORK_ROOT/templates/testing.md" "$TARGET_ROOT/.codespec/templates/testing.md"
 cp "$FRAMEWORK_ROOT/templates/contract.md" "$TARGET_ROOT/.codespec/templates/contract.md"
 cp "$FRAMEWORK_ROOT/templates/deployment.md" "$TARGET_ROOT/.codespec/templates/deployment.md"
 cp "$FRAMEWORK_ROOT/templates/lessons_learned.md" "$TARGET_ROOT/.codespec/templates/lessons_learned.md"
+cp -R "$FRAMEWORK_ROOT/skills/." "$TARGET_ROOT/.codespec/skills/"
 
 chmod +x "$TARGET_ROOT/.codespec/codespec" \
   "$TARGET_ROOT/.codespec/hooks/pre-commit" \

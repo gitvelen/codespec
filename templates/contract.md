@@ -1,5 +1,6 @@
 contract_id: [contract-id]
 status: draft
+# status flow: draft -> frozen only after explicit review
 frozen_at: null
 consumers: [WI-001]
 

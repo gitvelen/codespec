@@ -7,9 +7,20 @@ out_of_scope:
 
 allowed_paths:
   - src/**
+  - change/__CONTAINER__/testing.md
 forbidden_paths:
-  - change/**
   - versions/**
+
+branch_execution:
+  container: __CONTAINER__
+  execution_branch: group/__CONTAINER__
+  owned_paths:
+    - src/[owned-slice]/**
+  shared_paths:
+    - src/[shared-surface]
+  shared_file_owner: parent-feature
+  merge_order: [relative merge order]
+  conflict_policy: stop and update design before expanding shared scope
 
 phase_scope: Implementation
 

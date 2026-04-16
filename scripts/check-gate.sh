@@ -68,44 +68,30 @@ find_project_root() {
   die "could not locate project root"
 }
 
-list_containers() {
-  local project_root="$1"
-  local dir
-  if [ ! -d "$project_root/change" ]; then
-    return
-  fi
-  for dir in "$project_root"/change/*; do
-    [ -d "$dir" ] || continue
-    basename "$dir"
+find_workspace_root() {
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.codespec/codespec" ]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
   done
+  return 1
 }
 
-detect_container() {
-  local project_root="$1"
-  if [ -n "${CODESPEC_CONTAINER:-}" ] && [ -d "$project_root/change/$CODESPEC_CONTAINER" ]; then
-    printf '%s\n' "$CODESPEC_CONTAINER"
+find_project_root() {
+  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ]; then
+    printf '%s\n' "$CODESPEC_PROJECT_ROOT"
     return
   fi
 
-  if [[ "$PWD" == "$project_root/change/"* ]]; then
-    local rel
-    rel="${PWD#"$project_root/change/"}"
-    printf '%s\n' "${rel%%/*}"
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    git rev-parse --show-toplevel
     return
   fi
 
-  local containers=()
-  local item
-  while IFS= read -r item; do
-    [ -n "$item" ] && containers+=("$item")
-  done < <(list_containers "$project_root")
-
-  if [ "${#containers[@]}" -eq 1 ]; then
-    printf '%s\n' "${containers[0]}"
-    return
-  fi
-
-  die "could not determine current container"
+  printf '%s\n' "$PWD"
 }
 
 match_path() {
@@ -123,12 +109,10 @@ match_path() {
 require_context() {
   require_yq
   PROJECT_ROOT="$(find_project_root)"
-  CONTAINER="$(detect_container "$PROJECT_ROOT")"
-  CONTAINER_ROOT="$PROJECT_ROOT/change/$CONTAINER"
-  META_FILE="$CONTAINER_ROOT/meta.yaml"
-  SPEC_FILE="$CONTAINER_ROOT/spec.md"
-  DESIGN_FILE="$CONTAINER_ROOT/design.md"
-  TESTING_FILE="$CONTAINER_ROOT/testing.md"
+  META_FILE="$PROJECT_ROOT/meta.yaml"
+  SPEC_FILE="$PROJECT_ROOT/spec.md"
+  DESIGN_FILE="$PROJECT_ROOT/design.md"
+  TESTING_FILE="$PROJECT_ROOT/testing.md"
 
   [ -f "$META_FILE" ] || die "missing $META_FILE"
   [ -f "$SPEC_FILE" ] || die "missing $SPEC_FILE"
@@ -142,7 +126,7 @@ require_focus_wi() {
     FOCUS_WI="$(yaml_scalar "$META_FILE" focus_work_item)"
   fi
   [ "$FOCUS_WI" != "null" ] || die "focus_work_item is null"
-  WI_FILE="$CONTAINER_ROOT/work-items/$FOCUS_WI.yaml"
+  WI_FILE="$PROJECT_ROOT/work-items/$FOCUS_WI.yaml"
   [ -f "$WI_FILE" ] || die "missing work item: $WI_FILE"
 }
 
@@ -231,6 +215,42 @@ input_intake_refs() {
   ' "$SPEC_FILE"
 }
 
+is_stable_repo_input_ref() {
+  local ref="$1"
+  local target_path="${ref%%#*}"
+
+  [ -n "$ref" ] || return 1
+  [ -n "$target_path" ] || return 1
+
+  case "$ref" in
+    *://*)
+      return 1
+      ;;
+    /*)
+      return 1
+      ;;
+    ../*|*/../*|*/..|..)
+      return 1
+      ;;
+    ./*|*/./*|*/.|.)
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+validate_input_evidence_refs() {
+  local source_refs=("$@")
+  local source_ref target_path
+
+  for source_ref in "${source_refs[@]}"; do
+    is_stable_repo_input_ref "$source_ref" || die "input_refs must reference stable repo artifacts; conversation:// is not allowed"
+    target_path="${source_ref%%#*}"
+    [ -f "$PROJECT_ROOT/$target_path" ] || die "input_refs references missing repo artifact: ${target_path}"
+  done
+}
+
 requirements_source_refs() {
   awk '
     BEGIN { in_requirements = 0; keep = 0 }
@@ -279,6 +299,79 @@ requirements_source_refs() {
       next
     }
   ' "$SPEC_FILE" | grep -v '^$' | sort -u
+}
+
+clarification_ids() {
+  awk '
+    BEGIN { in_requirements = 0; in_clarification = 0 }
+    /^## Requirements$/ {
+      in_requirements = 1
+      next
+    }
+    /^## / && in_requirements {
+      exit
+    }
+    !in_requirements {
+      next
+    }
+    /^### Clarification Status$/ {
+      in_clarification = 1
+      next
+    }
+    /^### / && in_clarification {
+      in_clarification = 0
+      next
+    }
+    !in_clarification {
+      next
+    }
+    /^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*CLR-[0-9]{3}[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$SPEC_FILE" | sort -u
+}
+
+clarification_target_refs() {
+  awk '
+    BEGIN { in_requirements = 0; in_coverage = 0 }
+    /^## Requirements$/ {
+      in_requirements = 1
+      next
+    }
+    /^## / && in_requirements {
+      exit
+    }
+    !in_requirements {
+      next
+    }
+    /^### Proposal Coverage Map$/ {
+      in_coverage = 1
+      next
+    }
+    /^### / && in_coverage {
+      in_coverage = 0
+      next
+    }
+    !in_coverage {
+      next
+    }
+    /^[[:space:]]*target_ref:[[:space:]]*CLR-[0-9]{3}[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*target_ref:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      next
+    }
+    /^[[:space:]]*-[[:space:]]*target_ref:[[:space:]]*CLR-[0-9]{3}[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*target_ref:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$SPEC_FILE" | sort -u
 }
 
 clarification_status_values() {
@@ -405,6 +498,85 @@ clarification_high_open_items() {
   ' "$SPEC_FILE"
 }
 
+clarification_deferred_missing_exit_phase_items() {
+  awk '
+    function flush_item() {
+      if (current != "" && status == "deferred" && deferred_exit_phase == "") {
+        print current
+      }
+    }
+
+    BEGIN {
+      in_requirements = 0
+      in_clarification = 0
+      current = ""
+      status = ""
+      deferred_exit_phase = ""
+    }
+
+    /^## Requirements$/ {
+      in_requirements = 1
+      next
+    }
+
+    /^## / && in_requirements {
+      flush_item()
+      exit
+    }
+
+    !in_requirements {
+      next
+    }
+
+    /^### Clarification Status$/ {
+      in_clarification = 1
+      current = ""
+      status = ""
+      deferred_exit_phase = ""
+      next
+    }
+
+    /^### / && in_clarification {
+      flush_item()
+      in_clarification = 0
+      next
+    }
+
+    !in_clarification {
+      next
+    }
+
+    /^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/ {
+      flush_item()
+      current = $0
+      sub(/^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/, "", current)
+      sub(/[[:space:]]*$/, "", current)
+      status = ""
+      deferred_exit_phase = ""
+      next
+    }
+
+    current != "" && /^[[:space:]]*status:[[:space:]]*/ {
+      status = $0
+      sub(/^[[:space:]]*status:[[:space:]]*/, "", status)
+      split(status, parts, /[[:space:]]+/)
+      status = tolower(parts[1])
+      next
+    }
+
+    current != "" && /^[[:space:]]*deferred_exit_phase:[[:space:]]*/ {
+      deferred_exit_phase = $0
+      sub(/^[[:space:]]*deferred_exit_phase:[[:space:]]*/, "", deferred_exit_phase)
+      sub(/[[:space:]]*$/, "", deferred_exit_phase)
+      next
+    }
+
+    END {
+      flush_item()
+    }
+  ' "$SPEC_FILE"
+}
+
 gate_branch_alignment() {
   local expected_branch actual_branch
   expected_branch="$(yaml_scalar "$META_FILE" execution_branch)"
@@ -456,11 +628,11 @@ gate_metadata_consistency() {
   fi
 
   for wi in "${active[@]}"; do
-    [ -f "$CONTAINER_ROOT/work-items/$wi.yaml" ] || die "active_work_items references missing work item: ${wi}"
+    [ -f "$PROJECT_ROOT/work-items/$wi.yaml" ] || die "active_work_items references missing work item: ${wi}"
   done
 
   if [ "$focus_wi" != 'null' ]; then
-    [ -f "$CONTAINER_ROOT/work-items/$focus_wi.yaml" ] || die "missing work item: $CONTAINER_ROOT/work-items/$focus_wi.yaml"
+    [ -f "$PROJECT_ROOT/work-items/$focus_wi.yaml" ] || die "missing work item: $PROJECT_ROOT/work-items/$focus_wi.yaml"
     contains_exact_line "$focus_wi" "${active[@]}" || die "focus_work_item ${focus_wi} must be listed in active_work_items"
   fi
 
@@ -482,9 +654,101 @@ gate_metadata_consistency() {
   log '✓ metadata-consistency gate passed'
 }
 
+collect_formal_requirement_ids() {
+  awk '
+    BEGIN { in_requirements = 0; in_functional = 0 }
+    /^## Requirements$/ {
+      in_requirements = 1
+      in_functional = 0
+      next
+    }
+    /^## / {
+      if (in_requirements) {
+        in_requirements = 0
+        in_functional = 0
+      }
+      next
+    }
+    !in_requirements { next }
+    /^### Functional Requirements$/ {
+      in_functional = 1
+      next
+    }
+    /^### / {
+      in_functional = 0
+      next
+    }
+    in_functional && /^[[:space:]]*-[[:space:]]*REQ-[0-9]{3}[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$SPEC_FILE" | sort -u || true
+}
+
+collect_formal_acceptance_ids() {
+  awk '
+    BEGIN { in_acceptance = 0 }
+    /^## Acceptance$/ {
+      in_acceptance = 1
+      next
+    }
+    /^## / {
+      if (in_acceptance) {
+        in_acceptance = 0
+      }
+      next
+    }
+    !in_acceptance { next }
+    /^[[:space:]]*-[[:space:]]*acc_id:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*acc_id:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$SPEC_FILE" | sort -u || true
+}
+
+collect_formal_verification_ids() {
+  awk '
+    BEGIN { in_verification = 0 }
+    /^## Verification$/ {
+      in_verification = 1
+      next
+    }
+    /^## / {
+      if (in_verification) {
+        in_verification = 0
+      }
+      next
+    }
+    !in_verification { next }
+    /^[[:space:]]*-[[:space:]]*vo_id:[[:space:]]*VO-[0-9]{3}[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*vo_id:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$SPEC_FILE" | sort -u || true
+}
+
 collect_spec_ids() {
   local kind="$1"
-  grep -oE "${kind}-[0-9]{3}" "$SPEC_FILE" | sort -u || true
+  case "$kind" in
+    REQ)
+      collect_formal_requirement_ids
+      ;;
+    ACC)
+      collect_formal_acceptance_ids
+      ;;
+    VO)
+      collect_formal_verification_ids
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 }
 
 work_item_refs_acceptance() {
@@ -511,11 +775,41 @@ work_item_refs_verification() {
   done | grep -E '^VO-[0-9]{3}$' | sort -u || true
 }
 
+acceptance_expected_outcome() {
+  local acc="$1"
+  awk -v acc="$acc" '
+    BEGIN { in_acceptance = 0; current = "" }
+    /^## Acceptance$/ {
+      in_acceptance = 1
+      next
+    }
+    /^## / && in_acceptance {
+      exit
+    }
+    !in_acceptance { next }
+    /^[[:space:]]*-[[:space:]]*acc_id:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$/ {
+      current = $0
+      sub(/^[[:space:]]*-[[:space:]]*acc_id:[[:space:]]*/, "", current)
+      sub(/[[:space:]]*$/, "", current)
+      next
+    }
+    current == acc && /^[[:space:]]*expected_outcome:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*expected_outcome:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      exit
+    }
+  ' "$SPEC_FILE"
+}
+
 collect_approved_acceptance_ids() {
   awk '
     BEGIN { in_acceptance = 0; current = ""; approved = 0 }
     /^## Acceptance$/ {
       in_acceptance = 1
+      current = ""
+      approved = 0
       next
     }
     /^## / {
@@ -548,6 +842,20 @@ collect_approved_acceptance_ids() {
       }
     }
   ' "$SPEC_FILE" | sort -u || true
+}
+
+work_item_approved_acceptance_refs() {
+  local wi_file="$1"
+  local approved=()
+  local acc
+
+  [ -f "$wi_file" ] || return 0
+  mapfile -t approved < <(collect_approved_acceptance_ids)
+
+  while IFS= read -r acc; do
+    [ -n "$acc" ] || continue
+    contains_exact_line "$acc" "${approved[@]}" && printf '%s\n' "$acc"
+  done < <(yaml_list "$wi_file" acceptance_refs)
 }
 
 testing_target_acceptance_ids() {
@@ -626,12 +934,12 @@ check_dependency_pass_records() {
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
     [ "$dep" != 'null' ] || continue
-    [ -f "$CONTAINER_ROOT/work-items/$dep.yaml" ] || die "missing dependency work item: $dep"
+    [ -f "$PROJECT_ROOT/work-items/$dep.yaml" ] || die "missing dependency work item: $dep"
 
     while IFS= read -r acc; do
       [ -n "$acc" ] || continue
       has_testing_record "$acc" || die "dependency ${dep} is not complete: ${acc} has no pass record"
-    done < <(yaml_list "$CONTAINER_ROOT/work-items/$dep.yaml" acceptance_refs)
+    done < <(work_item_approved_acceptance_refs "$PROJECT_ROOT/work-items/$dep.yaml")
   done < <(yaml_list "$wi_file" dependency_refs)
 }
 
@@ -695,6 +1003,53 @@ requirements_closure_text() {
       next
     }
   ' "$SPEC_FILE"
+}
+
+review_file_matches() {
+  local review_file="$1"
+  local expected_file="$2"
+  local expected_phase="$3"
+  [ -f "$review_file" ] || return 1
+  [ "$(basename "$review_file")" = "$expected_file" ] || return 1
+  [ "$(yaml_scalar "$review_file" phase)" = "$expected_phase" ] || return 1
+  [ "$(yaml_scalar "$review_file" verdict)" = 'approved' ] || return 1
+  return 0
+}
+
+gate_review_verdict_present() {
+  local reviews_dir="$PROJECT_ROOT/reviews"
+  local review_file expected_file expected_phase
+  local target_phase="${CODESPEC_TARGET_PHASE:-}"
+
+  case "$target_phase" in
+    Requirements)
+      expected_file='requirements-review.yaml'
+      expected_phase='Proposal'
+      ;;
+    Design)
+      expected_file='design-review.yaml'
+      expected_phase='Requirements'
+      ;;
+    Implementation)
+      expected_file='implementation-review.yaml'
+      expected_phase='Design'
+      ;;
+    *)
+      die 'review-verdict-present gate failed'
+      ;;
+  esac
+
+  [ -d "$reviews_dir" ] || die 'review-verdict-present gate failed'
+
+  for review_file in "$reviews_dir"/*.yaml; do
+    [ -e "$review_file" ] || continue
+    if review_file_matches "$review_file" "$expected_file" "$expected_phase"; then
+      log '✓ review-verdict-present gate passed'
+      return
+    fi
+  done
+
+  die 'review-verdict-present gate failed'
 }
 
 design_work_item_acceptance_rows() {
@@ -792,6 +1147,87 @@ design_work_item_block() {
       }
     }
   ' "$DESIGN_FILE"
+}
+
+design_branch_plan_blocks() {
+  awk '
+    function flush_block() {
+      if (in_branch_plan && block != "") {
+        printf "%s%c", block, 0
+      }
+      block = ""
+    }
+
+    /^## Work Item Execution Strategy$/ {
+      in_execution = 1
+      in_branch_plan = 0
+      block = ""
+      next
+    }
+
+    /^## / {
+      if (in_execution) {
+        flush_block()
+      }
+      in_execution = 0
+      in_branch_plan = 0
+      next
+    }
+
+    !in_execution { next }
+
+    /^### Branch Plan$/ {
+      flush_block()
+      in_branch_plan = 1
+      next
+    }
+
+    /^### / {
+      if (in_branch_plan) {
+        flush_block()
+      }
+      in_branch_plan = 0
+      next
+    }
+
+    !in_branch_plan { next }
+
+    /^[[:space:]]*-[[:space:]]*container:[[:space:]]*/ {
+      flush_block()
+      block = $0
+      next
+    }
+
+    block != "" {
+      block = block ORS $0
+    }
+
+    END {
+      if (in_branch_plan) {
+        flush_block()
+      }
+    }
+  ' "$DESIGN_FILE"
+}
+
+block_scalar_value() {
+  local key="$1"
+  awk -v key="$key" '
+    $0 ~ "^[[:space:]]*-[[:space:]]*" key ":[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*-[[:space:]]*" key ":[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      exit
+    }
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      exit
+    }
+  '
 }
 
 block_list_values() {
@@ -899,7 +1335,7 @@ check_design_work_item_acceptance_alignment() {
     [ -n "$row" ] || continue
     wi="${row%%:*}"
     design_refs="${row#*:}"
-    work_item_file="$CONTAINER_ROOT/work-items/$wi.yaml"
+    work_item_file="$PROJECT_ROOT/work-items/$wi.yaml"
     [ -f "$work_item_file" ] || die "design references missing work item: $wi"
     work_item_refs="$(yaml_list "$work_item_file" acceptance_refs | paste -sd ',' -)"
     normalized_design="$(normalize_csv "$design_refs")"
@@ -910,8 +1346,8 @@ check_design_work_item_acceptance_alignment() {
 
 check_appendix_authority() {
   local spec_matches design_matches
-  spec_matches="$(formal_id_definition_matches "$CONTAINER_ROOT/spec-appendices")"
-  design_matches="$(formal_id_definition_matches "$CONTAINER_ROOT/design-appendices")"
+  spec_matches="$(formal_id_definition_matches "$PROJECT_ROOT/spec-appendices")"
+  design_matches="$(formal_id_definition_matches "$PROJECT_ROOT/design-appendices")"
 
   if [ -n "$spec_matches" ]; then
     printf '%s\n' "$spec_matches" >&2
@@ -963,6 +1399,7 @@ gate_proposal_maturity() {
   for source_ref in "${source_refs[@]}"; do
     is_placeholder_token "$source_ref" && die "input_refs contains placeholder value: ${source_ref}"
   done
+  validate_input_evidence_refs "${source_refs[@]}"
 
   log '✓ proposal-maturity gate passed'
 }
@@ -977,13 +1414,17 @@ gate_requirements_approval() {
   local vos=()
   local intake_refs=()
   local closure_refs=()
-  local anchor closure_text req intake_ref status
+  local clarification_ids_list=()
+  local clarification_targets=()
+  local anchor closure_text req intake_ref status clarification_ref
   closure_text="$(requirements_closure_text)"
   mapfile -t reqs < <(collect_spec_ids 'REQ')
   mapfile -t accs < <(collect_spec_ids 'ACC')
   mapfile -t vos < <(collect_spec_ids 'VO')
   mapfile -t intake_refs < <(input_intake_refs)
   mapfile -t closure_refs < <(requirements_source_refs)
+  mapfile -t clarification_ids_list < <(clarification_ids)
+  mapfile -t clarification_targets < <(clarification_target_refs)
 
   [ "${#reqs[@]}" -gt 0 ] || die 'no REQ-* entries found in spec.md'
   [ "${#accs[@]}" -gt 0 ] || die 'no ACC-* entries found in spec.md'
@@ -1002,10 +1443,15 @@ gate_requirements_approval() {
   local acc
   for acc in "${accs[@]}"; do
     grep -q "acceptance_ref: ${acc}" "$SPEC_FILE" || die "acceptance ${acc} has no verification mapping"
+    is_placeholder_token "$(acceptance_expected_outcome "$acc")" && die "acceptance ${acc} expected_outcome contains placeholder value"
   done
 
   for intake_ref in "${intake_refs[@]}"; do
     contains_exact_line "$intake_ref" "${closure_refs[@]}" || die "input_ref is not closed in Requirements coverage or clarification: ${intake_ref}"
+  done
+
+  for clarification_ref in "${clarification_targets[@]}"; do
+    contains_exact_line "$clarification_ref" "${clarification_ids_list[@]}" || die 'clarification entry missing clr_id for unresolved decision closure'
   done
 
   while IFS= read -r status; do
@@ -1017,6 +1463,10 @@ gate_requirements_approval() {
         ;;
     esac
   done < <(clarification_status_values)
+
+  local deferred_missing_exit_phase=()
+  mapfile -t deferred_missing_exit_phase < <(clarification_deferred_missing_exit_phase_items)
+  [ "${#deferred_missing_exit_phase[@]}" -eq 0 ] || die "${deferred_missing_exit_phase[0]} deferred requires deferred_exit_phase"
 
   local high_open=()
   mapfile -t high_open < <(clarification_high_open_items)
@@ -1037,10 +1487,88 @@ gate_design_structure_complete() {
   grep -q '^## Verification Design$' "$DESIGN_FILE" || die 'design.md missing Verification Design'
   grep -q '^## Failure Paths / Reopen Triggers$' "$DESIGN_FILE" || die 'design.md missing Failure Paths / Reopen Triggers'
   grep -q '^## Appendix Map$' "$DESIGN_FILE" || die 'design.md missing Appendix Map'
-  grep -Eq 'WI-[0-9]{3}' "$DESIGN_FILE" || die 'design.md has no concrete WI derivation rows yet'
+
+  local derivation_rows=()
+  mapfile -t derivation_rows < <(design_work_item_acceptance_rows)
+  [ "${#derivation_rows[@]}" -gt 0 ] || die 'design.md has no concrete WI derivation rows yet'
+
+  local branch_blocks=()
+  if grep -q '^### Branch Plan$' "$DESIGN_FILE"; then
+    mapfile -d '' -t branch_blocks < <(design_branch_plan_blocks)
+  fi
+  if [ "${#branch_blocks[@]}" -gt 0 ]; then
+    local block container execution_branch
+    local work_items_count owned_paths_count forbidden_paths_count
+    for block in "${branch_blocks[@]}"; do
+      container="$(block_scalar_value container <<< "$block")"
+      [ -n "$container" ] || die 'design branch_plan entry missing container'
+      execution_branch="$(block_scalar_value execution_branch <<< "$block")"
+      [ -n "$execution_branch" ] || die 'design branch_plan entry missing execution_branch'
+      mapfile -t tmp_list < <(block_list_values work_items <<< "$block" | grep -vE '^(|null)$' || true)
+      work_items_count="${#tmp_list[@]}"
+      [ "$work_items_count" -gt 0 ] || die 'design branch_plan entry missing work_items'
+      mapfile -t tmp_list < <(block_list_values owned_paths <<< "$block" | grep -vE '^(|null)$' || true)
+      owned_paths_count="${#tmp_list[@]}"
+      [ "$owned_paths_count" -gt 0 ] || die 'design branch_plan entry missing owned_paths'
+      mapfile -t tmp_list < <(block_list_values forbidden_paths <<< "$block" | grep -vE '^(|null)$' || true)
+      forbidden_paths_count="${#tmp_list[@]}"
+      [ "$forbidden_paths_count" -gt 0 ] || die 'design branch_plan entry missing forbidden_paths'
+    done
+  fi
+
   check_design_work_item_acceptance_alignment
   log '✓ design-structure-complete gate passed'
 }
+
+baseline_section_has_real_content() {
+  local heading="$1"
+  awk -v heading="$heading" '
+    function is_placeholder(line) {
+      return (line ~ /^\[[^]]+\]$/)
+    }
+    BEGIN { in_target = 0; found = 0 }
+    $0 == heading {
+      in_target = 1
+      next
+    }
+    in_target && /^### / {
+      exit
+    }
+    in_target && /^## / {
+      exit
+    }
+    in_target && /^[[:space:]]*-[[:space:]]+/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      if (line != "" && line != "null" && line != "none" && !is_placeholder(line)) {
+        found = 1
+        exit
+      }
+    }
+    END { if (found == 1) print "yes" }
+  ' "$DESIGN_FILE"
+}
+
+gate_implementation_readiness_baseline() {
+  grep -q '^## Implementation Readiness Baseline$' "$DESIGN_FILE" || die 'design.md missing Implementation Readiness Baseline'
+  grep -q '^### Environment Configuration Matrix$' "$DESIGN_FILE" || die 'design.md missing Environment Configuration Matrix'
+  grep -q '^### Security Baseline$' "$DESIGN_FILE" || die 'design.md missing Security Baseline'
+  grep -q '^### Data / Migration Strategy$' "$DESIGN_FILE" || die 'design.md missing Data / Migration Strategy'
+  grep -q '^### Operability / Health Checks$' "$DESIGN_FILE" || die 'design.md missing Operability / Health Checks'
+  grep -q '^### Backup / Restore$' "$DESIGN_FILE" || die 'design.md missing Backup / Restore'
+
+  [ "$(baseline_section_has_real_content '### Environment Configuration Matrix')" = 'yes' ] || die 'design.md Environment Configuration Matrix contains placeholder content'
+  [ "$(baseline_section_has_real_content '### Security Baseline')" = 'yes' ] || die 'design.md Security Baseline contains placeholder content'
+  [ "$(baseline_section_has_real_content '### Data / Migration Strategy')" = 'yes' ] || die 'design.md Data / Migration Strategy contains placeholder content'
+
+  if grep -q '^## Experience Acceptance$' "$SPEC_FILE"; then
+    grep -q '^### UX / Experience Readiness$' "$DESIGN_FILE" || die 'design.md missing UX / Experience Readiness'
+  fi
+
+  log '✓ implementation-readiness-baseline gate passed'
+}
+
 
 gate_implementation_start() {
   require_focus_wi
@@ -1054,28 +1582,46 @@ gate_implementation_start() {
   local acceptance_refs=()
   local verification_refs=()
   local allowed_paths=()
+  local required_verification=()
+  local stop_conditions=()
+  local reopen_triggers=()
+  local branch_owned_paths=()
   mapfile -t input_refs < <(yaml_list "$WI_FILE" input_refs)
   mapfile -t requirement_refs < <(yaml_list "$WI_FILE" requirement_refs)
   mapfile -t acceptance_refs < <(yaml_list "$WI_FILE" acceptance_refs)
   mapfile -t verification_refs < <(yaml_list "$WI_FILE" verification_refs)
   mapfile -t allowed_paths < <(yaml_list "$WI_FILE" allowed_paths)
+  mapfile -t required_verification < <(yaml_list "$WI_FILE" required_verification)
+  mapfile -t stop_conditions < <(yaml_list "$WI_FILE" stop_conditions)
+  mapfile -t reopen_triggers < <(yaml_list "$WI_FILE" reopen_triggers)
+  mapfile -t branch_owned_paths < <(yaml_list "$WI_FILE" branch_execution.owned_paths)
 
   [ "${#input_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing input_refs"
   [ "${#requirement_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing requirement_refs"
   [ "${#acceptance_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing acceptance_refs"
   [ "${#verification_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing verification_refs"
   [ "${#allowed_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing allowed_paths"
+  [ "${#required_verification[@]}" -gt 0 ] || die "$FOCUS_WI missing required_verification"
+  [ "${#stop_conditions[@]}" -gt 0 ] || die "$FOCUS_WI missing stop_conditions"
+  [ "${#reopen_triggers[@]}" -gt 0 ] || die "$FOCUS_WI missing reopen_triggers"
+  [ "${#branch_owned_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing branch_execution.owned_paths"
+  [ "$(yaml_scalar "$WI_FILE" branch_execution.container)" != 'null' ] || die "$FOCUS_WI missing branch_execution.container"
+  [ "$(yaml_scalar "$WI_FILE" branch_execution.execution_branch)" != 'null' ] || die "$FOCUS_WI missing branch_execution.execution_branch"
   [ "$(yaml_scalar "$WI_FILE" derived_from)" != 'null' ] || die "$FOCUS_WI missing derived_from"
 
   check_focus_wi_design_alignment
   check_wi_refs_exist_in_spec
 
+  local closure_refs=()
   local ref
+
+  mapfile -t closure_refs < <(requirements_source_refs)
+
   for ref in "${input_refs[@]}"; do
     [ -n "$ref" ] || continue
     [ "$ref" != 'null' ] || continue
     [ "$ref" != 'none' ] || continue
-    grep -q "source_ref: ${ref}" "$SPEC_FILE" || grep -q -- "- ${ref} ->" "$SPEC_FILE" || grep -q -- "${ref}" "$SPEC_FILE" || die "$FOCUS_WI input_ref is not represented in spec coverage: ${ref}"
+    contains_exact_line "$ref" "${closure_refs[@]}" || die "$FOCUS_WI input_ref ${ref} is not represented in spec input intake or design work item derivation"
   done
 
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
@@ -1084,11 +1630,38 @@ gate_implementation_start() {
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
     [ "$ref" != 'null' ] || continue
-    [ -f "$CONTAINER_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
-    [ "$(contract_status "$CONTAINER_ROOT/$ref")" = 'frozen' ] || die "$FOCUS_WI contract is not frozen: $ref"
+    [ -f "$PROJECT_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
+    [ "$(contract_status "$PROJECT_ROOT/$ref")" = 'frozen' ] || die "$FOCUS_WI contract is not frozen: $ref"
   done < <(yaml_list "$WI_FILE" contract_refs)
 
   log '✓ implementation-start gate passed'
+}
+
+gate_phase_capability() {
+  local phase
+  phase="$(yaml_scalar "$META_FILE" phase)"
+  if [ "$phase" != 'Proposal' ] && [ "$phase" != 'Requirements' ]; then
+    log "✓ phase-capability gate passed (phase ${phase})"
+    return
+  fi
+
+  local changed=()
+  mapfile -t changed < <(git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
+  [ "${#changed[@]}" -gt 0 ] || {
+    log '✓ phase-capability gate passed (no staged changes)'
+    return
+  }
+
+  local file
+  for file in "${changed[@]}"; do
+    case "$file" in
+      src/**|Dockerfile)
+        die "phase-capability gate failed: ${phase} forbids implementation artifacts: ${file}"
+        ;;
+    esac
+  done
+
+  log '✓ phase-capability gate passed'
 }
 
 gate_scope() {
@@ -1109,10 +1682,12 @@ gate_scope() {
 
   local allowed=()
   local forbidden=()
+  local branch_owned_paths=()
   mapfile -t allowed < <(yaml_list "$WI_FILE" allowed_paths)
   mapfile -t forbidden < <(yaml_list "$WI_FILE" forbidden_paths)
+  mapfile -t branch_owned_paths < <(yaml_list "$WI_FILE" branch_execution.owned_paths)
 
-  local file pattern ok
+  local file pattern ok owned_ok
   for file in "${changed[@]}"; do
     for pattern in "${forbidden[@]}"; do
       if match_path "$file" "$pattern"; then
@@ -1130,18 +1705,29 @@ gate_scope() {
       done
       [ "$ok" -eq 1 ] || die "staged file $file is outside allowed_paths of $FOCUS_WI"
     fi
+
+    if [ "${#branch_owned_paths[@]}" -gt 0 ]; then
+      owned_ok=0
+      for pattern in "${branch_owned_paths[@]}"; do
+        if match_path "$file" "$pattern"; then
+          owned_ok=1
+          break
+        fi
+      done
+      [ "$owned_ok" -eq 1 ] || die "staged file $file is outside branch_execution.owned_paths of $FOCUS_WI"
+    fi
   done
 
   log '✓ scope gate passed'
 }
 
-gate_boundary() {
+gate_contract_boundary() {
   if [ -f "$META_FILE" ] && [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
     require_focus_wi
     while IFS= read -r ref; do
       [ -n "$ref" ] || continue
       [ "$ref" != 'null' ] || continue
-      [ -f "$CONTAINER_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
+      [ -f "$PROJECT_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
     done < <(yaml_list "$WI_FILE" contract_refs)
   fi
 
@@ -1162,7 +1748,7 @@ gate_boundary() {
     fi
   done < <(git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
 
-  log '✓ boundary gate passed'
+  log '✓ contract-boundary gate passed'
 }
 
 gate_trace_consistency() {
@@ -1239,7 +1825,7 @@ gate_testing_coverage() {
   mapfile -t accs < <(testing_target_acceptance_ids)
   [ "${#accs[@]}" -gt 0 ] || die 'no ACC-* entries found in spec.md'
 
-  local acc priority verification_type artifact_ref
+  local acc priority verification_type artifact_ref residual_risk reopen_required
   for acc in "${accs[@]}"; do
     grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "testing.md missing record for ${acc}"
     has_testing_record "$acc" || die "testing.md does not have a passing record for ${acc}"
@@ -1247,6 +1833,20 @@ gate_testing_coverage() {
     artifact_ref="$(testing_record_scalar "$acc" artifact_ref)"
     [ -n "$artifact_ref" ] || die "testing.md artifact_ref is missing for ${acc}"
     is_placeholder_token "$artifact_ref" && die "testing.md artifact_ref contains placeholder value for ${acc}"
+
+    residual_risk="$(testing_record_scalar "$acc" residual_risk)"
+    [ -n "$residual_risk" ] || die "testing.md residual_risk is missing for ${acc}"
+    if [ "$(printf '%s' "$residual_risk" | tr '[:upper:]' '[:lower:]')" != 'none' ]; then
+      is_placeholder_token "$residual_risk" && die "testing.md residual_risk contains placeholder value for ${acc}"
+    fi
+
+    reopen_required="$(testing_record_scalar "$acc" reopen_required)"
+    [ -n "$reopen_required" ] || die "testing.md reopen_required is missing for ${acc}"
+    case "$(printf '%s' "$reopen_required" | tr '[:upper:]' '[:lower:]')" in
+      true|false) ;;
+      *) die "testing.md reopen_required must be true or false for ${acc}" ;;
+    esac
+    [ "$(printf '%s' "$reopen_required" | tr '[:upper:]' '[:lower:]')" = 'false' ] || die "testing.md reopen_required must be false before phase transition for ${acc}"
 
     priority="$(spec_acceptance_priority "$acc")"
     verification_type="$(testing_record_scalar "$acc" verification_type)"
@@ -1284,7 +1884,7 @@ gate_verification() {
     [ "${#active[@]}" -gt 0 ] || die 'Implementation verification requires active_work_items'
 
     for wi in "${active[@]}"; do
-      wi_file="$CONTAINER_ROOT/work-items/$wi.yaml"
+      wi_file="$PROJECT_ROOT/work-items/$wi.yaml"
       [ -f "$wi_file" ] || die "missing work item: $wi_file"
 
       check_dependency_pass_records "$wi_file"
@@ -1293,7 +1893,7 @@ gate_verification() {
         [ -n "$acc" ] || continue
         grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "current work item acceptance ${acc} has no testing record"
         has_testing_record "$acc" || die "current work item acceptance ${acc} has no pass record"
-      done < <(yaml_list "$wi_file" acceptance_refs)
+      done < <(work_item_approved_acceptance_refs "$wi_file")
     done
   elif [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
     require_focus_wi
@@ -1305,7 +1905,7 @@ gate_verification() {
       [ -n "$acc" ] || continue
       grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "current work item acceptance ${acc} has no testing record"
       has_testing_record "$acc" || die "current work item acceptance ${acc} has no pass record"
-    done < <(yaml_list "$WI_FILE" acceptance_refs)
+    done < <(work_item_approved_acceptance_refs "$WI_FILE")
   fi
 
   if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
@@ -1316,7 +1916,7 @@ gate_verification() {
 }
 
 gate_deployment_readiness() {
-  local deployment_file="$CONTAINER_ROOT/deployment.md"
+  local deployment_file="$PROJECT_ROOT/deployment.md"
   local phase enforce_materialized
   phase="$(yaml_scalar "$META_FILE" phase)"
   enforce_materialized="${CODESPEC_REQUIRE_DEPLOYMENT_FILE:-0}"
@@ -1370,6 +1970,9 @@ main() {
     requirements-approval)
       gate_requirements_approval
       ;;
+    review-verdict-present)
+      gate_review_verdict_present
+      ;;
     design-structure-complete)
       gate_design_structure_complete
       ;;
@@ -1379,6 +1982,7 @@ main() {
     implementation-ready)
       gate_design_structure_complete
       gate_implementation_start
+      gate_implementation_readiness_baseline
       ;;
     implementation-start)
       gate_implementation_start
@@ -1392,11 +1996,14 @@ main() {
     metadata-consistency)
       gate_metadata_consistency
       ;;
+    phase-capability)
+      gate_phase_capability
+      ;;
     scope)
       gate_scope
       ;;
-    boundary)
-      gate_boundary
+    contract-boundary|boundary)
+      gate_contract_boundary
       ;;
     trace-consistency)
       gate_trace_consistency

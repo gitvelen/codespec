@@ -28,16 +28,17 @@
 - normalization_status: anchored
 
 ### Requirements Quick Index
+- Proposal 阶段只保留最小导读；formal REQ/ACC/VO 在 Requirements phase 正式填写。
 - Proposal Coverage Map: maintain in `## Requirements`
 - Clarification Status: maintain in `## Requirements`
 - Requirements Index:
-  - REQ-001: [short summary]
+  - [REQ-ID]: [short summary after requirements freeze]
 
 ### Acceptance Index
-- ACC-001 -> REQ-001
+- [ACC-ID] -> [REQ-ID]
 
 ### Verification Index
-- VO-001 -> ACC-001
+- [VO-ID] -> [ACC-ID]
 
 ### Appendix Map
 - [appendix-name]: [when to read]
@@ -118,6 +119,7 @@
   impact: medium
   owner: human
   next_action: resolve before design freeze
+  deferred_exit_phase: Design
 
 ### Functional Requirements
 - REQ-001
@@ -132,12 +134,12 @@
 
 ## Acceptance
 
-- acc_id: ACC-001
-  source_ref: REQ-001
+- acc_id: [ACC-ID]
+  source_ref: [REQ-ID]
   expected_outcome: [observable outcome]
   priority: P0
   priority_rationale: [why this priority applies]
-  status: approved
+  status: [approved|pending]
 
 ## Verification
 
