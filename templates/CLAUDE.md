@@ -95,13 +95,13 @@
 
 ### 统一入口
 ```bash
-# 在工作项分支中运行（注意是 ../../ 不是 ./）
-../../.codespec/codespec check-gate <gate-name>
+# 在项目目录中运行（.codespec 在上一级）
+../.codespec/codespec check-gate <gate-name>
 
 # 示例
-../../.codespec/codespec check-gate spec-completeness
-../../.codespec/codespec check-gate implementation-ready
-../../.codespec/codespec check-gate verification
+../.codespec/codespec check-gate spec-completeness
+../.codespec/codespec check-gate implementation-ready
+../.codespec/codespec check-gate verification
 ```
 
 ### 重要提醒
