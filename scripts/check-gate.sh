@@ -35,39 +35,6 @@ contract_status() {
   grep '^status:' "$file" | awk '{print $2}' || true
 }
 
-find_project_root() {
-  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ] && [ -f "${CODESPEC_PROJECT_ROOT}/.codespec/codespec" ]; then
-    printf '%s\n' "$CODESPEC_PROJECT_ROOT"
-    return
-  fi
-
-  local candidate
-  candidate="$(dirname "$FRAMEWORK_ROOT")"
-  if [ -f "$candidate/.codespec/codespec" ]; then
-    printf '%s\n' "$candidate"
-    return
-  fi
-
-  local dir="$PWD"
-  while [ "$dir" != "/" ]; do
-    if [ -f "$dir/.codespec/codespec" ]; then
-      printf '%s\n' "$dir"
-      return
-    fi
-    dir="$(dirname "$dir")"
-  done
-
-  if git rev-parse --show-toplevel >/dev/null 2>&1; then
-    dir="$(git rev-parse --show-toplevel)"
-    if [ -f "$dir/.codespec/codespec" ]; then
-      printf '%s\n' "$dir"
-      return
-    fi
-  fi
-
-  die "could not locate project root"
-}
-
 find_workspace_root() {
   local dir="$PWD"
   while [ "$dir" != "/" ]; do
@@ -104,6 +71,10 @@ match_path() {
     $pattern) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+normalize_csv() {
+  printf '%s' "$1" | tr ',' '\n' | grep -v '^$' | sort | paste -sd ',' -
 }
 
 require_context() {
@@ -577,41 +548,6 @@ clarification_deferred_missing_exit_phase_items() {
   ' "$SPEC_FILE"
 }
 
-gate_branch_alignment() {
-  local expected_branch actual_branch
-  expected_branch="$(yaml_scalar "$META_FILE" execution_branch)"
-
-  if [ "$expected_branch" = 'null' ]; then
-    log '✓ branch-alignment gate passed (not_applicable)'
-    return
-  fi
-
-  actual_branch="$(current_git_branch)"
-  [ "$actual_branch" = "$expected_branch" ] || die "current git branch ${actual_branch} does not match execution_branch ${expected_branch}"
-  log '✓ branch-alignment gate passed'
-}
-
-gate_feature_sync() {
-  local expected_branch feature_branch actual_branch local_base feature_head
-  expected_branch="$(yaml_scalar "$META_FILE" execution_branch)"
-  feature_branch="$(yaml_scalar "$META_FILE" feature_branch)"
-
-  if [ "$expected_branch" = 'null' ] || [ "$feature_branch" = 'null' ]; then
-    log '✓ feature-sync gate passed (not_applicable)'
-    return
-  fi
-
-  actual_branch="$(current_git_branch)"
-  [ "$actual_branch" = "$expected_branch" ] || die "current git branch ${actual_branch} does not match execution_branch ${expected_branch}"
-  git -C "$PROJECT_ROOT" rev-parse --verify "$feature_branch" >/dev/null 2>&1 || die "feature branch ${feature_branch} is not available locally"
-
-  local_base="$(git -C "$PROJECT_ROOT" merge-base HEAD "$feature_branch")"
-  feature_head="$(git -C "$PROJECT_ROOT" rev-parse "$feature_branch")"
-  [ "$local_base" = "$feature_head" ] || die "execution branch ${expected_branch} is behind feature branch ${feature_branch}; merge ${feature_branch} before continuing"
-
-  log '✓ feature-sync gate passed'
-}
-
 gate_metadata_consistency() {
   local phase focus_wi execution_group execution_branch active=() wi
   phase="$(yaml_scalar "$META_FILE" phase)"
@@ -890,6 +826,38 @@ testing_record_scalar() {
   ' "$TESTING_FILE"
 }
 
+testing_record_scalar_from_scope() {
+  local acc="$1"
+  local key="$2"
+  local scope="$3"
+  awk -v acc="$acc" -v key="$key" -v scope="$scope" '
+    BEGIN { in_record = 0; found_scope = "" }
+    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
+      in_record = 1
+      found_scope = ""
+      next
+    }
+    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
+      in_record = 0
+      found_scope = ""
+      next
+    }
+    in_record && $0 ~ "^[[:space:]]*test_scope:[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      found_scope = line
+    }
+    in_record && found_scope == scope && $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      exit
+    }
+  ' "$TESTING_FILE"
+}
+
 spec_acceptance_priority() {
   local acc="$1"
   awk -v acc="$acc" '
@@ -921,7 +889,75 @@ spec_acceptance_priority() {
 has_testing_record() {
   local acc="$1"
   [ -f "$TESTING_FILE" ] || return 1
-  [ "$(testing_record_scalar "$acc" result)" = 'pass' ]
+  awk -v acc="$acc" '
+    BEGIN { in_record = 0; found = 0 }
+    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
+      in_record = 1
+      result = ""
+      next
+    }
+    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
+      if (result == "pass") {
+        found = 1
+        exit
+      }
+      in_record = 0
+      result = ""
+      next
+    }
+    in_record && $0 ~ "^[[:space:]]*result:[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*result:[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      result = line
+    }
+    END {
+      if (in_record && result == "pass") {
+        found = 1
+      }
+      exit (found ? 0 : 1)
+    }
+  ' "$TESTING_FILE"
+}
+
+has_full_integration_pass() {
+  local acc="$1"
+  [ -f "$TESTING_FILE" ] || return 1
+  awk -v acc="$acc" '
+    BEGIN { in_record = 0; found = 0 }
+    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
+      in_record = 1
+      test_scope = ""
+      result = ""
+      next
+    }
+    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
+      if (test_scope == "full-integration" && result == "pass") {
+        found = 1
+        exit
+      }
+      in_record = 0
+      next
+    }
+    in_record && $0 ~ "^[[:space:]]*test_scope:[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      test_scope = line
+    }
+    in_record && $0 ~ "^[[:space:]]*result:[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*result:[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      result = line
+    }
+    END {
+      if (in_record && test_scope == "full-integration" && result == "pass") {
+        found = 1
+      }
+      exit (found ? 0 : 1)
+    }
+  ' "$TESTING_FILE"
 }
 
 check_dependency_pass_records() {
@@ -1013,6 +1049,11 @@ review_file_matches() {
   [ "$(basename "$review_file")" = "$expected_file" ] || return 1
   [ "$(yaml_scalar "$review_file" phase)" = "$expected_phase" ] || return 1
   [ "$(yaml_scalar "$review_file" verdict)" = 'approved' ] || return 1
+  local rb ra
+  rb="$(yaml_scalar "$review_file" reviewed_by)"
+  ra="$(yaml_scalar "$review_file" reviewed_at)"
+  [ "$rb" != 'null' ] && [ -n "$rb" ] || return 1
+  [ "$ra" != 'null' ] && [ -n "$ra" ] || return 1
   return 0
 }
 
@@ -1222,13 +1263,24 @@ check_focus_wi_design_alignment() {
   mapfile -t design_acceptance_refs < <(printf '%s\n' "$design_block" | block_list_values covered_acceptance_refs | grep -vE '^(|null)$' || true)
   mapfile -t design_verification_refs < <(printf '%s\n' "$design_block" | block_list_values verification_refs | grep -vE '^(|null)$' || true)
 
+  # 从 WI_FILE 重新读取这些变量，避免依赖外部作用域
+  local wi_input_refs=()
+  local wi_requirement_refs=()
+  local wi_acceptance_refs=()
+  local wi_verification_refs=()
+
+  mapfile -t wi_input_refs < <(yaml_list "$WI_FILE" input_refs)
+  mapfile -t wi_requirement_refs < <(yaml_list "$WI_FILE" requirement_refs)
+  mapfile -t wi_acceptance_refs < <(yaml_list "$WI_FILE" acceptance_refs)
+  mapfile -t wi_verification_refs < <(yaml_list "$WI_FILE" verification_refs)
+
   local wi_inputs_csv wi_requirements_csv wi_acceptance_csv wi_verification_csv
   local design_inputs_csv design_requirements_csv design_acceptance_csv design_verification_csv
 
-  wi_inputs_csv="$(printf '%s\n' "${input_refs[@]}" | paste -sd ',' -)"
-  wi_requirements_csv="$(printf '%s\n' "${requirement_refs[@]}" | paste -sd ',' -)"
-  wi_acceptance_csv="$(printf '%s\n' "${acceptance_refs[@]}" | paste -sd ',' -)"
-  wi_verification_csv="$(printf '%s\n' "${verification_refs[@]}" | paste -sd ',' -)"
+  wi_inputs_csv="$(printf '%s\n' "${wi_input_refs[@]}" | paste -sd ',' -)"
+  wi_requirements_csv="$(printf '%s\n' "${wi_requirement_refs[@]}" | paste -sd ',' -)"
+  wi_acceptance_csv="$(printf '%s\n' "${wi_acceptance_refs[@]}" | paste -sd ',' -)"
+  wi_verification_csv="$(printf '%s\n' "${wi_verification_refs[@]}" | paste -sd ',' -)"
 
   design_inputs_csv="$(printf '%s\n' "${design_input_refs[@]}" | paste -sd ',' -)"
   design_requirements_csv="$(printf '%s\n' "${design_requirement_refs[@]}" | paste -sd ',' -)"
@@ -1262,10 +1314,6 @@ check_wi_refs_exist_in_spec() {
   for ref in "${verification_refs[@]}"; do
     contains_exact_line "$ref" "${spec_verifications[@]}" || die "$FOCUS_WI references unknown verification_ref: ${ref}"
   done
-}
-
-normalize_csv() {
-  printf '%s' "$1" | tr ',' '\n' | grep -v '^$' | sort | paste -sd ',' -
 }
 
 check_design_work_item_acceptance_alignment() {
@@ -1738,22 +1786,39 @@ gate_testing_coverage() {
   mapfile -t accs < <(testing_target_acceptance_ids)
   [ "${#accs[@]}" -gt 0 ] || die 'no ACC-* entries found in spec.md'
 
+  local phase
+  phase="$(yaml_scalar "$META_FILE" phase)"
+
   local acc priority verification_type artifact_ref residual_risk reopen_required
   for acc in "${accs[@]}"; do
     grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "testing.md missing record for ${acc}"
     has_testing_record "$acc" || die "testing.md does not have a passing record for ${acc}"
 
-    artifact_ref="$(testing_record_scalar "$acc" artifact_ref)"
+    # In Testing/Deployment phase, require at least one full-integration pass record
+    if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
+      has_full_integration_pass "$acc" || die "testing.md does not have a full-integration pass record for ${acc}"
+
+      # Extract fields from full-integration pass record
+      artifact_ref="$(testing_record_scalar_from_scope "$acc" artifact_ref full-integration)"
+      residual_risk="$(testing_record_scalar_from_scope "$acc" residual_risk full-integration)"
+      reopen_required="$(testing_record_scalar_from_scope "$acc" reopen_required full-integration)"
+      verification_type="$(testing_record_scalar_from_scope "$acc" verification_type full-integration)"
+    else
+      # In other phases, extract from any pass record (first match)
+      artifact_ref="$(testing_record_scalar "$acc" artifact_ref)"
+      residual_risk="$(testing_record_scalar "$acc" residual_risk)"
+      reopen_required="$(testing_record_scalar "$acc" reopen_required)"
+      verification_type="$(testing_record_scalar "$acc" verification_type)"
+    fi
+
     [ -n "$artifact_ref" ] || die "testing.md artifact_ref is missing for ${acc}"
     is_placeholder_token "$artifact_ref" && die "testing.md artifact_ref contains placeholder value for ${acc}"
 
-    residual_risk="$(testing_record_scalar "$acc" residual_risk)"
     [ -n "$residual_risk" ] || die "testing.md residual_risk is missing for ${acc}"
     if [ "$(printf '%s' "$residual_risk" | tr '[:upper:]' '[:lower:]')" != 'none' ]; then
       is_placeholder_token "$residual_risk" && die "testing.md residual_risk contains placeholder value for ${acc}"
     fi
 
-    reopen_required="$(testing_record_scalar "$acc" reopen_required)"
     [ -n "$reopen_required" ] || die "testing.md reopen_required is missing for ${acc}"
     case "$(printf '%s' "$reopen_required" | tr '[:upper:]' '[:lower:]')" in
       true|false) ;;
@@ -1762,7 +1827,6 @@ gate_testing_coverage() {
     [ "$(printf '%s' "$reopen_required" | tr '[:upper:]' '[:lower:]')" = 'false' ] || die "testing.md reopen_required must be false before phase transition for ${acc}"
 
     priority="$(spec_acceptance_priority "$acc")"
-    verification_type="$(testing_record_scalar "$acc" verification_type)"
     case "$priority" in
       P0)
         [ "$verification_type" = 'automated' ] || die "P0 acceptance ${acc} must use automated verification"
@@ -1901,12 +1965,6 @@ main() {
       ;;
     implementation-start)
       gate_implementation_start
-      ;;
-    branch-alignment)
-      gate_branch_alignment
-      ;;
-    feature-sync)
-      gate_feature_sync
       ;;
     metadata-consistency)
       gate_metadata_consistency

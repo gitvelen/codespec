@@ -40,8 +40,8 @@ workspace/                   # 工作区目录
 
 | 旧命令 | 新命令 | 说明 |
 |--------|--------|------|
-| `codespec install <project> main baseline null` | `codespec install-workspace <workspace>` | 安装工作区 |
-| 无 | `codespec init-dossier` | 在 Git clone 中初始化 dossier |
+| `codespec install <project> main baseline null` | `scripts/install-workspace.sh <workspace>` | 安装工作区 |
+| 无 | `scripts/init-dossier.sh` | 在 Git clone 中初始化 dossier |
 | `codespec add-container sanguoA main` | 手工 `git clone` | 不再需要此命令 |
 | `codespec start-requirements main` | `codespec start-requirements` | 去掉 container 参数 |
 
@@ -72,7 +72,7 @@ mkdir -p /path/to/new-workspace
 cd /path/to/new-workspace
 
 # 安装工作区 runtime
-codespec install-workspace .
+/path/to/.codespec/scripts/install-workspace.sh .
 ```
 
 ### 步骤 3：迁移 main container
@@ -91,7 +91,7 @@ rmdir change/main
 rmdir change
 
 # 初始化（如果是新 clone）
-# codespec init-dossier
+# /path/to/workspace/.codespec/scripts/init-dossier.sh
 ```
 
 ### 步骤 4：迁移其他 containers（如果有）
@@ -181,12 +181,12 @@ v2.0 新增功能：
 # 1. 创建工作区
 mkdir -p ~/projects/myapp
 cd ~/projects/myapp
-codespec install-workspace .
+bash /path/to/.codespec/scripts/install-workspace.sh .
 
 # 2. 创建/克隆项目
 git clone <repo-url> main
 cd main
-codespec init-dossier
+bash /path/to/workspace/.codespec/scripts/init-dossier.sh
 
 # 3. 完成所有阶段
 codespec start-requirements

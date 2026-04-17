@@ -49,7 +49,8 @@ fi
 mkdir -p "$PROJECT_ROOT/work-items" \
   "$PROJECT_ROOT/contracts" \
   "$PROJECT_ROOT/design-appendices" \
-  "$PROJECT_ROOT/spec-appendices"
+  "$PROJECT_ROOT/spec-appendices" \
+  "$PROJECT_ROOT/reviews"
 
 # 复制模板文件
 cp "$WORKSPACE_ROOT/.codespec/templates/spec.md" "$PROJECT_ROOT/spec.md"
@@ -61,20 +62,22 @@ cp "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md" "$PROJECT_ROOT/AGENTS.md"
 # 创建 meta.yaml
 TODAY="$(date +%F)"
 CURRENT_BRANCH="$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
-cat > "$PROJECT_ROOT/meta.yaml" <<EOF
-change_id: baseline
-base_version: null
-feature_branch: $CURRENT_BRANCH
-execution_group: null
-execution_branch: null
-phase: Proposal
-status: in_progress
-focus_work_item: null
-active_work_items: []
-created_at: $TODAY
-updated_at: $TODAY
-updated_by: codespec-init
-EOF
+
+# 使用 render_template 渲染 meta.yaml
+RENDER_DATE="$TODAY" \
+RENDER_CHANGE_ID="baseline" \
+RENDER_BASE_VERSION="null" \
+RENDER_FEATURE_BRANCH="$CURRENT_BRANCH" \
+RENDER_EXECUTION_GROUP="null" \
+RENDER_EXECUTION_BRANCH="null" \
+RENDER_PHASE="Proposal" \
+RENDER_STATUS="in_progress" \
+RENDER_FOCUS_WORK_ITEM="null" \
+RENDER_ACTIVE_WORK_ITEMS="[]" \
+RENDER_UPDATED_BY="codespec-init" \
+"$WORKSPACE_ROOT/.codespec/codespec" render-template \
+  "$WORKSPACE_ROOT/.codespec/templates/meta.yaml" \
+  "$PROJECT_ROOT/meta.yaml"
 
 # 安装 Git hooks（如果是 Git 仓库）
 if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

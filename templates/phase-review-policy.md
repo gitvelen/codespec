@@ -8,14 +8,14 @@
 - `禁止切换`：即使 gate 已通过，也不能推进的阻塞条件。
 
 ## 使用方式
-- 先定位当前 `change/<container>/meta.yaml` 中的 `phase`、`status`、`focus_work_item`、`execution_branch`。
+- 先定位当前 `./meta.yaml` 中的 `phase`、`status`、`focus_work_item`、`execution_branch`。
 - 先读当前 dossier 的 agent 入口文件（`AGENTS.md` 或 `CLAUDE.md`，二选一；二者是兼容性双别名，内容应保持等价），再读本 phase 对应的权威文件。
 - 每次 phase 切换前都要给出一个结论：`允许切换`、`有条件允许切换`、`禁止切换`。
 - 只有 gate 通过且人工走查未发现阻塞项，才允许执行 `codespec start-*`、`complete-change` 或 `promote-version`。
 
 ## Proposal -> Requirements
 必须读取：
-- `change/<container>/spec.md`
+- `./spec.md`
 
 必须确认：
 - `spec.md` 结构完整，至少包含 `Default Read Layer`、`Intent`、`Requirements`、`Acceptance`、`Verification`、`Input Intake Summary`、`Input Intake`、`Testing Priority Rules`、`<!-- SKELETON-END -->`。
@@ -24,7 +24,7 @@
 - Goals / Anchors / Boundary Alerts / Unresolved Decisions 已经足以支撑 Requirements 正规化。
 - appendix 没有私自定义正式 `REQ/ACC/VO`。
 - Proposal 阶段只允许 authority 文档与输入沉淀类改动；当前粗粒度 runtime/hook 只会硬拦最明显的实现产物（`src/**`、`Dockerfile`），其他越阶段实现仍需 reviewer 明确阻止。
-- 进入 Requirements 前，当前 Proposal 审查结论必须以 `change/<container>/reviews/requirements-review.yaml` 落盘，并至少包含 `phase: Proposal`、`verdict: approved`、`reviewed_by`、`reviewed_at`。
+- 进入 Requirements 前，当前 Proposal 审查结论必须以 `./reviews/requirements-review.yaml` 落盘，并至少包含 `phase: Proposal`、`verdict: approved`、`reviewed_by`、`reviewed_at`。
 
 必须通过：
 - `./.codespec/codespec check-gate proposal-maturity`
@@ -36,7 +36,7 @@
 
 ## Requirements -> Design
 必须读取：
-- `change/<container>/spec.md`
+- `./spec.md`
 
 必须确认：
 - `Proposal Coverage Map` 与 `Clarification Status` 存在。
@@ -58,15 +58,15 @@
 
 ## Design -> Implementation
 必须读取：
-- `change/<container>/design.md`
-- `change/<container>/spec.md`
-- `change/<container>/work-items/<WI>.yaml`
-- `change/<container>/contracts/*.md`（若当前 WI 使用）
+- `./design.md`
+- `./spec.md`
+- `./work-items/<WI>.yaml`
+- `./contracts/*.md`（若当前 WI 使用）
 
 必须确认：
 - `design.md` 的 `Goal / Scope Link`、`Architecture Boundary`、`Work Item Execution Strategy`、`Design Slice Index`、`Work Item Derivation`、`Contract Needs`、`Verification Design`、`Failure Paths / Reopen Triggers` 完整。
 - 至少存在一个真实 `WI-*` 派生项。
-- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 container、execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy。
+- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy。
 - 当前 WI 的 `goal`、`input_refs`、`requirement_refs`、`acceptance_refs`、`verification_refs`、`allowed_paths`、`derived_from` 完整且非 placeholder。
 - 当前 WI 的 `branch_execution` 与 `design.md` 的并行分支计划一致；共享文件已有唯一 owner 或父 feature 分支集成策略。
 - 当前 WI 与 `design.md` 中同名 derivation row 的 input / requirement / acceptance / verification refs 完全一致。
@@ -88,10 +88,10 @@
 
 ## Implementation -> Testing
 必须读取：
-- `change/<container>/meta.yaml`
-- `change/<container>/work-items/<focus_work_item>.yaml`
-- `change/<container>/design.md`
-- `change/<container>/testing.md`（它是当前 container / 当前执行线的验证证据账本，不是 Testing 阶段才首次填写；`add-container` 不继承 source container 的 pass records）
+- `./meta.yaml`
+- `./work-items/<focus_work_item>.yaml`
+- `./design.md`
+- `./testing.md`（它是当前项目 / 当前执行线的验证证据账本，不是 Testing 阶段才首次填写；多个独立 clone 不共享 pass records）
 
 必须确认：
 - `focus_work_item` 非空且存在于 `active_work_items`。
@@ -104,10 +104,24 @@
 - 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record。
 - 当前实现仍能被 `spec.md`、`design.md`、当前 WI 合法解释，没有隐性扩 scope。
 
+### Testing 字段定义
+
+**测试结果（result）**：
+- `pass`: 测试通过，acceptance 得到验证
+- `fail`: 测试失败，需要修复实现或重新开启 spec/design
+
+**残留风险（residual_risk）**：
+- `none`: 无残留风险
+- `low`: 低风险，可接受的小问题
+- `medium`: 中等风险，需要监控
+- `high`: 高风险，需要立即处理或重新开启 spec/design
+
+**重新开启标记（reopen_required）**：
+- `true`: 需要重新开启 spec/design 进行调整
+- `false`: 不需要重新开启
+
 必须通过：
 - `./.codespec/codespec check-gate metadata-consistency`
-- `./.codespec/codespec check-gate branch-alignment`
-- `./.codespec/codespec check-gate feature-sync`
 - `./.codespec/codespec check-gate scope`
 - `./.codespec/codespec check-gate contract-boundary`
 - `./.codespec/codespec check-gate verification`
@@ -120,11 +134,11 @@
 
 ## Testing -> Deployment
 必须读取：
-- `change/<container>/meta.yaml`
-- `change/<container>/spec.md`
-- `change/<container>/design.md`
-- `change/<container>/work-items/*.yaml`
-- `change/<container>/testing.md`（继续作为全量 approved acceptance 的验证证据账本）
+- `./meta.yaml`
+- `./spec.md`
+- `./design.md`
+- `./work-items/*.yaml`
+- `./testing.md`（继续作为全量 approved acceptance 的验证证据账本）
 - `REQ -> ACC -> VO` 链路完整，且每个 `REQ/ACC/VO` 都被至少一个 work item 引用。
 - 每个 input ref 都在 requirements closure 中有落点。
 - 每个 approved acceptance 在 `testing.md` 中都有 record 和 pass 结果。
@@ -144,9 +158,9 @@
 
 ## Deployment -> Completed / Promotion
 必须读取：
-- `change/<container>/deployment.md`
-- `change/<container>/testing.md`
-- `change/<container>/meta.yaml`
+- `./deployment.md`
+- `./testing.md`
+- `./meta.yaml`
 
 必须确认：
 - `start-deployment` 只表示进入 Deployment 阶段，并在缺少 `deployment.md` 时自动 materialize 工作载体；不等于 deployment readiness 已达成。
@@ -173,7 +187,7 @@
 - `start-requirements` -> `proposal-maturity`
 - `start-design` -> `requirements-approval`
 - `start-implementation` -> `implementation-ready`
-- `start-testing` -> `metadata-consistency` + `branch-alignment` + `feature-sync` + `scope` + `contract-boundary` + `verification`
+- `start-testing` -> `metadata-consistency` + `scope` + `contract-boundary` + `verification`
 - `start-deployment` -> `trace-consistency` + `verification`，并在缺少 `deployment.md` 时自动 materialize
 - `complete-change` -> `promotion-criteria`
 - `promote-version` -> `promotion`

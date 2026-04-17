@@ -1,19 +1,26 @@
-change_id: __CHANGE_ID__
-base_version: __BASE_VERSION__
-created_at: __DATE__
+# codespec 元数据文件
+# 记录当前变更的状态和执行上下文
 
-phase: __PHASE__
-status: __STATUS__
-focus_work_item: __FOCUS_WORK_ITEM__
+change_id: __CHANGE_ID__  # 变更唯一标识
+base_version: __BASE_VERSION__  # 基线版本
+created_at: __DATE__  # 创建时间
 
-execution_group: __EXECUTION_GROUP__
-execution_branch: __EXECUTION_BRANCH__
-active_work_items: __ACTIVE_WORK_ITEMS__
+phase: __PHASE__  # 当前阶段：Proposal | Requirements | Design | Implementation | Testing | Deployment | Completed
+status: __STATUS__  # 当前状态：active | blocked | completed
 
-feature_branch: __FEATURE_BRANCH__
+# 工作项执行上下文
+# 单分支工作流：focus_work_item, execution_group, execution_branch 都为 null
+# 多分支并行：这三个字段同时有值
+focus_work_item: __FOCUS_WORK_ITEM__  # 当前执行分支关注的 WI ID（如 "WI-001"）
+execution_group: __EXECUTION_GROUP__  # 并行执行组名（如 "parallel-impl"）
+execution_branch: __EXECUTION_BRANCH__  # 当前执行分支名（如 "group/sanguoA"）
+active_work_items: __ACTIVE_WORK_ITEMS__  # 当前活跃的 WI 列表（逗号分隔，如 "WI-001,WI-002"）
 
-blocked_reason: null
-blocked_by: null
+feature_branch: __FEATURE_BRANCH__  # parent feature 分支名（如 "feature/add-auth"）
 
-updated_at: __DATE__
-updated_by: __UPDATED_BY__
+# 阻塞信息（仅当 status=blocked 时填写）
+blocked_reason: null  # 阻塞原因描述
+blocked_by: null  # 阻塞依赖（如 "WI-001" 或外部因素）
+
+updated_at: __DATE__  # 最后更新时间
+updated_by: __UPDATED_BY__  # 最后更新人

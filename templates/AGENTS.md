@@ -49,7 +49,7 @@ Files that CAN be modified in execution branches:
 - `testing.md` / `deployment.md` / `contracts/*.md`：验证、部署、契约。
 
 ## Read Route
-- 最小 readset：`../../lessons_learned.md` -> `../../phase-review-policy.md` -> 当前入口文件（`AGENTS.md` 或 `CLAUDE.md`，二选一） -> `./meta.yaml` -> `./spec.md`（先读到 `<!-- SKELETON-END -->`）-> `./design.md`（先读 `Default Read Layer`）。
+- 最小 readset：`../lessons_learned.md` -> `../phase-review-policy.md` -> 当前入口文件（`AGENTS.md` 或 `CLAUDE.md`，二选一） -> `./meta.yaml` -> `./spec.md`（先读到 `<!-- SKELETON-END -->`）-> `./design.md`（先读 `Default Read Layer`）。
 - `AGENTS.md` / `CLAUDE.md` 是兼容性双别名入口：内容应保持等价，读取时只选一个，避免重复上下文。
 - 若 `execution_branch != null` 且当前 Git 分支不一致，先确认自己是否进入了错误的 clone 目录或错误分支，再同步上下文。
 - 若 `focus_work_item != null`，读取 `./work-items/<focus_work_item>.yaml`。

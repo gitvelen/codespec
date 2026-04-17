@@ -19,14 +19,6 @@
 - Unresolved Decisions:
   - [D1]
 
-### Input Intake Summary
-- input_maturity: L1
-- input_refs:
-  - docs/inputs/example.md#intent
-- input_owner: human
-- approval_basis: owner approved intake for scope refinement
-- normalization_status: anchored
-
 ### Requirements Quick Index
 - Proposal 阶段只保留最小导读；formal REQ/ACC/VO 在 Requirements phase 正式填写。
 - Proposal Coverage Map: maintain in `## Requirements`
@@ -70,6 +62,11 @@
 
 ### Unresolved Decisions
 - [Decision 1]
+
+### Input Intake Summary
+- input_source: [where the input came from]
+- input_quality: [L1/L2/L3]
+- normalization_effort: [brief description]
 
 ### Input Intake
 - input_maturity: L1

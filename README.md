@@ -12,14 +12,15 @@
 - 多分支并行时，使用多个独立 Git clone，而不是 `change/container/` 子目录
 
 **命令改革**：
-- 新增 `install-workspace`：在工作区根目录安装共享资源
-- 新增 `init-dossier`：在项目根目录初始化 dossier
+- 新增 `scripts/install-workspace.sh`：在工作区根目录安装共享资源
+- 新增 `scripts/init-dossier.sh`：在项目根目录初始化 dossier
 - 删除 `add-container`：用户手工 `git clone` 创建并行工作目录
 - 所有生命周期命令去掉 `[container]` 参数，自动从当前目录推断项目根目录
 
 **文件修改规则**：
-- 某些文件只能在 parent feature 分支修改：`spec.md`, `design.md`, `work-items/`, `contracts/`, `testing.md`, `deployment.md`
-- 执行分支只能修改：`src/**`, `meta.yaml`
+- 某些文件只能在 parent feature 分支修改：`spec.md`, `design.md`, `work-items/`, `contracts/`, `deployment.md`
+- 执行分支可以修改：`src/**`, `meta.yaml`, `testing.md`（记录 branch-local 测试）
+- parent feature 分支也可以修改 `testing.md`（记录 full-integration 测试）
 - pre-commit hook 自动检查并阻止违规修改
 
 ## 框架真实模型
@@ -29,6 +30,21 @@
 1. **硬门禁（runtime / gate / hooks）**
    - 负责低歧义、可脚本化、误判成本低的约束。
    - 典型内容：阶段基础结构、最小追溯闭合、分支对齐、allowed/forbidden path、冻结 contract 保护、testing / deployment 最低载体存在性。
+   - **pre-commit hook 强制执行的 gate**：
+     - `metadata-consistency`：确保 meta.yaml 状态机正确（execution_group/execution_branch 同时为 null 或同时有值，focus_work_item 在 active_work_items 中等）
+     - `phase-capability`：防止在需求阶段提交代码（Proposal/Requirements 阶段禁止 src/** 和 Dockerfile）
+     - `scope`：防止 WI 超出范围（检查修改的文件是否在 allowed_paths 和 branch_execution.owned_paths 内）
+     - `contract-boundary`：保护冻结契约（防止修改已冻结的契约，防止直接新增冻结契约）
+   - **pre-commit hook 额外检查**：
+     - 受限文件修改检查：防止在执行分支修改 spec.md, design.md, work-items/, contracts/, deployment.md
+     - 工作项依赖检查：检查 focus_work_item 的 dependency_refs，验证依赖 WI 是否有 PASS 测试记录（警告，不阻止提交）
+   - **pre-push hook 强制执行的 gate**：
+     - `metadata-consistency`：确保 meta.yaml 状态机正确
+     - `contract-boundary`：保护冻结契约
+     - `verification`：验证测试记录的完整性
+     - `trace-consistency`（仅在 Testing/Deployment 阶段）：验证追溯链路的完整性
+   - **已移除的 gate**：
+     - `branch-alignment`：v2.0 使用独立 Git clone，每个 clone 通常只有一个执行分支，此 gate 价值降低且可能带来不必要的摩擦
 2. **软审查（phase-review-policy / rfr）**
    - 负责语义充分性，而不是结构存在性。
    - 典型内容：acceptance 是否可判 PASS/FAIL、verification 是否真正可执行、design 是否仍能解释当前实现、是否出现隐性扩 scope。
@@ -40,6 +56,8 @@
    - 典型内容：初始化工作区、初始化 dossier、安装 hooks、给出最小 readset。
 
 一句话说：**`check-gate pass` 只代表最低机器门槛通过，不等于语义审查通过，更不等于人工批准已经完成。**
+
+**如果 gate 误判**：应该修复 gate 逻辑或更新 meta.yaml/work-item.yaml，而不是强制提交。如果确实需要绕过 gate，可以临时禁用 pre-commit hook（`git commit --no-verify`），但这应该是例外情况，并需要在 commit message 中说明原因。
 
 ## 前置条件
 
@@ -65,13 +83,15 @@ git clone <REPO_URL> main
 cd main
 
 # 4. 初始化 dossier
-/home/admin/sanguo/.codespec/scripts/init-dossier.sh
+/home/admin/.codespec/scripts/init-dossier.sh
 
 # 5. 完成所有阶段
 codespec start-requirements
 # ... 完成 spec.md
 codespec start-design
 # ... 完成 design.md
+codespec add-work-item WI-001
+# ... 编辑 work-items/WI-001.yaml
 codespec start-implementation WI-001
 # ... 实现 WI-001
 codespec start-testing
@@ -79,6 +99,37 @@ codespec start-testing
 codespec start-deployment
 # ... 部署
 codespec complete-change
+```
+
+**Review Artifact 要求**：
+
+在进入 Requirements/Design/Implementation 阶段前，需要创建 review verdict 文件：
+
+```bash
+# 进入 Requirements 前
+mkdir -p reviews
+cat > reviews/requirements-review.yaml <<EOF
+phase: Proposal
+verdict: approved
+reviewed_by: [reviewer name]
+reviewed_at: $(date +%F)
+EOF
+
+# 进入 Design 前
+cat > reviews/design-review.yaml <<EOF
+phase: Requirements
+verdict: approved
+reviewed_by: [reviewer name]
+reviewed_at: $(date +%F)
+EOF
+
+# 进入 Implementation 前
+cat > reviews/implementation-review.yaml <<EOF
+phase: Design
+verdict: approved
+reviewed_by: [reviewer name]
+reviewed_at: $(date +%F)
+EOF
 ```
 
 **目录结构**：
@@ -135,12 +186,14 @@ git clone <REPO_URL> sanguoB
 cd sanguoA
 git checkout feature/add-auth
 git checkout -b group/sanguoA
+codespec install-hooks
 yq eval '.execution_group = "parallel-impl"' -i meta.yaml
 yq eval '.execution_branch = "group/sanguoA"' -i meta.yaml
 
 cd ../sanguoB
 git checkout feature/add-auth
 git checkout -b group/sanguoB
+codespec install-hooks
 yq eval '.execution_group = "parallel-impl"' -i meta.yaml
 yq eval '.execution_branch = "group/sanguoB"' -i meta.yaml
 
@@ -148,24 +201,27 @@ yq eval '.execution_branch = "group/sanguoB"' -i meta.yaml
 cd /home/admin/sanguo/sanguoA
 codespec start-implementation WI-001
 # ... 实现 WI-001
+git add .
+git commit -m "feat: implement WI-001"
+git push -u origin group/sanguoA
 
 cd /home/admin/sanguo/sanguoB
 codespec start-implementation WI-002
 # ... 实现 WI-002
+git add .
+git commit -m "feat: implement WI-002"
+git push -u origin group/sanguoB
 
 # 7. 合并回 feature 分支
 cd /home/admin/sanguo/main
-git merge group/sanguoA
-git merge group/sanguoB
-
-# 重置 meta.yaml 的执行上下文（合并后会带有 branch-local 的 execution_group/execution_branch）
-yq eval '.execution_group = null' -i meta.yaml
-yq eval '.execution_branch = null' -i meta.yaml
-yq eval '.focus_work_item = null' -i meta.yaml
-git add meta.yaml
-git commit -m "chore: reset execution context after merge"
+git fetch origin
+git merge origin/group/sanguoA
+git merge origin/group/sanguoB
+# 注意：meta.yaml 会有合并冲突（execution_branch/focus_work_item 字段）
+# 建议手动清空这些字段，或依赖后续 start-testing 自动清理
 
 # 8. Testing → Deployment 在 main clone
+# start-testing 会自动清空 focus_work_item、active_work_items、execution_branch、execution_group
 codespec start-testing
 codespec start-deployment
 codespec complete-change
@@ -208,13 +264,59 @@ codespec complete-change
 | `meta.yaml` | 各执行分支可以修改 | 记录当前执行上下文 |
 | `src/**` | 各执行分支可以修改 | 业务代码，各分支独立开发 |
 
+### 文件修改范围约束
+
+执行分支修改文件时需要同时满足两个约束：
+
+**1. 全局约束**（work-item.yaml 的 allowed_paths / forbidden_paths）
+- 修改的文件必须在 `allowed_paths` 中
+- 修改的文件不能在 `forbidden_paths` 中
+
+**2. 分支约束**（work-item.yaml 的 branch_execution.owned_paths / shared_paths）
+- 修改的文件必须在 `owned_paths` 或 `shared_paths` 中
+- `owned_paths`: 当前执行分支独占的文件范围
+- `shared_paths`: 多个执行分支共享的文件范围（需要 shared_file_owner 协调）
+
+**约束关系**：两个约束必须同时满足（AND 关系）
+
+**示例**：
+
+```yaml
+# work-items/WI-001.yaml
+allowed_paths:
+  - src/**
+  - meta.yaml
+  - testing.md
+forbidden_paths:
+  - spec.md
+  - design.md
+
+branch_execution:
+  owned_paths:
+    - src/auth/**      # 当前分支独占 auth 模块
+    - meta.yaml
+    - testing.md
+  shared_paths:
+    - src/types/**     # 多个分支共享 types 模块
+  shared_file_owner: parent-feature  # 由 parent feature 分支协调
+```
+
+在这个例子中，执行分支可以修改：
+- `src/auth/**` 中的任何文件（owned）
+- `src/types/**` 中的文件（shared，需要遵守 conflict_policy）
+- `meta.yaml` 和 `testing.md`
+
+执行分支不能修改：
+- `spec.md` 和 `design.md`（forbidden）
+- `src/` 其他模块（不在 owned_paths 或 shared_paths 中）
+
 **testing.md 的特殊说明**：
 - 测试类型（test_type）：unit（单元测试）、integration（集成测试）、e2e（端到端测试）、performance（性能测试）、security（安全测试）、manual（手工测试）
 - 测试范围（test_scope）：branch-local（执行分支局部测试）、full-integration（完整集成测试）
 - 执行分支在 Implementation 阶段记录 branch-local 测试（单元测试、集成测试等）
 - Parent feature 分支在 Testing Phase 记录 full-integration 测试（重新运行所有测试类型 + e2e/性能/安全测试）
 - 每个 acceptance 可以有多条测试记录，覆盖不同的测试类型
-- 合并时保留所有测试记录，最终验收要求每个 acceptance 至少有一条 test_scope=full-integration 且 result=PASS 的记录
+- 合并时保留所有测试记录，最终验收要求每个 acceptance 至少有一条 test_scope=full-integration 且 result=pass 的记录
 - 合并冲突是正常的，按 merge_order 顺序合并并保留所有记录
 
 **工作流**：

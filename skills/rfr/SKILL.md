@@ -32,7 +32,7 @@ description: Use when a codespec change dossier has reviewable phase output and 
 - 只想看一段代码有没有 bug 的普通 review
 
 ## 执行顺序
-1. 定位 project root、container、current phase、focus work item、execution branch。
+1. 定位 project root、current phase、focus work item、execution branch。
 2. 先读 `phase-review-policy.md`，再读当前 phase 对应权威文件；不要把 gate pass 当作 phase 已批准。
 3. 先跑本 phase 的 gate，记录失败点；不要边扫边修。
 4. 按当前 phase 做全量检查，先把问题找全，再统一分级。

@@ -16,9 +16,34 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 - `branch-local`: 执行分支的局部测试（Implementation 阶段）
 - `full-integration`: 完整集成测试（Testing Phase，parent feature 分支）
 
+**测试结果（result）**：
+- `pass`: 测试通过，acceptance 得到验证
+- `fail`: 测试失败，需要修复实现或重新开启 spec/design
+
+**残留风险（residual_risk）**：
+- `none`: 无残留风险
+- `low`: 低风险，可接受的小问题
+- `medium`: 中等风险，需要监控
+- `high`: 高风险，需要立即处理或重新开启 spec/design
+
+**重新开启标记（reopen_required）**：
+- `true`: 需要重新开启 spec/design 进行调整
+- `false`: 不需要重新开启
+
 **最终验收**：
-- 每个 acceptance 至少需要一条 test_scope=full-integration 且 result=PASS 的记录
+- 每个 acceptance 至少需要一条 test_scope=full-integration 且 result=pass 的记录
 - branch-local 测试供参考，不作为最终验收依据
+
+## Acceptance 到 Testing 的映射
+
+每个 spec.md 中的 acceptance（ACC-ID）可以在 testing.md 中有多条测试记录：
+- 同一个 ACC-ID 可以有多个 test_type（unit, integration, e2e, performance, security, manual）
+- 同一个 ACC-ID 可以有多个 test_scope（branch-local, full-integration）
+- 最终验收要求：每个 ACC-ID 至少有一条 test_scope=full-integration 且 result=pass 的记录
+
+**示例**：
+- ACC-001 可以有：unit (branch-local) + integration (branch-local) + unit (full-integration) + e2e (full-integration)
+- 只有 full-integration 的测试记录才作为最终验收依据
 
 ---
 
@@ -31,25 +56,27 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 #### ACC-001: User can login with email and password
 
 **Unit Tests**:
-- test_type: unit
+- acceptance_ref: ACC-001
+  test_type: unit
   test_scope: branch-local
   verification_type: automated
   test_command: npm test -- src/auth/login.test.ts
   test_date: 2026-04-16
   artifact_ref: coverage/unit/login.html
-  result: PASS
+  result: pass
   notes: Tested login logic with valid/invalid credentials
   residual_risk: none
   reopen_required: false
 
 **Integration Tests**:
-- test_type: integration
+- acceptance_ref: ACC-001
+  test_type: integration
   test_scope: branch-local
   verification_type: automated
   test_command: npm test -- src/auth/integration.test.ts
   test_date: 2026-04-16
   artifact_ref: coverage/integration/auth.html
-  result: PASS
+  result: pass
   notes: Tested login with database and session management
   residual_risk: none
   reopen_required: false
@@ -59,13 +86,14 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 #### ACC-002: User can logout
 
 **Unit Tests**:
-- test_type: unit
+- acceptance_ref: ACC-002
+  test_type: unit
   test_scope: branch-local
   verification_type: automated
   test_command: npm test -- src/auth/logout.test.ts
   test_date: 2026-04-16
   artifact_ref: coverage/unit/logout.html
-  result: PASS
+  result: pass
   notes: Tested logout logic and session cleanup
   residual_risk: none
   reopen_required: false
@@ -79,49 +107,53 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 ### ACC-001: User can login with email and password
 
 **Unit Tests** (re-run after merge):
-- test_type: unit
+- acceptance_ref: ACC-001
+  test_type: unit
   test_scope: full-integration
   verification_type: automated
   test_command: npm test -- src/auth/login.test.ts
   test_date: 2026-04-17
   artifact_ref: coverage/unit/login.html
-  result: PASS
+  result: pass
   notes: Re-run after merging all branches
   residual_risk: none
   reopen_required: false
 
 **Integration Tests** (re-run after merge):
-- test_type: integration
+- acceptance_ref: ACC-001
+  test_type: integration
   test_scope: full-integration
   verification_type: automated
   test_command: npm test -- src/auth/integration.test.ts
   test_date: 2026-04-17
   artifact_ref: coverage/integration/auth.html
-  result: PASS
+  result: pass
   notes: Verified login works with all merged changes
   residual_risk: none
   reopen_required: false
 
 **E2E Tests**:
-- test_type: e2e
+- acceptance_ref: ACC-001
+  test_type: e2e
   test_scope: full-integration
   verification_type: automated
   test_command: npm run test:e2e -- login.spec.ts
   test_date: 2026-04-17
   artifact_ref: e2e-results/login.html
-  result: PASS
+  result: pass
   notes: Tested complete login flow in browser
   residual_risk: none
   reopen_required: false
 
 **Manual Tests**:
-- test_type: manual
+- acceptance_ref: ACC-001
+  test_type: manual
   test_scope: full-integration
   verification_type: manual
   test_command: N/A
   test_date: 2026-04-17
   artifact_ref: manual-test-checklist.md
-  result: PASS
+  result: pass
   notes: Manually verified UI/UX, error messages, accessibility
   residual_risk: none
   reopen_required: false
@@ -129,25 +161,27 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 ### ACC-002: User can logout
 
 **Unit Tests** (re-run after merge):
-- test_type: unit
+- acceptance_ref: ACC-002
+  test_type: unit
   test_scope: full-integration
   verification_type: automated
   test_command: npm test -- src/auth/logout.test.ts
   test_date: 2026-04-17
   artifact_ref: coverage/unit/logout.html
-  result: PASS
+  result: pass
   notes: Re-run after merging all branches
   residual_risk: none
   reopen_required: false
 
 **E2E Tests**:
-- test_type: e2e
+- acceptance_ref: ACC-002
+  test_type: e2e
   test_scope: full-integration
   verification_type: automated
   test_command: npm run test:e2e -- logout.spec.ts
   test_date: 2026-04-17
   artifact_ref: e2e-results/logout.html
-  result: PASS
+  result: pass
   notes: Tested complete logout flow, verified session cleanup
   residual_risk: none
   reopen_required: false
@@ -158,13 +192,14 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 
 ### ACC-001: User can login with email and password
 
-- test_type: performance
+- acceptance_ref: ACC-001
+  test_type: performance
   test_scope: full-integration
   verification_type: automated
   test_command: npm run test:perf -- login
   test_date: 2026-04-17
   artifact_ref: perf-results/login.html
-  result: PASS
+  result: pass
   notes: Login completes in <200ms (p95), meets performance requirement
   residual_risk: none
   reopen_required: false
@@ -175,13 +210,14 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 
 ### ACC-001: User can login with email and password
 
-- test_type: security
+- acceptance_ref: ACC-001
+  test_type: security
   test_scope: full-integration
   verification_type: automated
   test_command: npm run test:security -- auth
   test_date: 2026-04-17
   artifact_ref: security-scan/auth.html
-  result: PASS
+  result: pass
   notes: No SQL injection, XSS, or CSRF vulnerabilities found
   residual_risk: none
   reopen_required: false

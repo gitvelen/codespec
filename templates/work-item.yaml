@@ -1,32 +1,55 @@
 wi_id: __WI_ID__
-goal: [one execution goal]
+goal: "TODO: describe one execution goal"
 scope:
-  - [what this work item may change]
+  - "TODO: what this work item may change"
 out_of_scope:
-  - [what must not be added]
+  - "TODO: what must not be added"
+
+# 文件修改范围约束（File Modification Constraints）
+# 执行分支修改文件时需要同时满足两个约束：
+# 1. 全局约束（allowed_paths / forbidden_paths）：定义哪些文件可以/不可以修改
+# 2. 分支约束（branch_execution.owned_paths / shared_paths）：定义当前执行分支的修改范围
+# 两个约束必须同时满足（AND 关系）
 
 allowed_paths:
+  # 全局约束：执行分支可以修改的文件范围
   - src/**
   - meta.yaml
+  - testing.md
 forbidden_paths:
+  # 全局约束：执行分支禁止修改的文件（只能在 parent feature 分支修改）
   - versions/**
   - spec.md
   - design.md
   - work-items/**
   - contracts/**
-  - testing.md
   - deployment.md
+  # Note: testing.md can be modified in execution branches to record branch-local tests
 
 branch_execution:
-  execution_group: null
-  execution_branch: null
+  execution_group: null  # 并行执行组名（如 "parallel-impl"），单分支工作流时为 null
+  execution_branch: null  # 当前执行分支名（如 "group/sanguoA"），单分支工作流时为 null
   owned_paths:
-    - src/[owned-slice]/**
+    # 分支约束：当前执行分支独占的文件范围（仅在多分支并行时使用）
+    # 必须是 allowed_paths 的子集
+    # 示例：- "src/auth/**"（当前分支独占 auth 模块）
+    - "TODO: src/[owned-slice]/**"
+    - testing.md
+    - meta.yaml
   shared_paths:
-    - src/[shared-surface]
-  shared_file_owner: parent-feature
-  merge_order: [relative merge order]
-  conflict_policy: stop and update design before expanding shared scope
+    # 分支约束：多个执行分支共享修改的文件（需要 shared_file_owner 协调）
+    # 必须是 allowed_paths 的子集
+    # 示例：- "src/types/**"（多个分支共享 types 模块）
+    - "TODO: src/[shared-surface]"
+  shared_file_owner: parent-feature  # 共享文件的协调者（通常是 parent-feature 分支）
+  merge_order: "TODO: relative merge order"  # 合并顺序（用于解决合并冲突）
+  conflict_policy: stop and update design before expanding shared scope  # 冲突策略
+
+# 字段映射说明（Field Mapping）
+# design.md 中的 Work Item Derivation 与本文件的对应关系：
+# - design.md: covered_acceptance_refs  <->  work-item.yaml: acceptance_refs
+# - design.md: contract_needed          <->  work-item.yaml: contract_refs (非空表示需要)
+# - design.md: notes_on_boundary        <->  work-item.yaml: scope / out_of_scope / hard_constraints
 
 phase_scope: Implementation
 
@@ -49,11 +72,11 @@ evidence_refs: []
 
 verification_profile: focused
 required_verification:
-  - [test or verification required before this WI is considered complete]
+  - "TODO: test or verification required before this WI is considered complete"
 
 stop_conditions:
-  - [when the session must stop and ask]
+  - "TODO: when the session must stop and ask"
 reopen_triggers:
-  - [when spec/design must be reopened]
+  - "TODO: when spec/design must be reopened"
 hard_constraints:
-  - [non-negotiable constraint]
+  - "TODO: non-negotiable constraint"

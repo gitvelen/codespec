@@ -108,22 +108,47 @@ if command -v yq >/dev/null 2>&1; then
             mapfile -t dep_accs < <(yq eval '.acceptance_refs[]' "$dep_wi_file" 2>/dev/null || true)
 
             if [ "${#dep_accs[@]}" -gt 0 ]; then
-              has_pass_record=false
+              missing_pass_records=()
               for acc in "${dep_accs[@]}"; do
                 [ -n "$acc" ] || continue
                 [ "$acc" != "null" ] || continue
 
-                # Check if testing.md has a PASS record for this acceptance
-                if grep -q "acceptance_ref: $acc" "$PROJECT_ROOT/testing.md" 2>/dev/null; then
-                  if grep -A 10 "acceptance_ref: $acc" "$PROJECT_ROOT/testing.md" | grep -q "result: PASS"; then
-                    has_pass_record=true
-                    break
-                  fi
+                # Check if testing.md has a pass record for this acceptance using proper awk parsing
+                if ! awk -v acc="$acc" '
+                  BEGIN { in_record = 0; found = 0 }
+                  $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
+                    in_record = 1
+                    result = ""
+                    next
+                  }
+                  in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
+                    if (result == "pass") {
+                      found = 1
+                      exit
+                    }
+                    in_record = 0
+                    result = ""
+                    next
+                  }
+                  in_record && $0 ~ "^[[:space:]]*result:[[:space:]]*" {
+                    line = $0
+                    sub("^[[:space:]]*result:[[:space:]]*", "", line)
+                    sub(/[[:space:]]*$/, "", line)
+                    result = line
+                  }
+                  END {
+                    if (in_record && result == "pass") {
+                      found = 1
+                    }
+                    exit (found ? 0 : 1)
+                  }
+                ' "$PROJECT_ROOT/testing.md" 2>/dev/null; then
+                  missing_pass_records+=("$acc")
                 fi
               done
 
-              if [ "$has_pass_record" = false ]; then
-                printf 'WARNING: %s depends on %s, but %s has no PASS test records yet\n' "$focus_wi" "$dep_wi" "$dep_wi" >&2
+              if [ "${#missing_pass_records[@]}" -gt 0 ]; then
+                printf 'WARNING: %s depends on %s, but the following acceptances have no PASS test records: %s\n' "$focus_wi" "$dep_wi" "${missing_pass_records[*]}" >&2
                 printf 'Consider implementing %s first, or verify the dependency is correct\n' "$dep_wi" >&2
               fi
             fi
@@ -134,12 +159,11 @@ if command -v yq >/dev/null 2>&1; then
   fi
 fi
 
-# Run standard gates
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" branch-alignment || true
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" metadata-consistency || true
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" phase-capability || true
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" scope || true
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" contract-boundary || true
+# Run standard gates (hard enforcement)
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" metadata-consistency
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" phase-capability
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" scope
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" contract-boundary
 
 printf '✓ pre-commit checks passed\n'
 

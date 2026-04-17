@@ -204,7 +204,6 @@ render_template() {
   local content
   content="$(<"$src")"
   content="${content//__DATE__/${RENDER_DATE:-}}"
-  content="${content//__CONTAINER__/${RENDER_CONTAINER:-}}"
   content="${content//__CHANGE_ID__/${RENDER_CHANGE_ID:-}}"
   content="${content//__BASE_VERSION__/${RENDER_BASE_VERSION:-}}"
   content="${content//__FEATURE_BRANCH__/${RENDER_FEATURE_BRANCH:-}}"
@@ -420,13 +419,11 @@ start_testing() {
   assert_phase_transition "$current_phase" 'Testing' "$current_status"
 
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" metadata-consistency >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" branch-alignment >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" feature-sync >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" contract-boundary >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
 
-  meta_update "$meta" '.phase = "Testing" | .status = "in_progress" | .focus_work_item = null | .active_work_items = []'
+  meta_update "$meta" '.phase = "Testing" | .status = "in_progress" | .focus_work_item = null | .active_work_items = [] | .execution_branch = null | .execution_group = null'
   log "started Testing phase"
 }
 
@@ -582,7 +579,7 @@ build_readset_model() {
   READSET_MODEL_PHASE="$(yaml_scalar "$meta" phase)"
   READSET_MODEL_FOCUS_WI="$(yaml_scalar "$meta" focus_work_item)"
   READSET_MODEL_WORK_ITEM_PATH='null'
-  READSET_MODEL_PHASE_POLICY='../../phase-review-policy.md'
+  READSET_MODEL_PHASE_POLICY='../phase-review-policy.md'
   READSET_MODEL_PHASE_CAP_ALLOWED=()
   READSET_MODEL_PHASE_CAP_FORBIDDEN=()
 
@@ -591,8 +588,8 @@ build_readset_model() {
     "CLAUDE.md" "read exactly one" ""
   )
   READSET_MODEL_MINIMAL_READSET=(
-    "../../lessons_learned.md" "" ""
-    "../../phase-review-policy.md" "" ""
+    "../lessons_learned.md" "" ""
+    "../phase-review-policy.md" "" ""
     "meta.yaml" "" ""
     "spec.md" "" "read to <!-- SKELETON-END --> first"
     "design.md" "" "read Default Read Layer first"
@@ -606,8 +603,8 @@ build_readset_model() {
   case "$READSET_MODEL_PHASE" in
     Proposal)
       READSET_MODEL_MINIMAL_READSET=(
-        "../../lessons_learned.md" "" ""
-        "../../phase-review-policy.md" "" ""
+        "../lessons_learned.md" "" ""
+        "../phase-review-policy.md" "" ""
         "meta.yaml" "" ""
         "spec.md" "" "read to <!-- SKELETON-END --> first"
       )
@@ -688,8 +685,6 @@ render_readset_json() {
 
 render_readset_text() {
   printf 'readset:\n'
-  render_text_entry_line '../../lessons_learned.md'
-  render_text_entry_line '../../phase-review-policy.md'
   render_text_entry_choice READSET_MODEL_ENTRY_FILES
   render_text_triplets READSET_MODEL_MINIMAL_READSET
   printf 'phase_capabilities.allowed:\n'
@@ -752,7 +747,6 @@ EOF
 usage() {
   cat <<'EOF'
 Usage:
-  codespec install [target_root] [container] [change_id] [base_version]
   codespec add-work-item <WI-ID>
   codespec start-requirements
   codespec start-design
@@ -767,6 +761,10 @@ Usage:
   codespec readset
   codespec materialize-deployment
   codespec promote-version <stable-version>
+
+Installation:
+  /path/to/.codespec/scripts/install-workspace.sh <workspace_root>
+  /path/to/.codespec/scripts/init-dossier.sh
 
 Gate views:
   spec-completeness -> proposal-maturity + requirements-approval
@@ -792,7 +790,7 @@ Review rule:
   check-gate pass != semantic review pass; phase advancement still requires phase-review-policy/rfr approval
 
 Internal gates:
-  branch-alignment | feature-sync | metadata-consistency
+  metadata-consistency
   proposal-maturity | requirements-approval | design-structure-complete (alias: design-readiness)
   implementation-ready | implementation-start
   testing-coverage | deployment-readiness | promotion-criteria
