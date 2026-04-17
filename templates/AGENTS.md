@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件只负责当前 change dossier 的导航与决策路由；禁止用worktree；尽量用简体中文交流（包括文档，除非涉及专业术语）；需求 / 验收 / 验证义务以 `spec.md` 为准，设计 / 边界 / Work Item 派生以 `design.md` 为准，执行范围 / 禁改范围 / 依赖以 `work-items/*.yaml` 为准，验证记录以 `testing.md` 为准，部署结论 / 回滚 / 监控以 `deployment.md` 为准，接口边界以 `contracts/*.md` 为准，硬规则以 `../../lessons_learned.md` 为准。
+本文件只负责当前 change dossier 的导航与决策路由；禁止用worktree；尽量用简体中文交流（包括文档，除非涉及专业术语）；需求 / 验收 / 验证义务以 `spec.md` 为准，设计 / 边界 / Work Item 派生以 `design.md` 为准，执行范围 / 禁改范围 / 依赖以 `work-items/*.yaml` 为准，验证记录以 `testing.md` 为准，部署结论 / 回滚 / 监控以 `deployment.md` 为准，接口边界以 `contracts/*.md` 为准，硬规则以 `../lessons_learned.md` 为准。
 
 ## 核心原则
 1. 先澄清再动手：目标/边界/约束/风险/验收，不清楚先问；范围变更必须说明代价并重新确认。
@@ -20,25 +20,27 @@
 5. 工具输出，可删，只保留 pass/fail 结论
 
 ## 启动顺序
-1. 读取根目录 `../../lessons_learned.md`
-2. 读取当前目录 `./CLAUDE.md`
-3. 读取当前目录 `./meta.yaml`
-4. 只有在默认层不足以解释当前任务时，才继续下钻 `./spec-appendices/` 或 `./design-appendices/`
-5. 先读当前目录 `./spec.md` 的 Default Read Layer，并在 `<!-- SKELETON-END -->` 处先停
-6. 再读当前目录 `./design.md` 的 Default Read Layer
-7. 如果 `focus_work_item != null`，读取 `./work-items/<focus_work_item>.yaml`
-8. 如果当前 Work Item 的 `contract_refs` 非空，读取对应 `./contracts/*.md`
+1. 读取工作区根目录 `../lessons_learned.md`
+2. 读取工作区根目录 `../phase-review-policy.md`
+3. 读取当前目录 `./CLAUDE.md` 或 `./AGENTS.md`（二选一，内容等价）
+4. 读取当前目录 `./meta.yaml`
+5. 只有在默认层不足以解释当前任务时，才继续下钻 `./spec-appendices/` 或 `./design-appendices/`
+6. 先读当前目录 `./spec.md` 的 Default Read Layer，并在 `<!-- SKELETON-END -->` 处先停
+7. 再读当前目录 `./design.md` 的 Default Read Layer
+8. 如果 `focus_work_item != null`，读取 `./work-items/<focus_work_item>.yaml`
+9. 如果当前 Work Item 的 `contract_refs` 非空，读取对应 `./contracts/*.md`
 
 ## 冲突升级规则
 - 同一 concern 内出现冲突：以后更新且证据更充分的条目为准，并在当前文件补充“为何覆盖”。
 - 跨 concern 出现冲突：不得直接覆盖，必须回写对应权威文件对齐（Spec/Design/Work Item/Testing/Deployment/Contract），必要时暂停并升级决策。
 
 ## 按 phase 的默认导航
-- Requirements：主读 `spec.md` 的 Intent / Requirements / Acceptance / Verification / Clarification Status；只在边界或实现影响需要时回看 `design.md`
-- Design：先对齐 `spec.md` 的 goals / anchors / acceptance，再读 `design.md` 的 Goal / Scope Link、Architecture Boundary、Work Item Execution Strategy、Work Item Derivation、Verification Design；需要共享边界时读 `contracts/*.md`
-- Implementation：默认聚焦当前 Work Item、`design.md` 中对应的 Work Item Derivation row、`design.md` / `design-appendices/` 中对应的 design slice；命中边界时再读对应 Contract；触及 acceptance 或 verification obligations 时回看 `spec.md`
-- Testing：先回看 `spec.md` 的 approved acceptance 与 verification obligations，再看 `design.md` 的 Verification Design，最后核对 `testing.md` 的 pass record / artifact / residual risk / reopen_required
-- Deployment：先确认 `testing.md` 已覆盖应验证 acceptance，再读 `deployment.md` 的部署计划、验证结果、回滚方案、监控与收尾动作；必要时回看 `design.md` / `spec.md`
+- **Proposal**：可编辑 `spec.md`、`design.md`、`meta.yaml`、`contracts/*.md`、`work-items/*.yaml`；禁止修改 `src/**`、`Dockerfile`、`testing.md`、`deployment.md`
+- **Requirements**：主读 `spec.md` 的 Intent / Requirements / Acceptance / Verification / Clarification Status；只在边界或实现影响需要时回看 `design.md`
+- **Design**：先对齐 `spec.md` 的 goals / anchors / acceptance，再读 `design.md` 的 Goal / Scope Link、Architecture Boundary、Work Item Execution Strategy、Work Item Derivation、Verification Design；需要共享边界时读 `contracts/*.md`
+- **Implementation**：默认聚焦当前 Work Item、`design.md` 中对应的 Work Item Derivation row、`design.md` / `design-appendices/` 中对应的 design slice；命中边界时再读对应 Contract；触及 acceptance 或 verification obligations 时回看 `spec.md`
+- **Testing**：先回看 `spec.md` 的 approved acceptance 与 verification obligations，再看 `design.md` 的 Verification Design，最后核对 `testing.md` 的 pass record / artifact / residual risk / reopen_required
+- **Deployment**：先确认 `testing.md` 已覆盖应验证 acceptance，再读 `deployment.md` 的部署计划、验证结果、回滚方案、监控与收尾动作；必要时回看 `design.md` / `spec.md`
 
 ## 必须先澄清的条件
 - 当前任务无法映射到明确的目标、边界或 acceptance
@@ -66,10 +68,10 @@
 ### 按阶段的关键 Gate
 - **Requirements**：优先关注 `spec-completeness` (= proposal-maturity + requirements-approval)
 - **Design**：优先关注 `design-structure-complete`（别名：`design-readiness`）
-- **Implementation**：优先关注 `implementation-ready` (= design-structure-complete + implementation-start + implementation-readiness-baseline)；`pre-commit` 仍会兜底 `branch-alignment`、`metadata-consistency`、`scope`、`boundary`
+- **Implementation**：优先关注 `implementation-ready` (= design-structure-complete + implementation-start + implementation-readiness-baseline)；`pre-commit` 仍会兜底 `metadata-consistency`、`scope`、`contract-boundary`
 - **Testing**：优先关注 `trace-consistency`、`verification`（包含 testing-coverage）
 - **Deployment**：优先关注 `deployment-readiness`、`promotion-criteria`
-- **pre-push**：仍会兜底 `branch-alignment`、`feature-sync`、`metadata-consistency`、`verification`
+- **pre-push**：仍会兜底 `metadata-consistency`、`verification`
 
 ### 可用的 Gate 检查
 **组合 Gate**（调用多个原子 gate）：
