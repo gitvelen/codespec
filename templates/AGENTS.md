@@ -76,22 +76,22 @@
 - `spec-completeness` → proposal-maturity + requirements-approval
 - `implementation-ready` → design-structure-complete + implementation-start + implementation-readiness-baseline
 - `verification` → 依赖 WI pass 检查 + 当前 WI pass 检查；Testing/Deployment 阶段额外检查 testing-coverage
-- `promotion-criteria` → metadata-consistency + testing-coverage + deployment-readiness
+- `promotion` → metadata-consistency + deployment-readiness + promotion-criteria
 
 **原子 Gate**（单一职责检查）：
 - `proposal-maturity` → spec.md 提案成熟度（章节完整、REQ/ACC/VO 存在、输入闭包）
 - `requirements-approval` → 需求批准就绪（澄清决策已解决、高影响澄清已关闭）
+- `review-verdict-present` → 审查结论存在（phase review 有明确的 verdict）
 - `design-structure-complete` (别名 `design-readiness`) → design.md 结构完整（章节完整、工作项推导、验收映射）
 - `implementation-start` → 可以开始实施（work-item.yaml 完整、依赖通过、合约冻结）
-- `implementation-readiness-baseline` → 实施基线检查（baseline 章节有实质内容）
+- `metadata-consistency` → 元数据一致性（meta.yaml 与文档状态一致）
+- `phase-capability` → 阶段能力检查（当前阶段是否支持请求的操作）
+- `scope` → 范围检查（staged 变更在 allowed_paths 内、不在 forbidden_paths 内）
+- `contract-boundary` (别名 `boundary`) → 合约边界检查（合约引用可解析、frozen 合约未变更）
 - `trace-consistency` → 追溯一致性（REQ→ACC→VO、ACC→WI、approved ACC 有测试记录）
 - `testing-coverage` → 测试覆盖率（所有 approved ACC 都有 pass 记录）
 - `deployment-readiness` → 部署就绪（deployment.md 完整、验收结论 pass、审批信息完整）
-- `metadata-consistency` → 元数据一致性（meta.yaml 与文档状态一致）
-- `scope` → 范围检查（staged 变更在 allowed_paths 内、不在 forbidden_paths 内）
-- `contract-boundary` (别名 `boundary`) → 合约边界检查（合约引用可解析、frozen 合约未变更）
-- `phase-capability` → 阶段能力检查（当前阶段是否支持请求的操作）
-- `review-verdict-present` → 审查结论存在（phase review 有明确的 verdict）
+- `promotion-criteria` → 晋升标准（metadata-consistency + testing-coverage + deployment-readiness）
 
 ### 统一入口
 ```bash
