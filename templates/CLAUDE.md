@@ -17,16 +17,32 @@
 8. 如果当前 Work Item 的 `contract_refs` 非空，读取对应 `./contracts/*.md`
 9. 只有在默认层不足以解释当前任务时，才下钻 `./spec-appendices/` 或 `./design-appendices/`
 
-### 按阶段导航表
+### 按阶段导航
 
-| Phase | 主读文档 | 条件读取 | 禁止修改 |
-|-------|---------|---------|---------|
-| **Proposal** | spec.md, design.md, meta.yaml | contracts/*.md, work-items/*.yaml | src/**, Dockerfile, testing.md, deployment.md |
-| **Requirements** | spec.md (Intent/Requirements/Acceptance/Verification/Clarification) | design.md（边界或实现影响） | - |
-| **Design** | design.md (Goal/Scope Link, Architecture Boundary, Work Item Derivation, Verification Design) | spec.md (goals/anchors/acceptance), contracts/*.md（共享边界） | - |
-| **Implementation** | work-items/<focus_work_item>.yaml, design.md (Work Item Derivation row, design slice) | contracts/*.md（边界）, spec.md（acceptance/verification obligations） | forbidden_paths |
-| **Testing** | testing.md, spec.md (approved acceptance, verification obligations), design.md (Verification Design) | - | - |
-| **Deployment** | deployment.md, testing.md（验收覆盖） | design.md, spec.md（必要时） | - |
+**Proposal**：
+- 主读：spec.md, design.md, meta.yaml
+- 条件读取：contracts/*.md, work-items/*.yaml
+- 禁止修改：src/**, Dockerfile, testing.md, deployment.md
+
+**Requirements**：
+- 主读：spec.md (Intent/Requirements/Acceptance/Verification/Clarification)
+- 条件读取：design.md（边界或实现影响）
+
+**Design**：
+- 主读：design.md (Goal/Scope Link, Architecture Boundary, Work Item Derivation, Verification Design)
+- 条件读取：spec.md (goals/anchors/acceptance), contracts/*.md（共享边界）
+
+**Implementation**：
+- 主读：work-items/<focus_work_item>.yaml, design.md (Work Item Derivation row, design slice)
+- 条件读取：contracts/*.md（边界）, spec.md（acceptance/verification obligations）
+- 禁止修改：forbidden_paths
+
+**Testing**：
+- 主读：testing.md, spec.md (approved acceptance, verification obligations), design.md (Verification Design)
+
+**Deployment**：
+- 主读：deployment.md, testing.md（验收覆盖）
+- 条件读取：design.md, spec.md（必要时）
 
 ---
 
@@ -79,13 +95,21 @@
 
 ### 按阶段的关键 Gate
 
-| Phase | 必查 Gate | Hook 兜底 |
-|-------|----------|----------|
-| **Requirements** | `spec-completeness` | - |
-| **Design** | `design-structure-complete` | - |
-| **Implementation** | `implementation-ready` | `metadata-consistency`, `scope`, `contract-boundary` |
-| **Testing** | `trace-consistency`, `verification` | - |
-| **Deployment** | `deployment-readiness` | - |
+**Requirements**：
+- 必查：`spec-completeness`
+
+**Design**：
+- 必查：`design-structure-complete`
+
+**Implementation**：
+- 必查：`implementation-ready`
+- Hook 兜底：`metadata-consistency`, `scope`, `contract-boundary`
+
+**Testing**：
+- 必查：`trace-consistency`, `verification`
+
+**Deployment**：
+- 必查：`deployment-readiness`
 
 **使用方法**：`../.codespec/codespec check-gate <gate-name>`
 
