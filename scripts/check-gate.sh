@@ -1718,19 +1718,20 @@ gate_implementation_start() {
     contains_exact_line "$ref" "${closure_refs[@]}" || die "$FOCUS_WI input_ref ${ref} is not represented in spec input intake or design work item derivation"
   done
 
-  [ -f "$TESTING_FILE" ] || die 'missing testing.md'
-
-  # Check for circular dependencies before checking pass records
-  check_circular_dependencies "$FOCUS_WI"
-
-  check_dependency_pass_records
-
+  # Check contracts before checking dependencies (better error ordering)
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
     [ "$ref" != 'null' ] || continue
     [ -f "$PROJECT_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
     [ "$(contract_status "$PROJECT_ROOT/$ref")" = 'frozen' ] || die "$FOCUS_WI contract is not frozen: $ref"
   done < <(yaml_list "$WI_FILE" contract_refs)
+
+  [ -f "$TESTING_FILE" ] || die 'missing testing.md'
+
+  # Check for circular dependencies before checking pass records
+  check_circular_dependencies "$FOCUS_WI"
+
+  check_dependency_pass_records
 
   log '✓ implementation-start gate passed'
 }
