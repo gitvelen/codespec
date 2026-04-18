@@ -21,7 +21,7 @@ execution_branch: __EXECUTION_BRANCH__  # 当前执行分支名（如 "group/san
 active_work_items: __ACTIVE_WORK_ITEMS__  # 当前活跃的 WI 列表（YAML array，如 [WI-001, WI-002]）
 # active_work_items 语义：
 # - Implementation 阶段：正在执行的 WI（单分支串行时累积，多分支并行时各分支独立）
-# - Testing 阶段：runtime 不清空，但 verification gate 会遍历所有 work-items/*.yaml
+# - Testing 阶段：保留 Implementation 阶段的值，用于 verification gate 聚合所有需要验证的 work items
 # - Deployment 阶段：清空（所有 WI 已完成最终验收）
 # 累积规则：
 # - 单分支串行：每开始一个新 WI，添加到列表（如 [WI-001] -> [WI-001, WI-002]）

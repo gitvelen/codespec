@@ -66,7 +66,7 @@
 必须确认：
 - `design.md` 的 `Goal / Scope Link`、`Architecture Boundary`、`Work Item Execution Strategy`、`Design Slice Index`、`Work Item Derivation`、`Contract Needs`、`Verification Design`、`Failure Paths / Reopen Triggers` 完整。
 - 至少存在一个真实 `WI-*` 派生项。
-- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy（这些字段仅用于文档化和人工审查，只有 allowed_paths/forbidden_paths 由 runtime 强制）。
+- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy（这些字段仅用于文档化和人工审查，只有 allowed_paths/forbidden_paths 由 runtime 强制）。execution_group 非 null 表示多分支并行模式，此时 gate 会检查 owned_paths 非空。
 - 当前 WI 的 `goal`、`input_refs`、`requirement_refs`、`acceptance_refs`、`verification_refs`、`allowed_paths`、`derived_from` 完整且非 placeholder。
 - 当前 WI 的 `branch_execution` 与 `design.md` 的并行分支计划一致；共享文件已有唯一 owner 或父 feature 分支集成策略。
 - 当前 WI 与 `design.md` 中同名 derivation row 的 input / requirement / acceptance / verification refs 完全一致。
@@ -89,11 +89,12 @@
 ## Implementation -> Testing
 必须读取：
 - `./meta.yaml`
-- `./work-items/<focus_work_item>.yaml`
+- `./work-items/<focus_work_item>.yaml`（Implementation 阶段）
+- `./work-items/*.yaml`（Testing 阶段，读取所有 work items）
 - `./design.md`
 - `./testing.md`（它是当前项目 / 当前执行线的验证证据账本，不是 Testing 阶段才首次填写；多个独立 clone 不共享 pass records）
 
-必须确认：
+必须确认（Implementation 阶段）：
 - `focus_work_item` 非空且存在于 `active_work_items`。
 - `active_work_items` 表示按 design 建议或人工维护的 branch execution set；runtime 会把它作为进入 Testing 前 verification 的聚合集合，但不提供完整的多 WI union scope/boundary enforcement。
 - `execution_group` / `execution_branch` 仅用于文档化，不由 runtime 强制。
@@ -103,6 +104,11 @@
 - 没有修改 frozen contract；新增 frozen contract 走了显式 review flow：先以 `draft` 建档、review 后再冻结；直接新增 frozen contract 会被 `contract-boundary` gate 拒绝。
 - 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record。
 - 当前实现仍能被 `spec.md`、`design.md`、当前 WI 合法解释，没有隐性扩 scope。
+
+必须确认（Testing 阶段）：
+- `focus_work_item` 为 null（start-testing 会清空）。
+- `active_work_items` 保留 Implementation 阶段的值（start-testing 不清空），用于 verification gate 聚合所有需要验证的 work items。
+- `execution_group` / `execution_branch` 被清空（start-testing 会清空）。
 
 ### Testing 字段定义
 
@@ -173,9 +179,11 @@
 - 若要 promotion，`versions/` 目录存在且允许归档。
 
 必须通过：
-- `./.codespec/codespec check-gate deployment-readiness`
-- `./.codespec/codespec check-gate promotion-criteria`
-- `./.codespec/codespec check-gate promotion`（执行 promote 前）
+- `./.codespec/codespec check-gate trace-consistency`（start-deployment 时检查）
+- `./.codespec/codespec check-gate verification`（start-deployment 时检查）
+- `./.codespec/codespec check-gate deployment-readiness`（complete-change 时通过 promotion-criteria 间接检查）
+- `./.codespec/codespec check-gate promotion-criteria`（complete-change 时检查）
+- `./.codespec/codespec check-gate promotion`（执行 promote-version 前检查）
 
 禁止切换：
 - deployment.md 仍是模板。
@@ -184,9 +192,9 @@
 - promotion 证据不足却尝试归档稳定版本。
 
 ## 命令映射
-- `start-requirements` -> `proposal-maturity`
-- `start-design` -> `requirements-approval`
-- `start-implementation` -> `implementation-ready`
+- `start-requirements` -> `proposal-maturity` + `review-verdict-present`（要求 reviews/requirements-review.yaml 存在且 phase=Proposal, verdict=approved）
+- `start-design` -> `requirements-approval` + `review-verdict-present`（要求 reviews/design-review.yaml 存在且 phase=Requirements, verdict=approved）
+- `start-implementation` -> `implementation-ready` + `review-verdict-present`（要求 reviews/implementation-review.yaml 存在且 phase=Design, verdict=approved）
 - `start-testing` -> `metadata-consistency` + `scope` + `contract-boundary` + `verification`
 - `start-deployment` -> `trace-consistency` + `verification`，并在缺少 `deployment.md` 时自动 materialize
 - `complete-change` -> `promotion-criteria`

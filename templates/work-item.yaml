@@ -1,8 +1,14 @@
 wi_id: __WI_ID__
 goal: "TODO: describe one execution goal"
 scope:
+  # 本 WI 的功能范围描述（自然语言），与 allowed_paths 互补：
+  # - scope 描述"做什么功能"
+  # - allowed_paths 描述"可以修改哪些文件"
   - "TODO: what this work item may change"
 out_of_scope:
+  # 本 WI 明确不做的功能（自然语言），与 forbidden_paths 互补：
+  # - out_of_scope 描述"不做什么功能"
+  # - forbidden_paths 描述"不能修改哪些文件"
   - "TODO: what must not be added"
 
 # 文件修改范围约束（File Modification Constraints）
@@ -27,12 +33,12 @@ forbidden_paths:
   # Note: testing.md can be modified in execution branches to record branch-local tests
 
 branch_execution:
-  execution_group: null  # 并行执行组名（如 "parallel-impl"），仅用于文档化，不由 runtime 强制
+  execution_group: null  # 并行执行组名（如 "parallel-impl"），仅用于文档化，不由 runtime 强制；非 null 表示多分支并行模式
   execution_branch: null  # 当前执行分支名（如 "group/sanguoA"），仅用于文档化，不由 runtime 强制
   owned_paths:
     # 当前执行分支独占的文件范围（仅用于人工审查，不由 runtime 强制）
     # 单分支工作流：留空 []
-    # 多分支并行：必须填写（gate 会检查非空）
+    # 多分支并行（execution_group 非 null）：必须填写（gate 会检查非空）
     # 建议是 allowed_paths 的子集
     # 示例：- "src/auth/**"（当前分支独占 auth 模块）
     []
@@ -65,7 +71,7 @@ verification_refs:
 # keep requirement_refs / verification_refs aligned with design.md Goal / Scope Link and Work Item Derivation
 derived_from: __DERIVED_FROM__
 dependency_refs: []
-dependency_type: strong
+dependency_type: strong  # 依赖类型：strong（强依赖，必须等待依赖 WI 完成）| weak（弱依赖，可以并行但需要协调）| none（无依赖）
 contract_refs: []
 
 evidence_refs: []

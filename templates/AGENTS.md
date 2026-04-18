@@ -34,7 +34,7 @@
 
 **Testing**：
 - `testing.md` - 添加 full-integration 测试记录
-- `work-items/*.yaml` - 读取所有 work-items（不依赖 active_work_items）
+- `work-items/*.yaml` - 读取所有 work-items（Testing 阶段 verification gate 会检查 active_work_items 中所有 WI 的 approved acceptance）
 - `spec.md` - 读取 approved acceptance 和 verification obligations
 - `design.md` - 参考 Verification Design
 
