@@ -7,8 +7,8 @@ out_of_scope:
 
 # 文件修改范围约束（File Modification Constraints）
 # 执行分支修改文件时需要同时满足两个约束：
-# 1. 全局约束（allowed_paths / forbidden_paths）：定义哪些文件可以/不可以修改
-# 2. 分支约束（branch_execution.owned_paths / shared_paths）：定义当前执行分支的修改范围
+# 1. 全局约束（allowed_paths / forbidden_paths）：定义哪些文件可以/不可以修改，由 runtime 强制检查
+# 2. 分支约束（branch_execution.owned_paths / shared_paths）：定义当前执行分支的修改范围，仅用于人工审查，不由 runtime 强制
 # 两个约束必须同时满足（AND 关系）
 
 allowed_paths:

@@ -152,8 +152,8 @@ ${GREEN}========================================${NC}
 
   ${YELLOW}# 4. 创建 review verdict 并进入 Design 阶段${NC}
   mkdir -p reviews
-  cat > reviews/requirements-review.yaml <<EOFR
-phase: Proposal
+  cat > reviews/design-review.yaml <<EOFR
+phase: Requirements
 verdict: approved
 reviewed_by: $(git config user.name || echo "your-name")
 reviewed_at: \$(date +%F)

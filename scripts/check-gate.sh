@@ -150,7 +150,18 @@ is_placeholder_token() {
 input_intake_scalar() {
   local key="$1"
   awk -v key="$key" '
-    $0 ~ "^[[:space:]]*-[[:space:]]*" key ":[[:space:]]*" {
+    BEGIN { in_intake = 0 }
+    /^### Input Intake Summary$/ || /^### Input Intake$/ {
+      in_intake = 1
+      next
+    }
+    in_intake && /^### / {
+      exit
+    }
+    in_intake && /^## / {
+      exit
+    }
+    in_intake && $0 ~ "^[[:space:]]*-[[:space:]]*" key ":[[:space:]]*" {
       line = $0
       sub("^[[:space:]]*-[[:space:]]*" key ":[[:space:]]*", "", line)
       sub(/[[:space:]]*$/, "", line)
@@ -162,8 +173,18 @@ input_intake_scalar() {
 
 input_intake_refs() {
   awk '
-    BEGIN { capture = 0 }
-    /^[[:space:]]*-[[:space:]]*input_refs:[[:space:]]*$/ {
+    BEGIN { capture = 0; in_intake = 0 }
+    /^### Input Intake Summary$/ || /^### Input Intake$/ {
+      in_intake = 1
+      next
+    }
+    in_intake && /^### / {
+      exit
+    }
+    in_intake && /^## / {
+      exit
+    }
+    in_intake && /^[[:space:]]*-[[:space:]]*input_refs:[[:space:]]*$/ {
       capture = 1
       next
     }
@@ -1806,6 +1827,11 @@ gate_testing_coverage() {
     [ -n "$residual_risk" ] || die "testing.md residual_risk is missing for ${acc}"
     if [ "$(printf '%s' "$residual_risk" | tr '[:upper:]' '[:lower:]')" != 'none' ]; then
       is_placeholder_token "$residual_risk" && die "testing.md residual_risk contains placeholder value for ${acc}"
+    fi
+
+    # Check residual_risk=high is not allowed
+    if [ "$(printf '%s' "$residual_risk" | tr '[:upper:]' '[:lower:]')" = 'high' ]; then
+      die "testing.md residual_risk=high is not allowed for ${acc} (must be resolved before deployment)"
     fi
 
     [ -n "$reopen_required" ] || die "testing.md reopen_required is missing for ${acc}"

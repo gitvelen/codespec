@@ -5,7 +5,7 @@ change_id: __CHANGE_ID__  # 变更唯一标识
 base_version: __BASE_VERSION__  # 基线版本
 created_at: __DATE__  # 创建时间
 
-phase: __PHASE__  # 当前阶段：Proposal | Requirements | Design | Implementation | Testing | Deployment | Completed
+phase: __PHASE__  # 当前阶段：Proposal | Requirements | Design | Implementation | Testing | Deployment
 status: __STATUS__  # 当前状态：active | blocked | completed
 # status 语义：
 # - active: 当前阶段正常推进

@@ -26,8 +26,8 @@ deployment_method: manual
 
 **字段定义**：
 - `status`: 最终验收状态
-  - `pass`: 所有 approved acceptance 都有 test_scope=full-integration 且 result=pass 的记录
-  - `fail`: 任何 approved acceptance 没有通过或有 residual_risk=high
+  - `pass`: 所有 approved acceptance 都有 test_scope=full-integration 且 result=pass 的记录，且所有 residual_risk 都不是 high
+  - `fail`: 任何 approved acceptance 没有通过或有 residual_risk=high（testing-coverage gate 会拒绝 residual_risk=high）
 - `notes`: 部署结论和风险说明
 - `approved_by`: 批准人
 - `approved_at`: 批准日期

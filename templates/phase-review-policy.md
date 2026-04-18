@@ -66,7 +66,7 @@
 必须确认：
 - `design.md` 的 `Goal / Scope Link`、`Architecture Boundary`、`Work Item Execution Strategy`、`Design Slice Index`、`Work Item Derivation`、`Contract Needs`、`Verification Design`、`Failure Paths / Reopen Triggers` 完整。
 - 至少存在一个真实 `WI-*` 派生项。
-- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy。
+- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy（这些字段仅用于文档化和人工审查，只有 allowed_paths/forbidden_paths 由 runtime 强制）。
 - 当前 WI 的 `goal`、`input_refs`、`requirement_refs`、`acceptance_refs`、`verification_refs`、`allowed_paths`、`derived_from` 完整且非 placeholder。
 - 当前 WI 的 `branch_execution` 与 `design.md` 的并行分支计划一致；共享文件已有唯一 owner 或父 feature 分支集成策略。
 - 当前 WI 与 `design.md` 中同名 derivation row 的 input / requirement / acceptance / verification refs 完全一致。

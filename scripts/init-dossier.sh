@@ -86,6 +86,14 @@ else
   log "skipped git hooks installation (not a git repository)"
 fi
 
+# 创建初始 review verdict 以支持首次 start-requirements
+cat > "$PROJECT_ROOT/reviews/requirements-review.yaml" <<EOF
+phase: Proposal
+verdict: approved
+reviewed_by: codespec-init
+reviewed_at: $TODAY
+EOF
+
 log "initialized dossier in: $PROJECT_ROOT"
 log ""
 log "Next steps:"

@@ -489,9 +489,6 @@ set_active_work_items() {
   if [ "$phase" = 'Implementation' ] && [ "$focus_wi" != 'null' ] && [ "$yaml_array" != '[]' ]; then
     printf '%s\n' "$raw" | tr ',' '\n' | grep -Fxq "$focus_wi" || die "focus_work_item ${focus_wi} must be included in active_work_items"
   fi
-  if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
-    [ "$yaml_array" = '[]' ] || die "${phase} phase requires active_work_items = []"
-  fi
 
   meta_update "$meta" ".active_work_items = ${yaml_array}"
   log "updated active work items"
@@ -782,7 +779,7 @@ Lifecycle commands:
   start-design -> Requirements -> Design
   start-implementation -> Design -> Implementation and set focus_work_item
   set-active-work-items -> update active_work_items explicitly (design/manual branch execution set; runtime does not provide complete multi-WI union enforcement)
-  start-testing -> Implementation -> Testing and clear active work items
+  start-testing -> Implementation -> Testing (preserves active_work_items for verification gate)
   start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment in_progress reopen; auto-materializes deployment.md if missing)
   complete-change -> mark Deployment change completed
 
