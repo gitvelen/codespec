@@ -88,114 +88,97 @@ workspace/
 
 ```bash
 # 在项目目录中启动 Claude/Codex
-# 告诉 AI：
+# 简单告诉 AI 你的需求：
 
-"我想开发一个 <功能描述>，请帮我：
-1. 在 spec.md 中填写 Input Intake 和 Proposal
-2. 完成后告诉我，我来审查"
+"我想开发一个用户登录功能"
 ```
 
-**AI 会做什么**：
-- 读取 spec.md 模板
-- 根据你的需求填写 Input Intake（需求来源、背景）
-- 填写 Proposal（初步解决方案）
-- 填写 Constraints（约束条件）
+**AI 会自动**：
+- 读取 `meta.yaml`（知道当前在 Proposal 阶段）
+- 读取 `CLAUDE.md`/`AGENTS.md`（知道该做什么）
+- 读取 `spec.md` 模板
+- 根据你的需求填写 Input Intake 和 Proposal
+- 完成后告诉你审查
 
 **你需要做什么**：
 - 审查 AI 填写的内容
 - 确认需求理解正确
-- 告诉 AI："看起来不错，继续"
+- 如果有问题，直接说"XXX 不对，应该是 YYY"
+- 如果没问题，说"可以，继续"
 
 #### 步骤 3：推进到 Requirements 阶段
 
 ```bash
-# 告诉 AI：
+# 简单告诉 AI：
 
-"请帮我：
-1. 创建 reviews/requirements-review.yaml（标记 Proposal 审查通过）
-2. 切换到 Requirements 阶段
-3. 在 spec.md 中补充详细需求（REQ-*, ACC-*, VO-*）"
+"继续推进到 Requirements 阶段"
 ```
 
-**AI 会做什么**：
-- 创建审查文件
+**AI 会自动**：
+- 创建 `reviews/requirements-review.yaml`（标记 Proposal 审查通过）
 - 执行 `codespec start-requirements`
-- 在 spec.md 中补充：
-  - Requirements（详细需求，REQ-001, REQ-002...）
-  - Acceptance Criteria（验收标准，ACC-001, ACC-002...）
-  - Verification Objectives（验证目标，VO-001, VO-002...）
-  - Proposal Coverage Map（需求映射）
+- 在 spec.md 中补充详细需求（REQ-*, ACC-*, VO-*）
+- 完成后告诉你审查
 
 **你需要做什么**：
 - 审查需求是否完整
 - 确认验收标准是否合理
+- 如果有遗漏，告诉 AI 补充
 
 #### 步骤 4：推进到 Design 阶段
 
 ```bash
-# 告诉 AI：
+# 简单告诉 AI：
 
-"请帮我：
-1. 创建 reviews/design-review.yaml（标记 Requirements 审查通过）
-2. 切换到 Design 阶段
-3. 在 design.md 中完成架构设计和工作项拆解"
+"继续推进到 Design 阶段"
 ```
 
-**AI 会做什么**：
-- 创建审查文件
+**AI 会自动**：
+- 创建 `reviews/design-review.yaml`（标记 Requirements 审查通过）
 - 执行 `codespec start-design`
-- 在 design.md 中完成：
-  - Architecture Boundary（架构边界）
-  - Work Item Execution Strategy（执行策略）
-  - Work Item Derivation（工作项拆解，WI-001, WI-002...）
-  - Contract Needs（共享契约）
-  - Verification Design（验证设计）
+- 在 design.md 中完成架构设计和工作项拆解
+- 完成后告诉你审查
 
 **你需要做什么**：
 - 审查架构设计是否合理
 - 确认工作项拆解是否合适
+- 如果有问题，告诉 AI 调整
 
 #### 步骤 5：推进到 Implementation 阶段
 
 ```bash
-# 告诉 AI：
+# 简单告诉 AI：
 
-"请帮我：
-1. 创建 reviews/implementation-review.yaml（标记 Design 审查通过）
-2. 添加所有工作项（codespec add-work-item）
-3. 开始实现第一个工作项"
+"开始实现"
 ```
 
-**AI 会做什么**：
-- 创建审查文件
+**AI 会自动**：
+- 创建 `reviews/implementation-review.yaml`（标记 Design 审查通过）
 - 执行 `codespec add-work-item WI-001`, `WI-002`...
 - 填写每个工作项的详细信息（work-items/WI-XXX.yaml）
 - 执行 `codespec start-implementation WI-001`
 - 编写代码实现工作项
+- 完成后告诉你测试
 
 **你需要做什么**：
-- 审查代码实现
 - 测试功能是否正常
+- 如果有问题，告诉 AI 修复
 
 #### 步骤 6：推进到 Testing 和 Deployment
 
 ```bash
-# 告诉 AI：
+# 简单告诉 AI：
 
-"所有工作项实现完成，请帮我：
-1. 切换到 Testing 阶段
-2. 执行测试并在 testing.md 中记录结果
-3. 切换到 Deployment 阶段
-4. 执行部署并在 deployment.md 中记录步骤
-5. 完成项目"
+"继续测试和部署"
 ```
 
-**AI 会做什么**：
+**AI 会自动**：
 - 执行 `codespec start-testing`
-- 运行测试，记录结果
+- 运行测试，在 testing.md 中记录结果
 - 执行 `codespec start-deployment`
-- 执行部署步骤，记录验证结果
+- 执行部署步骤，在 deployment.md 中记录
 - 执行 `codespec complete-change`
+- 完成后告诉你验收
 
 **你需要做什么**：
 - 验收最终结果
@@ -239,24 +222,17 @@ bash ../workspace/.codespec/scripts/init-dossier.sh
 #### 步骤 3：启动 AI，补充文档
 
 ```bash
-# 告诉 AI：
+# 简单告诉 AI：
 
-"这是一个存量项目，代码已经存在。请帮我：
-1. 阅读现有代码，理解项目功能
-2. 在 spec.md 中补充：
-   - Input Intake（项目背景）
-   - Proposal（当前实现的功能）
-   - Requirements（详细需求，REQ-*）
-   - Acceptance Criteria（验收标准，ACC-*）
-3. 在 design.md 中补充：
-   - Architecture Boundary（当前架构）
-   - 现有代码的模块划分"
+"这是一个存量项目，请帮我补充 Codespec 文档"
 ```
 
-**AI 会做什么**：
-- 读取现有代码
-- 反向工程，补充 spec.md 和 design.md
-- 将现有功能映射到 Requirements 和 Design
+**AI 会自动**：
+- 读取现有代码，理解项目功能
+- 在 spec.md 中补充 Input Intake、Proposal、Requirements
+- 在 design.md 中补充 Architecture Boundary、模块划分
+- 将现有功能映射到需求和设计
+- 完成后告诉你审查
 
 **你需要做什么**：
 - 审查 AI 补充的文档是否准确
@@ -265,18 +241,20 @@ bash ../workspace/.codespec/scripts/init-dossier.sh
 #### 步骤 4：定义新需求，使用框架推进
 
 ```bash
-# 告诉 AI：
+# 简单告诉 AI：
 
-"现在我想在这个项目中添加新功能：<功能描述>
-请帮我：
-1. 在 spec.md 中添加新的 Requirements（REQ-XXX）
-2. 在 design.md 中拆解工作项（WI-XXX）
-3. 按照 Codespec 流程推进实现"
+"我想添加一个新功能：<功能描述>"
 ```
 
+**AI 会自动**：
+- 在 spec.md 中添加新的 Requirements（REQ-XXX）
+- 在 design.md 中拆解工作项（WI-XXX）
+- 按照 Codespec 流程推进实现
+- 完成后告诉你验收
+
 **后续流程**：
-- 按照"场景 1"的步骤 3-6 推进
-- AI 会使用 Codespec 命令管理新功能的开发
+- 按照"场景 1"的步骤推进
+- AI 会自动使用 Codespec 命令管理新功能的开发
 
 ---
 
@@ -325,20 +303,20 @@ codespec status  # 查看自己的项目状态
 ```
 你: "我想开发一个用户登录功能"
 
-AI: "好的，我已经在 spec.md 中填写了 Input Intake 和 Proposal。
+AI: "好的，我已经读取了 meta.yaml，当前在 Proposal 阶段。
+     我在 spec.md 中填写了 Input Intake 和 Proposal。
      请审查一下是否符合你的需求。"
 
 你: "看起来不错，继续"
 
-AI: "我已经创建了 reviews/requirements-review.yaml，
-     并切换到 Requirements 阶段。
-     现在在 spec.md 中补充了详细需求（REQ-001 到 REQ-005）。
+AI: "我已经创建了审查文件，切换到 Requirements 阶段。
+     在 spec.md 中补充了详细需求（REQ-001 到 REQ-005）。
      请审查需求是否完整。"
 
 你: "REQ-003 需要支持第三方登录，请补充"
 
 AI: "已补充 REQ-003 的第三方登录需求。
-     现在切换到 Design 阶段，完成架构设计。
+     现在切换到 Design 阶段，完成了架构设计。
      我拆解了 3 个工作项：
      - WI-001: 实现登录表单
      - WI-002: 实现认证逻辑
