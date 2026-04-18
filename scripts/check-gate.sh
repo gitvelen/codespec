@@ -1781,12 +1781,10 @@ gate_scope() {
 
   local allowed=()
   local forbidden=()
-  local branch_owned_paths=()
   mapfile -t allowed < <(yaml_list "$WI_FILE" allowed_paths)
   mapfile -t forbidden < <(yaml_list "$WI_FILE" forbidden_paths)
-  mapfile -t branch_owned_paths < <(yaml_list "$WI_FILE" branch_execution.owned_paths)
 
-  local file pattern ok owned_ok
+  local file pattern ok
   for file in "${changed[@]}"; do
     for pattern in "${forbidden[@]}"; do
       if match_path "$file" "$pattern"; then
