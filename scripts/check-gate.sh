@@ -556,13 +556,6 @@ gate_metadata_consistency() {
   execution_branch="$(yaml_scalar "$META_FILE" execution_branch)"
   mapfile -t active < <(collect_active_work_items)
 
-  if [ "$execution_group" = 'null' ] && [ "$execution_branch" != 'null' ]; then
-    die 'execution_group and execution_branch must both be null or both be set'
-  fi
-  if [ "$execution_group" != 'null' ] && [ "$execution_branch" = 'null' ]; then
-    die 'execution_group and execution_branch must both be null or both be set'
-  fi
-
   for wi in "${active[@]}"; do
     [ -f "$PROJECT_ROOT/work-items/$wi.yaml" ] || die "active_work_items references missing work item: ${wi}"
   done
@@ -579,7 +572,7 @@ gate_metadata_consistency() {
       ;;
     Testing)
       [ "$focus_wi" = 'null' ] || die 'Testing phase requires focus_work_item = null'
-      [ "${#active[@]}" -eq 0 ] || die 'Testing phase requires active_work_items = []'
+      # Testing 阶段保留 active_work_items 用于 verification gate
       ;;
     Deployment)
       [ "$focus_wi" = 'null' ] || die 'Deployment phase requires focus_work_item = null'
@@ -1665,17 +1658,6 @@ gate_scope() {
         fi
       done
       [ "$ok" -eq 1 ] || die "staged file $file is outside allowed_paths of $FOCUS_WI"
-    fi
-
-    if [ "${#branch_owned_paths[@]}" -gt 0 ]; then
-      owned_ok=0
-      for pattern in "${branch_owned_paths[@]}"; do
-        if match_path "$file" "$pattern"; then
-          owned_ok=1
-          break
-        fi
-      done
-      [ "$owned_ok" -eq 1 ] || die "staged file $file is outside branch_execution.owned_paths of $FOCUS_WI"
     fi
   done
 

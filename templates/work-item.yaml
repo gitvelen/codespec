@@ -27,18 +27,18 @@ forbidden_paths:
   # Note: testing.md can be modified in execution branches to record branch-local tests
 
 branch_execution:
-  execution_group: null  # 并行执行组名（如 "parallel-impl"），单分支工作流时为 null
-  execution_branch: null  # 当前执行分支名（如 "group/sanguoA"），单分支工作流时为 null
+  execution_group: null  # 并行执行组名（如 "parallel-impl"），仅用于文档化，不由 runtime 强制
+  execution_branch: null  # 当前执行分支名（如 "group/sanguoA"），仅用于文档化，不由 runtime 强制
   owned_paths:
-    # 分支约束：当前执行分支独占的文件范围（仅在多分支并行时使用）
-    # 必须是 allowed_paths 的子集
+    # 当前执行分支独占的文件范围（仅用于人工审查，不由 runtime 强制）
+    # 建议是 allowed_paths 的子集
     # 示例：- "src/auth/**"（当前分支独占 auth 模块）
     - "TODO: src/[owned-slice]/**"
     - testing.md
     - meta.yaml
   shared_paths:
-    # 分支约束：多个执行分支共享修改的文件（需要 shared_file_owner 协调）
-    # 必须是 allowed_paths 的子集
+    # 多个执行分支共享修改的文件（仅用于人工审查，需要 shared_file_owner 协调）
+    # 建议是 allowed_paths 的子集
     # 示例：- "src/types/**"（多个分支共享 types 模块）
     - "TODO: src/[shared-surface]"
   shared_file_owner: parent-feature  # 共享文件的协调者（通常是 parent-feature 分支）

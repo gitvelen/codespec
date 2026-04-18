@@ -96,10 +96,10 @@
 必须确认：
 - `focus_work_item` 非空且存在于 `active_work_items`。
 - `active_work_items` 表示按 design 建议或人工维护的 branch execution set；runtime 会把它作为进入 Testing 前 verification 的聚合集合，但不提供完整的多 WI union scope/boundary enforcement。
-- `execution_group` / `execution_branch` 同时为 null 或同时有值。
-- 当前 git branch 与 `execution_branch` 一致；若设置了 `feature_branch`，执行分支未落后于 feature branch。
-- staged 改动全部在 `allowed_paths` 内，且未命中 `forbidden_paths`。
-- staged 改动没有越过 `branch_execution.owned_paths`；命中 `shared_paths` 时已遵守 `shared_file_owner` / `conflict_policy`。**当前 runtime 不会完整强制这些 branch execution / shared boundary 语义，主要依赖 reviewer / rfr 审查。**
+- `execution_group` / `execution_branch` 仅用于文档化，不由 runtime 强制。
+- 当前 git branch 与 `execution_branch` 一致（人工确认）；若设置了 `feature_branch`，执行分支未落后于 feature branch。
+- staged 改动全部在 `allowed_paths` 内，且未命中 `forbidden_paths`（由 scope gate 强制）。
+- staged 改动没有越过 `branch_execution.owned_paths`；命中 `shared_paths` 时已遵守 `shared_file_owner` / `conflict_policy`（人工审查，不由 runtime 强制）。
 - 没有修改 frozen contract；新增 frozen contract 走了显式 review flow：先以 `draft` 建档、review 后再冻结；直接新增 frozen contract 会被 `contract-boundary` gate 拒绝。
 - 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record。
 - 当前实现仍能被 `spec.md`、`design.md`、当前 WI 合法解释，没有隐性扩 scope。

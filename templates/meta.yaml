@@ -12,9 +12,16 @@ status: __STATUS__  # 当前状态：active | blocked | completed
 # 单分支工作流：focus_work_item, execution_group, execution_branch 都为 null
 # 多分支并行：这三个字段同时有值
 focus_work_item: __FOCUS_WORK_ITEM__  # 当前执行分支关注的 WI ID（如 "WI-001"）
-execution_group: __EXECUTION_GROUP__  # 并行执行组名（如 "parallel-impl"）
-execution_branch: __EXECUTION_BRANCH__  # 当前执行分支名（如 "group/sanguoA"）
+execution_group: __EXECUTION_GROUP__  # 并行执行组名（如 "parallel-impl"），仅用于文档化
+execution_branch: __EXECUTION_BRANCH__  # 当前执行分支名（如 "group/sanguoA"），仅用于文档化
 active_work_items: __ACTIVE_WORK_ITEMS__  # 当前活跃的 WI 列表（逗号分隔，如 "WI-001,WI-002"）
+# active_work_items 语义：
+# - Implementation 阶段：正在执行的 WI（单分支串行时累积，多分支并行时各分支独立）
+# - Testing 阶段：需要 full-integration 验证的 WI（保留，不清空）
+# - Deployment 阶段：清空（所有 WI 已完成最终验收）
+# 累积规则：
+# - 单分支串行：每开始一个新 WI，添加到列表（如 [WI-001] -> [WI-001, WI-002]）
+# - 多分支并行：执行分支只包含自己的 WI，parent feature 分支包含所有并行 WI
 
 feature_branch: __FEATURE_BRANCH__  # parent feature 分支名（如 "feature/add-auth"）
 
