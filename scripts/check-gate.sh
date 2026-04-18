@@ -110,7 +110,20 @@ current_git_branch() {
 }
 
 collect_active_work_items() {
-  yaml_list "$META_FILE" active_work_items | grep -vE '^(|null)$' || true
+  local items
+  items=$(yaml_list "$META_FILE" active_work_items | grep -vE '^(|null)$' || true)
+
+  # Check for duplicates
+  if [ -n "$items" ]; then
+    local unique_count total_count
+    unique_count=$(echo "$items" | sort -u | wc -l)
+    total_count=$(echo "$items" | wc -l)
+    if [ "$unique_count" -ne "$total_count" ]; then
+      die "Duplicate work items found in active_work_items"
+    fi
+  fi
+
+  echo "$items"
 }
 
 contains_exact_line() {

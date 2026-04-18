@@ -301,6 +301,10 @@ parse_active_work_items_arg() {
   IFS=',' read -r -a items <<< "$raw"
   for item in "${items[@]}"; do
     [ -n "$item" ] || continue
+    # Validate WI ID format to prevent YAML injection
+    if ! [[ "$item" =~ ^WI-[0-9]{3}$ ]]; then
+      die "Invalid work item ID format: '$item' (expected WI-XXX where X is a digit)"
+    fi
     if [ "$first" -eq 0 ]; then
       output+=', '
     fi
