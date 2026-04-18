@@ -1784,6 +1784,8 @@ gate_scope() {
   mapfile -t allowed < <(yaml_list "$WI_FILE" allowed_paths)
   mapfile -t forbidden < <(yaml_list "$WI_FILE" forbidden_paths)
 
+  [ "${#forbidden[@]}" -gt 0 ] || die "$FOCUS_WI has empty forbidden_paths (must specify at least one pattern)"
+
   local file pattern ok
   for file in "${changed[@]}"; do
     for pattern in "${forbidden[@]}"; do
@@ -1808,6 +1810,7 @@ gate_scope() {
 }
 
 gate_contract_boundary() {
+  # Check focus_work_item contract_refs (Implementation phase)
   if [ -f "$META_FILE" ] && [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
     require_focus_wi
     while IFS= read -r ref; do
@@ -1815,6 +1818,25 @@ gate_contract_boundary() {
       [ "$ref" != 'null' ] || continue
       [ -f "$PROJECT_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
     done < <(yaml_list "$WI_FILE" contract_refs)
+  fi
+
+  # Check active_work_items contract_refs (Testing/Deployment phase)
+  local phase
+  phase="$(yaml_scalar "$META_FILE" phase)"
+  if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
+    local active_wis=()
+    mapfile -t active_wis < <(yaml_list "$META_FILE" active_work_items)
+    for wi_id in "${active_wis[@]}"; do
+      [ -n "$wi_id" ] || continue
+      [ "$wi_id" != 'null' ] || continue
+      local wi_file="$PROJECT_ROOT/work-items/${wi_id}.yaml"
+      [ -f "$wi_file" ] || die "active work item $wi_id file not found"
+      while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        [ "$ref" != 'null' ] || continue
+        [ -f "$PROJECT_ROOT/$ref" ] || die "$wi_id references missing contract: $ref"
+      done < <(yaml_list "$wi_file" contract_refs)
+    done
   fi
 
   local rel_contract_root="contracts/"

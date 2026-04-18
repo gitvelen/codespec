@@ -78,7 +78,7 @@
 
 必须通过：
 - `./.codespec/codespec check-gate design-structure-complete`
-- `./.codespec/codespec check-gate implementation-ready`
+- `./.codespec/codespec check-gate implementation-ready`（包含 design-structure-complete + implementation-start + implementation-readiness-baseline）
 
 禁止切换：
 - work item 仍不可执行。
@@ -86,7 +86,7 @@
 - contract 边界未冻结或缺失。
 - required verification 不能支撑当前 WI 完成判定。
 
-## Implementation -> Testing
+## Implementation 阶段要求（进入 Testing 前）
 必须读取：
 - `./meta.yaml`
 - `./work-items/<focus_work_item>.yaml`（Implementation 阶段）
@@ -102,7 +102,7 @@
 - staged 改动全部在 `allowed_paths` 内，且未命中 `forbidden_paths`（由 scope gate 强制）。
 - staged 改动没有越过 `branch_execution.owned_paths`；命中 `shared_paths` 时已遵守 `shared_file_owner` / `conflict_policy`（人工审查，不由 runtime 强制）。
 - 没有修改 frozen contract；新增 frozen contract 走了显式 review flow：先以 `draft` 建档、review 后再冻结；直接新增 frozen contract 会被 `contract-boundary` gate 拒绝。
-- 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record。
+- 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record（Implementation 阶段允许 test_scope=branch-local，Testing/Deployment 阶段要求 test_scope=full-integration）。
 - 当前实现仍能被 `spec.md`、`design.md`、当前 WI 合法解释，没有隐性扩 scope。
 
 必须确认（Testing 阶段）：
