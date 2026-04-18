@@ -52,17 +52,19 @@ Proposal → Requirements → Design → Implementation → Testing → Deployme
 
 ## 快速开始
 
-### 1. 安装框架到工作区
+### 场景 1：新项目（从零开始）
+
+#### 步骤 1：安装框架
 
 ```bash
 # 克隆框架仓库
 git clone <codespec-repo-url> /path/to/codespec-framework
 cd /path/to/codespec-framework
 
-# 创建工作区（会在工作区中安装 .codespec/）
+# 创建工作区和项目
 ./scripts/quick-start.sh /path/to/workspace
 
-# 进入项目目录（默认名称为 main）
+# 进入项目目录（默认名称为 main，可自定义）
 cd /path/to/workspace/main
 ```
 
@@ -82,161 +84,286 @@ workspace/
     └── .claude/           # AI 工作区配置（自动创建）
 ```
 
-### 2. 典型工作流程
-
-#### 阶段 1：Proposal（需求提出）
+#### 步骤 2：启动 AI 助手，开始协作
 
 ```bash
-# 项目初始化后，默认处于 Proposal 阶段
-# 在 spec.md 中填写初步需求
+# 在项目目录中启动 Claude/Codex
+# 告诉 AI：
 
-vim spec.md
-# 填写：
-# - Input Intake: 需求来源和背景
-# - Proposal: 初步的解决方案
-# - Constraints: 约束条件
+"我想开发一个 <功能描述>，请帮我：
+1. 在 spec.md 中填写 Input Intake 和 Proposal
+2. 完成后告诉我，我来审查"
 ```
 
-#### 阶段 2：Requirements（需求分析）
+**AI 会做什么**：
+- 读取 spec.md 模板
+- 根据你的需求填写 Input Intake（需求来源、背景）
+- 填写 Proposal（初步解决方案）
+- 填写 Constraints（约束条件）
+
+**你需要做什么**：
+- 审查 AI 填写的内容
+- 确认需求理解正确
+- 告诉 AI："看起来不错，继续"
+
+#### 步骤 3：推进到 Requirements 阶段
 
 ```bash
-# 在 spec.md 中补充详细需求后，切换到 Requirements 阶段
-codespec start-requirements
+# 告诉 AI：
 
-# 此命令会检查：
-# - spec.md 的 Proposal 部分是否成熟（无占位符）
-# - 是否存在 reviews/requirements-review.yaml（审查通过）
-
-# 在 spec.md 中继续细化：
-# - Requirements: 详细需求（REQ-001, REQ-002...）
-# - Acceptance Criteria: 验收标准（ACC-001, ACC-002...）
-# - Verification Objectives: 验证目标（VO-001, VO-002...）
-# - Proposal Coverage Map: 需求与 Proposal 的映射
-# - Clarification Status: 澄清记录
+"请帮我：
+1. 创建 reviews/requirements-review.yaml（标记 Proposal 审查通过）
+2. 切换到 Requirements 阶段
+3. 在 spec.md 中补充详细需求（REQ-*, ACC-*, VO-*）"
 ```
 
-#### 阶段 3：Design（架构设计）
+**AI 会做什么**：
+- 创建审查文件
+- 执行 `codespec start-requirements`
+- 在 spec.md 中补充：
+  - Requirements（详细需求，REQ-001, REQ-002...）
+  - Acceptance Criteria（验收标准，ACC-001, ACC-002...）
+  - Verification Objectives（验证目标，VO-001, VO-002...）
+  - Proposal Coverage Map（需求映射）
+
+**你需要做什么**：
+- 审查需求是否完整
+- 确认验收标准是否合理
+
+#### 步骤 4：推进到 Design 阶段
 
 ```bash
-# 创建审查文件（Requirements 阶段的审查）
-mkdir -p reviews
-cat > reviews/design-review.yaml <<EOF
-phase: Requirements
-verdict: approved
-reviewed_by: $(git config user.name)
-reviewed_at: $(date +%F)
-EOF
+# 告诉 AI：
 
-# 切换到 Design 阶段
-codespec start-design
-
-# 此命令会检查：
-# - spec.md 是否有完整的 Requirements 内容（REQ-*, ACC-*, VO-*）
-# - Proposal Coverage Map 是否完整
-# - reviews/design-review.yaml 是否存在
-
-# 在 design.md 中完成设计：
-# - Architecture Boundary: 架构边界
-# - Work Item Execution Strategy: 工作项执行策略
-# - Work Item Derivation: 工作项拆解（WI-001, WI-002...）
-# - Contract Needs: 共享契约定义
-# - Verification Design: 验证设计
+"请帮我：
+1. 创建 reviews/design-review.yaml（标记 Requirements 审查通过）
+2. 切换到 Design 阶段
+3. 在 design.md 中完成架构设计和工作项拆解"
 ```
 
-#### 阶段 4：Implementation（代码实现）
+**AI 会做什么**：
+- 创建审查文件
+- 执行 `codespec start-design`
+- 在 design.md 中完成：
+  - Architecture Boundary（架构边界）
+  - Work Item Execution Strategy（执行策略）
+  - Work Item Derivation（工作项拆解，WI-001, WI-002...）
+  - Contract Needs（共享契约）
+  - Verification Design（验证设计）
+
+**你需要做什么**：
+- 审查架构设计是否合理
+- 确认工作项拆解是否合适
+
+#### 步骤 5：推进到 Implementation 阶段
 
 ```bash
-# 将 design.md 中的工作项添加到系统
-codespec add-work-item WI-001
-codespec add-work-item WI-002
+# 告诉 AI：
 
-# 编辑工作项文件，填写详细信息
-vim work-items/WI-001.yaml
-# 填写：
-# - goal: 实现目标
-# - acceptance_refs: 关联的验收标准
-# - verification_refs: 关联的验证目标
-# - allowed_paths: 允许修改的文件
-# - forbidden_paths: 禁止修改的文件
-# - depends_on: 依赖的其他工作项
-
-# 创建审查文件（Design 阶段的审查）
-cat > reviews/implementation-review.yaml <<EOF
-phase: Design
-verdict: approved
-reviewed_by: $(git config user.name)
-reviewed_at: $(date +%F)
-EOF
-
-# 开始实现第一个工作项
-codespec start-implementation WI-001
-
-# 此命令会检查：
-# - design.md 是否有完整的结构（10+ 个必需章节）
-# - work-items/WI-001.yaml 是否存在且完整
-# - reviews/implementation-review.yaml 是否存在
-
-# 编写代码实现 WI-001
-# ...
-
-# 如果有多个工作项并行，可以设置活跃工作项列表
-codespec set-active-work-items WI-001,WI-002
+"请帮我：
+1. 创建 reviews/implementation-review.yaml（标记 Design 审查通过）
+2. 添加所有工作项（codespec add-work-item）
+3. 开始实现第一个工作项"
 ```
 
-#### 阶段 5：Testing（测试验证）
+**AI 会做什么**：
+- 创建审查文件
+- 执行 `codespec add-work-item WI-001`, `WI-002`...
+- 填写每个工作项的详细信息（work-items/WI-XXX.yaml）
+- 执行 `codespec start-implementation WI-001`
+- 编写代码实现工作项
+
+**你需要做什么**：
+- 审查代码实现
+- 测试功能是否正常
+
+#### 步骤 6：推进到 Testing 和 Deployment
 
 ```bash
-# 所有工作项实现完成后，切换到 Testing 阶段
-codespec start-testing
+# 告诉 AI：
 
-# 此命令会检查：
-# - 所有活跃工作项的代码是否已提交
-# - testing.md 是否存在
-
-# 在 testing.md 中记录测试：
-# - Acceptance Test Records: 验收测试记录
-# - Verification Test Records: 验证测试记录
-# - 每个测试关联到 spec.md 中的 ACC-* 和 VO-*
+"所有工作项实现完成，请帮我：
+1. 切换到 Testing 阶段
+2. 执行测试并在 testing.md 中记录结果
+3. 切换到 Deployment 阶段
+4. 执行部署并在 deployment.md 中记录步骤
+5. 完成项目"
 ```
 
-#### 阶段 6：Deployment（部署上线）
+**AI 会做什么**：
+- 执行 `codespec start-testing`
+- 运行测试，记录结果
+- 执行 `codespec start-deployment`
+- 执行部署步骤，记录验证结果
+- 执行 `codespec complete-change`
+
+**你需要做什么**：
+- 验收最终结果
+- 确认部署成功
+
+---
+
+### 场景 2：存量项目（引入框架）
+
+#### 步骤 1：安装框架到存量项目
 
 ```bash
-# 测试通过后，切换到 Deployment 阶段
-codespec start-deployment
+# 假设你的存量项目在 /path/to/existing-project
+cd /path/to/existing-project
 
-# 此命令会检查：
-# - testing.md 中的测试是否覆盖所有 ACC-* 和VO-*
-# - 所有测试是否通过
+# 克隆框架仓库到临时目录
+git clone <codespec-repo-url> /tmp/codespec-framework
 
-# 在 deployment.md 中记录部署：
-# - Deployment Steps: 部署步骤
-# - Verification Results: 部署后验证结果
+# 在项目的父目录创建工作区
+cd ..
+mkdir -p workspace
+/tmp/codespec-framework/scripts/install-workspace.sh $(pwd)/workspace
+
+# 将存量项目移动到工作区（或创建符号链接）
+mv existing-project workspace/existing-project
+# 或者：ln -s /path/to/existing-project workspace/existing-project
+
+cd workspace/existing-project
 ```
 
-#### 阶段 7：Completed（项目完成）
+#### 步骤 2：初始化 Codespec 文档
 
 ```bash
-# 部署验证通过后，完成项目
-codespec complete-change
+# 初始化 dossier（会创建 spec.md, design.md, meta.yaml 等）
+../workspace/.codespec/codespec init-dossier
 
-# 此命令会检查：
-# - deployment.md 中的验证是否通过
-# - 所有文档是否完整
+# 或者使用 init-dossier.sh 脚本
+bash ../workspace/.codespec/scripts/init-dossier.sh
 ```
 
-### 3. 查看项目状态
+#### 步骤 3：启动 AI，补充文档
 
 ```bash
-# 查看当前阶段、活跃工作项等信息
-codespec status
+# 告诉 AI：
 
-# 查看推荐阅读的文件列表（根据当前阶段）
-codespec readset
-
-# 以 JSON 格式输出（方便 AI 解析）
-codespec readset --json
+"这是一个存量项目，代码已经存在。请帮我：
+1. 阅读现有代码，理解项目功能
+2. 在 spec.md 中补充：
+   - Input Intake（项目背景）
+   - Proposal（当前实现的功能）
+   - Requirements（详细需求，REQ-*）
+   - Acceptance Criteria（验收标准，ACC-*）
+3. 在 design.md 中补充：
+   - Architecture Boundary（当前架构）
+   - 现有代码的模块划分"
 ```
+
+**AI 会做什么**：
+- 读取现有代码
+- 反向工程，补充 spec.md 和 design.md
+- 将现有功能映射到 Requirements 和 Design
+
+**你需要做什么**：
+- 审查 AI 补充的文档是否准确
+- 补充 AI 不了解的业务背景
+
+#### 步骤 4：定义新需求，使用框架推进
+
+```bash
+# 告诉 AI：
+
+"现在我想在这个项目中添加新功能：<功能描述>
+请帮我：
+1. 在 spec.md 中添加新的 Requirements（REQ-XXX）
+2. 在 design.md 中拆解工作项（WI-XXX）
+3. 按照 Codespec 流程推进实现"
+```
+
+**后续流程**：
+- 按照"场景 1"的步骤 3-6 推进
+- AI 会使用 Codespec 命令管理新功能的开发
+
+---
+
+### 场景 3：多人协作项目
+
+如果多人使用同一个工作区：
+
+```bash
+# 每个人在自己的项目目录中工作
+workspace/
+├── .codespec/              # 共享框架
+├── alice-feature-x/        # Alice 的项目
+├── bob-feature-y/          # Bob 的项目
+└── charlie-bugfix-z/       # Charlie 的项目
+
+# 每个人独立推进自己的阶段
+cd workspace/alice-feature-x
+codespec status  # 查看自己的项目状态
+```
+
+---
+
+## 关键理解
+
+### 你的角色
+- **定义需求**：告诉 AI 你想要什么
+- **审查决策**：审查 AI 的输出，确认方向正确
+- **验收结果**：测试功能，确认符合预期
+
+### AI 的角色
+- **补充文档**：根据你的需求填写 spec.md, design.md
+- **拆解任务**：将需求拆解为工作项
+- **编写代码**：实现工作项
+- **推进流程**：使用 `codespec` 命令切换阶段
+- **记录过程**：在 testing.md, deployment.md 中记录结果
+
+### 你很少需要手工编辑文件
+- AI 会填写所有文档
+- 你只需要审查和确认
+- 如果有问题，告诉 AI 修改即可
+
+---
+
+## 典型对话示例
+
+```
+你: "我想开发一个用户登录功能"
+
+AI: "好的，我已经在 spec.md 中填写了 Input Intake 和 Proposal。
+     请审查一下是否符合你的需求。"
+
+你: "看起来不错，继续"
+
+AI: "我已经创建了 reviews/requirements-review.yaml，
+     并切换到 Requirements 阶段。
+     现在在 spec.md 中补充了详细需求（REQ-001 到 REQ-005）。
+     请审查需求是否完整。"
+
+你: "REQ-003 需要支持第三方登录，请补充"
+
+AI: "已补充 REQ-003 的第三方登录需求。
+     现在切换到 Design 阶段，完成架构设计。
+     我拆解了 3 个工作项：
+     - WI-001: 实现登录表单
+     - WI-002: 实现认证逻辑
+     - WI-003: 实现第三方登录集成
+     请审查工作项拆解是否合理。"
+
+你: "可以，开始实现"
+
+AI: "已开始实现 WI-001，代码已提交。
+     请测试登录表单功能。"
+
+你: "测试通过，继续"
+
+AI: "所有工作项实现完成，测试通过，部署完成。
+     项目已完成。"
+```
+
+---
+
+## 下一步
+
+继续阅读：
+- [命令参考](#命令参考) - 了解所有可用命令
+- [门控检查列表](#门控检查列表) - 了解每个阶段的检查内容
+- [常见问题](#常见问题) - 解答使用中的疑问
 
 ## 命令参考
 
