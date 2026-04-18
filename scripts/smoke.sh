@@ -489,6 +489,7 @@ Monitor logs.
 None.
 
 ## Deployment Metadata
+- deployment_method: automated
 - deployment_date: 2026-04-16
 - target_env: test
 - smoke_test: pass

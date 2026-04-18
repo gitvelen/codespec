@@ -845,29 +845,73 @@ testing_record_scalar_from_scope() {
   local key="$2"
   local scope="$3"
   awk -v acc="$acc" -v key="$key" -v scope="$scope" '
-    BEGIN { in_record = 0; found_scope = "" }
+    BEGIN { in_record = 0; record_scope = ""; record_lines = "" }
     $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
+      # Process previous record if any
+      if (in_record && record_scope == scope) {
+        # Extract key from record_lines
+        split(record_lines, lines, "\n")
+        for (i in lines) {
+          if (lines[i] ~ "^[[:space:]]*" key ":[[:space:]]*") {
+            line = lines[i]
+            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+            sub(/[[:space:]]*$/, "", line)
+            print line
+            exit
+          }
+        }
+      }
+      # Start new record
       in_record = 1
-      found_scope = ""
+      record_scope = ""
+      record_lines = ""
       next
     }
     in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
+      # Process current record before starting new one
+      if (record_scope == scope) {
+        split(record_lines, lines, "\n")
+        for (i in lines) {
+          if (lines[i] ~ "^[[:space:]]*" key ":[[:space:]]*") {
+            line = lines[i]
+            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+            sub(/[[:space:]]*$/, "", line)
+            print line
+            exit
+          }
+        }
+      }
       in_record = 0
-      found_scope = ""
+      record_scope = ""
+      record_lines = ""
       next
     }
-    in_record && $0 ~ "^[[:space:]]*test_scope:[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
-      sub(/[[:space:]]*$/, "", line)
-      found_scope = line
+    in_record {
+      # Collect all lines in the record
+      if (record_lines != "") record_lines = record_lines "\n"
+      record_lines = record_lines $0
+      # Extract test_scope
+      if ($0 ~ "^[[:space:]]*test_scope:[[:space:]]*") {
+        line = $0
+        sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
+        sub(/[[:space:]]*$/, "", line)
+        record_scope = line
+      }
     }
-    in_record && found_scope == scope && $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
-      sub(/[[:space:]]*$/, "", line)
-      print line
-      exit
+    END {
+      # Process last record
+      if (in_record && record_scope == scope) {
+        split(record_lines, lines, "\n")
+        for (i in lines) {
+          if (lines[i] ~ "^[[:space:]]*" key ":[[:space:]]*") {
+            line = lines[i]
+            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+            sub(/[[:space:]]*$/, "", line)
+            print line
+            exit
+          }
+        }
+      }
     }
   ' "$TESTING_FILE"
 }
@@ -1610,6 +1654,9 @@ gate_implementation_start() {
   local stop_conditions=()
   local reopen_triggers=()
   local branch_owned_paths=()
+  local scope=()
+  local out_of_scope=()
+  local hard_constraints=()
   mapfile -t input_refs < <(yaml_list "$WI_FILE" input_refs)
   mapfile -t requirement_refs < <(yaml_list "$WI_FILE" requirement_refs)
   mapfile -t acceptance_refs < <(yaml_list "$WI_FILE" acceptance_refs)
@@ -1619,11 +1666,29 @@ gate_implementation_start() {
   mapfile -t stop_conditions < <(yaml_list "$WI_FILE" stop_conditions)
   mapfile -t reopen_triggers < <(yaml_list "$WI_FILE" reopen_triggers)
   mapfile -t branch_owned_paths < <(yaml_list "$WI_FILE" branch_execution.owned_paths)
+  mapfile -t scope < <(yaml_list "$WI_FILE" scope)
+  mapfile -t out_of_scope < <(yaml_list "$WI_FILE" out_of_scope)
+  mapfile -t hard_constraints < <(yaml_list "$WI_FILE" hard_constraints)
 
   [ "${#input_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing input_refs"
   [ "${#requirement_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing requirement_refs"
   [ "${#acceptance_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing acceptance_refs"
   [ "${#verification_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing verification_refs"
+  [ "${#allowed_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing allowed_paths"
+  [ "${#required_verification[@]}" -gt 0 ] || die "$FOCUS_WI missing required_verification"
+  [ "${#stop_conditions[@]}" -gt 0 ] || die "$FOCUS_WI missing stop_conditions"
+  [ "${#reopen_triggers[@]}" -gt 0 ] || die "$FOCUS_WI missing reopen_triggers"
+
+  # Check scope, out_of_scope, hard_constraints are not placeholder
+  for item in "${scope[@]}"; do
+    is_placeholder_token "$item" && die "$FOCUS_WI scope contains placeholder value: $item"
+  done
+  for item in "${out_of_scope[@]}"; do
+    is_placeholder_token "$item" && die "$FOCUS_WI out_of_scope contains placeholder value: $item"
+  done
+  for item in "${hard_constraints[@]}"; do
+    is_placeholder_token "$item" && die "$FOCUS_WI hard_constraints contains placeholder value: $item"
+  done
   [ "${#allowed_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing allowed_paths"
   [ "${#required_verification[@]}" -gt 0 ] || die "$FOCUS_WI missing required_verification"
   [ "${#stop_conditions[@]}" -gt 0 ] || die "$FOCUS_WI missing stop_conditions"
@@ -1850,7 +1915,7 @@ gate_testing_coverage() {
   local phase
   phase="$(yaml_scalar "$META_FILE" phase)"
 
-  local acc priority verification_type artifact_ref residual_risk reopen_required
+  local acc priority verification_type artifact_ref residual_risk reopen_required test_type test_scope
   for acc in "${accs[@]}"; do
     grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "testing.md missing record for ${acc}"
     has_testing_record "$acc" || die "testing.md does not have a passing record for ${acc}"
@@ -1864,16 +1929,26 @@ gate_testing_coverage() {
       residual_risk="$(testing_record_scalar_from_scope "$acc" residual_risk full-integration)"
       reopen_required="$(testing_record_scalar_from_scope "$acc" reopen_required full-integration)"
       verification_type="$(testing_record_scalar_from_scope "$acc" verification_type full-integration)"
+      test_type="$(testing_record_scalar_from_scope "$acc" test_type full-integration)"
+      test_scope="$(testing_record_scalar_from_scope "$acc" test_scope full-integration)"
     else
       # In other phases, extract from any pass record (first match)
       artifact_ref="$(testing_record_scalar "$acc" artifact_ref)"
       residual_risk="$(testing_record_scalar "$acc" residual_risk)"
       reopen_required="$(testing_record_scalar "$acc" reopen_required)"
       verification_type="$(testing_record_scalar "$acc" verification_type)"
+      test_type="$(testing_record_scalar "$acc" test_type)"
+      test_scope="$(testing_record_scalar "$acc" test_scope)"
     fi
 
     [ -n "$artifact_ref" ] || die "testing.md artifact_ref is missing for ${acc}"
     is_placeholder_token "$artifact_ref" && die "testing.md artifact_ref contains placeholder value for ${acc}"
+
+    [ -n "$test_type" ] || die "testing.md test_type is missing for ${acc}"
+    is_placeholder_token "$test_type" && die "testing.md test_type contains placeholder value for ${acc}"
+
+    [ -n "$test_scope" ] || die "testing.md test_scope is missing for ${acc}"
+    is_placeholder_token "$test_scope" && die "testing.md test_scope contains placeholder value for ${acc}"
 
     [ -n "$residual_risk" ] || die "testing.md residual_risk is missing for ${acc}"
     if [ "$(printf '%s' "$residual_risk" | tr '[:upper:]' '[:lower:]')" != 'none' ]; then
@@ -1922,7 +1997,7 @@ gate_verification() {
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
 
   if [ "$phase" = 'Implementation' ]; then
-    local active=() wi wi_file acc
+    local active=() wi wi_file acc priority verification_type
     mapfile -t active < <(collect_active_work_items)
     [ "${#active[@]}" -gt 0 ] || die 'Implementation verification requires active_work_items'
 
@@ -1936,6 +2011,13 @@ gate_verification() {
         [ -n "$acc" ] || continue
         grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "current work item acceptance ${acc} has no testing record"
         has_testing_record "$acc" || die "current work item acceptance ${acc} has no pass record"
+
+        # Check P0 verification_type requirement in Implementation phase
+        priority="$(spec_acceptance_priority "$acc")"
+        verification_type="$(testing_record_scalar "$acc" verification_type)"
+        if [ "$priority" = 'P0' ]; then
+          [ "$verification_type" = 'automated' ] || die "P0 acceptance ${acc} must use automated verification (got: ${verification_type})"
+        fi
       done < <(work_item_approved_acceptance_refs "$wi_file")
     done
   elif [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
@@ -1975,12 +2057,22 @@ gate_deployment_readiness() {
   grep -q '^status: pass$' "$deployment_file" || die 'deployment.md acceptance conclusion is not pass'
   grep -q 'smoke_test: pass' "$deployment_file" || die 'deployment.md smoke_test is not pass'
 
+  # Check required sections exist
+  grep -q '^## Deployment Plan$' "$deployment_file" || die 'deployment.md missing Deployment Plan section'
+  grep -q '^## Pre-deployment Checklist$' "$deployment_file" || die 'deployment.md missing Pre-deployment Checklist section'
+  grep -q '^## Deployment Steps$' "$deployment_file" || die 'deployment.md missing Deployment Steps section'
+  grep -q '^## Verification Results$' "$deployment_file" || die 'deployment.md missing Verification Results section'
+  grep -q '^## Rollback Plan$' "$deployment_file" || die 'deployment.md missing Rollback Plan section'
+  grep -q '^## Monitoring$' "$deployment_file" || die 'deployment.md missing Monitoring section'
+  grep -q '^## Post-deployment Actions$' "$deployment_file" || die 'deployment.md missing Post-deployment Actions section'
+
   local placeholders
   placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[replace with[^]]*\]|\[STAGING/PRODUCTION\]|\[STAGING\]|\[PRODUCTION\]' "$deployment_file" || true)"
   [ -z "$placeholders" ] || die 'deployment.md contains placeholder value'
   grep -q '^approved_by:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md approved_by is missing'
   grep -Eq '^approved_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md approved_at must be YYYY-MM-DD'
   grep -Eq '^deployment_date:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md deployment_date must be YYYY-MM-DD'
+  grep -Eq '^[[:space:]]*-?[[:space:]]*deployment_method:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md deployment_method is missing'
   grep -Eq '^target_env:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md target_env is missing'
 
   log '✓ deployment-readiness gate passed'
