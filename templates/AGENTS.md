@@ -34,7 +34,7 @@
 
 **Testing**：
 - `testing.md` - 添加 full-integration 测试记录
-- `work-items/*.yaml` - 读取 active_work_items（从 meta.yaml 获取列表，Testing 阶段不清空）
+- `work-items/*.yaml` - 读取所有 work-items（不依赖 active_work_items）
 - `spec.md` - 读取 approved acceptance 和 verification obligations
 - `design.md` - 参考 Verification Design
 

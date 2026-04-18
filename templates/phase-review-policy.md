@@ -9,7 +9,7 @@
 
 ## 使用方式
 - 先定位当前 `./meta.yaml` 中的 `phase`、`status`、`focus_work_item`、`execution_branch`。
-- 先读当前 dossier 的 agent 入口文件（`AGENTS.md` 或 `CLAUDE.md`，二选一；二者是兼容性双别名，内容应保持等价），再读本 phase 对应的权威文件。
+- 先读当前 dossier 的 agent 入口文件（`AGENTS.md` 或 `CLAUDE.md`，根据使用的 agent 选择），再读本 phase 对应的权威文件。
 - 每次 phase 切换前都要给出一个结论：`允许切换`、`有条件允许切换`、`禁止切换`。
 - 只有 gate 通过且人工走查未发现阻塞项，才允许执行 `codespec start-*`、`complete-change` 或 `promote-version`。
 

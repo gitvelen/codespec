@@ -31,11 +31,11 @@ branch_execution:
   execution_branch: null  # 当前执行分支名（如 "group/sanguoA"），仅用于文档化，不由 runtime 强制
   owned_paths:
     # 当前执行分支独占的文件范围（仅用于人工审查，不由 runtime 强制）
+    # 单分支工作流：留空 []
+    # 多分支并行：必须填写（gate 会检查非空）
     # 建议是 allowed_paths 的子集
     # 示例：- "src/auth/**"（当前分支独占 auth 模块）
-    - "TODO: src/[owned-slice]/**"
-    - testing.md
-    - meta.yaml
+    []
   shared_paths:
     # 多个执行分支共享修改的文件（仅用于人工审查，需要 shared_file_owner 协调）
     # 建议是 allowed_paths 的子集

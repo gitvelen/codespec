@@ -353,7 +353,7 @@ start_requirements() {
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Requirements' "$FRAMEWORK_ROOT/scripts/check-gate.sh" proposal-maturity >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Requirements' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
-  meta_update "$meta" '.phase = "Requirements" | .status = "in_progress"'
+  meta_update "$meta" '.phase = "Requirements" | .status = "active"'
   log "started Requirements phase"
 }
 
@@ -372,7 +372,7 @@ start_design() {
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" requirements-approval >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
-  meta_update "$meta" '.phase = "Design" | .status = "in_progress"'
+  meta_update "$meta" '.phase = "Design" | .status = "active"'
   log "started Design phase"
 }
 
@@ -395,12 +395,12 @@ start_implementation() {
 
   active_count="$(yq eval '.active_work_items | length' "$meta")"
   if [ "$active_count" = '0' ]; then
-    meta_update "$meta" ".phase = \"Implementation\" | .status = \"in_progress\" | .focus_work_item = \"$wi_id\" | .active_work_items = [\"$wi_id\"]"
+    meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .active_work_items = [\"$wi_id\"]"
   else
     if ! yq eval '.active_work_items[]' "$meta" 2>/dev/null | grep -Fxq "$wi_id"; then
-      meta_update "$meta" ".phase = \"Implementation\" | .status = \"in_progress\" | .focus_work_item = \"$wi_id\" | .active_work_items += [\"$wi_id\"]"
+      meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .active_work_items += [\"$wi_id\"]"
     else
-      meta_update "$meta" ".phase = \"Implementation\" | .status = \"in_progress\" | .focus_work_item = \"$wi_id\""
+      meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\""
     fi
   fi
   log "started Implementation phase: focus=$wi_id"
@@ -423,7 +423,7 @@ start_testing() {
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" contract-boundary >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
 
-  meta_update "$meta" '.phase = "Testing" | .status = "in_progress" | .focus_work_item = null | .active_work_items = [] | .execution_branch = null | .execution_group = null'
+  meta_update "$meta" '.phase = "Testing" | .status = "active" | .focus_work_item = null | .execution_branch = null | .execution_group = null'
   log "started Testing phase"
 }
 
@@ -447,7 +447,7 @@ start_deployment() {
     cp "$FRAMEWORK_ROOT/templates/deployment.md" "$deployment_file"
   fi
 
-  meta_update "$meta" '.phase = "Deployment" | .status = "in_progress" | .focus_work_item = null | .active_work_items = []'
+  meta_update "$meta" '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = []'
   log "started Deployment phase"
 }
 

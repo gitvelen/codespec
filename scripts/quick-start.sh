@@ -144,11 +144,11 @@ ${GREEN}========================================${NC}
   ${YELLOW}# 1. 进入项目目录${NC}
   cd $project_dir
 
-  ${YELLOW}# 2. 开始 Requirements 阶段${NC}
-  codespec start-requirements
-
-  ${YELLOW}# 3. 编辑 spec.md 定义需求${NC}
+  ${YELLOW}# 2. 编辑 spec.md 定义需求${NC}
   vim spec.md
+
+  ${YELLOW}# 3. 开始 Requirements 阶段${NC}
+  codespec start-requirements
 
   ${YELLOW}# 4. 创建 review verdict 并进入 Design 阶段${NC}
   mkdir -p reviews
@@ -167,7 +167,6 @@ EOFR
   codespec readset
 
 更多帮助:
-  - 查看 README: cat $workspace_dir/.codespec/README.md
   - 查看命令帮助: codespec --help
   - 运行测试: bash $workspace_dir/.codespec/scripts/smoke.sh
 

@@ -2,6 +2,8 @@
 
 ## Default Read Layer
 
+**说明**：本章节是设计完成时的快照索引，用于快速浏览核心结构。详细内容以正文各章节为准，索引可能滞后于正文更新。
+
 ### Goal / Scope Link
 - requirement_refs:
   - REQ-001

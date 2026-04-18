@@ -1560,7 +1560,14 @@ gate_implementation_start() {
   [ "${#required_verification[@]}" -gt 0 ] || die "$FOCUS_WI missing required_verification"
   [ "${#stop_conditions[@]}" -gt 0 ] || die "$FOCUS_WI missing stop_conditions"
   [ "${#reopen_triggers[@]}" -gt 0 ] || die "$FOCUS_WI missing reopen_triggers"
-  [ "${#branch_owned_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing branch_execution.owned_paths"
+
+  # owned_paths 只在并行模式下强制要求
+  local execution_group
+  execution_group="$(yaml_scalar "$META_FILE" execution_group)"
+  if [ "$execution_group" != 'null' ]; then
+    [ "${#branch_owned_paths[@]}" -gt 0 ] || die "$FOCUS_WI: parallel execution requires branch_execution.owned_paths"
+  fi
+
   [ "$(yaml_scalar "$WI_FILE" derived_from)" != 'null' ] || die "$FOCUS_WI missing derived_from"
 
   check_focus_wi_design_alignment
