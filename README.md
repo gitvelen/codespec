@@ -28,57 +28,68 @@
 
 ## 快速开始
 
-### 1. 安装框架
+### 人类用户：初始化项目
 
 ```bash
-# 创建新项目
+# 1. 创建新项目（首次使用）
+cd /path/to/codespec-framework
 ./scripts/quick-start.sh /path/to/workspace
 
-# 或 clone 现有项目
-./scripts/quick-start.sh /path/to/workspace https://github.com/user/repo.git
-```
-
-### 2. 初始化项目
-
-```bash
+# 2. 进入项目目录
 cd /path/to/workspace/main
-codespec init-dossier
-```
 
-这会创建：
-- `spec.md` - 需求规格文档
-- `design.md` - 设计文档
-- `meta.yaml` - 项目元数据
-- `.claude/` - 工作区配置
-
-### 3. 典型工作流
-
-```bash
-# 1. 填写需求规格
+# 3. 编辑 spec.md 定义需求
 vim spec.md
 
-# 2. 开始需求分析阶段
+# 4. 在项目目录中启动 Claude/Codex
+# 现在让 AI 接手后续流程
+```
+
+初始化后会创建：
+- `spec.md` - 需求规格文档（你填写）
+- `design.md` - 设计文档（AI 协助填写）
+- `meta.yaml` - 项目元数据（自动管理）
+- `.claude/` - AI 工作区配置
+
+### AI 助手：推进开发流程
+
+当你在项目目录（如 `change/feature-x`）中启动 Claude/Codex 后，AI 会使用以下命令推进流程：
+
+```bash
+# 1. 查看当前状态
+codespec readset
+
+# 2. 开始需求分析
 codespec start-requirements
+# AI 会审查 spec.md，确认需求清晰
 
-# 3. 需求审查通过后，开始设计
+# 3. 开始设计
 codespec start-design
+# AI 会在 design.md 中拆解工作项
 
-# 4. 在 design.md 中拆解工作项，然后添加
+# 4. 添加工作项
 codespec add-work-item WI-001
 codespec add-work-item WI-002
 
 # 5. 开始实现
 codespec start-implementation WI-001
+# AI 会编写代码实现工作项
 
-# 6. 实现完成后，记录测试
+# 6. 开始测试
 codespec start-testing
+# AI 会在 testing.md 中记录测试结果
 
-# 7. 测试通过后，部署
+# 7. 开始部署
 codespec start-deployment
+# AI 会在 deployment.md 中记录部署步骤
 
 # 8. 完成项目
 codespec complete-change
 ```
+
+**典型协作模式**：
+- **你**：定义需求（spec.md）、审查设计、验收结果
+- **AI**：拆解任务、编写代码、执行测试、记录文档
 
 ## 核心命令
 
