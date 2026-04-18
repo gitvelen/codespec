@@ -1078,6 +1078,10 @@ check_circular_dependencies() {
 }
 
 check_dependency_pass_records() {
+  # NOTE: Currently all dependencies are treated as strong dependencies (must have pass records).
+  # The dependency_type field (strong/weak/none) is validated for correctness but weak dependencies
+  # are not yet implemented with different behavior. This is intentional - weak dependencies are
+  # documented for coordination purposes but enforced the same as strong dependencies.
   local wi_file="${1:-${WI_FILE:-}}"
   local dep acc
 
@@ -1742,6 +1746,29 @@ gate_implementation_start() {
   done < <(yaml_list "$WI_FILE" contract_refs)
 
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
+
+  # Validate dependency_type
+  local dependency_type dependency_refs_count
+  dependency_type="$(yaml_scalar "$WI_FILE" dependency_type)"
+  mapfile -t dependency_refs < <(yaml_list "$WI_FILE" dependency_refs)
+  dependency_refs_count="${#dependency_refs[@]}"
+
+  # Check dependency_type is valid
+  case "$dependency_type" in
+    strong|weak|none)
+      # Valid values
+      ;;
+    *)
+      die "$FOCUS_WI dependency_type must be strong, weak, or none (got: $dependency_type)"
+      ;;
+  esac
+
+  # Check semantic consistency: empty dependency_refs requires dependency_type = none
+  if [ "$dependency_refs_count" -eq 0 ] || [ "${dependency_refs[0]}" = "" ] || [ "${dependency_refs[0]}" = "null" ]; then
+    [ "$dependency_type" = 'none' ] || die "$FOCUS_WI has no dependencies but dependency_type is $dependency_type (must be none)"
+  else
+    [ "$dependency_type" != 'none' ] || die "$FOCUS_WI has dependencies but dependency_type is none (must be strong or weak)"
+  fi
 
   # Check for circular dependencies before checking pass records
   check_circular_dependencies "$FOCUS_WI"

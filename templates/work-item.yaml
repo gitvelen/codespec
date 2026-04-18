@@ -71,7 +71,9 @@ verification_refs:
 # keep requirement_refs / verification_refs aligned with design.md Goal / Scope Link and Work Item Derivation
 derived_from: __DERIVED_FROM__
 dependency_refs: []
-dependency_type: strong  # 依赖类型：strong（强依赖，必须等待依赖 WI 完成）| weak（弱依赖，可以并行但需要协调）| none（无依赖）
+dependency_type: none  # 依赖类型：strong（强依赖，必须等待依赖 WI 完成）| weak（弱依赖，可以并行但需要协调）| none（无依赖）
+# 注意：当前 runtime 将所有依赖都按 strong 处理（检查 pass record），weak 类型仅用于文档化协调需求
+# dependency_refs 为空时，dependency_type 必须是 none
 contract_refs: []
 
 evidence_refs: []
