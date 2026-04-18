@@ -1,7 +1,7 @@
 # deployment.md
 
 ## Deployment Plan
-target_env: [STAGING/PRODUCTION]
+target_env: staging
 deployment_date: YYYY-MM-DD
 deployment_method: manual
 

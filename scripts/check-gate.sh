@@ -974,6 +974,53 @@ has_full_integration_pass() {
   ' "$TESTING_FILE"
 }
 
+check_circular_dependencies() {
+  local start_wi="$1"
+  local visited=()
+  local path=()
+
+  check_circular_recursive() {
+    local current="$1"
+    local dep
+
+    # Check if current WI is in the path (circular dependency detected)
+    for wi in "${path[@]}"; do
+      if [ "$wi" = "$current" ]; then
+        die "circular dependency detected: ${path[*]} -> $current"
+      fi
+    done
+
+    # Add current to path
+    path+=("$current")
+
+    # Check if already visited (optimization)
+    for wi in "${visited[@]}"; do
+      if [ "$wi" = "$current" ]; then
+        path=("${path[@]:0:${#path[@]}-1}")  # Remove current from path
+        return
+      fi
+    done
+
+    # Mark as visited
+    visited+=("$current")
+
+    # Check dependencies recursively
+    local wi_file="$PROJECT_ROOT/work-items/$current.yaml"
+    if [ -f "$wi_file" ]; then
+      while IFS= read -r dep; do
+        [ -n "$dep" ] || continue
+        [ "$dep" != 'null' ] || continue
+        check_circular_recursive "$dep"
+      done < <(yaml_list "$wi_file" dependency_refs)
+    fi
+
+    # Remove current from path
+    path=("${path[@]:0:${#path[@]}-1}")
+  }
+
+  check_circular_recursive "$start_wi"
+}
+
 check_dependency_pass_records() {
   local wi_file="${1:-${WI_FILE:-}}"
   local dep acc
@@ -1607,6 +1654,10 @@ gate_implementation_start() {
   done
 
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
+
+  # Check for circular dependencies before checking pass records
+  check_circular_dependencies "$FOCUS_WI"
+
   check_dependency_pass_records
 
   while IFS= read -r ref; do
@@ -1925,12 +1976,12 @@ gate_deployment_readiness() {
   grep -q 'smoke_test: pass' "$deployment_file" || die 'deployment.md smoke_test is not pass'
 
   local placeholders
-  placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[replace with[^]]*\]' "$deployment_file" || true)"
+  placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[replace with[^]]*\]|\[STAGING/PRODUCTION\]|\[STAGING\]|\[PRODUCTION\]' "$deployment_file" || true)"
   [ -z "$placeholders" ] || die 'deployment.md contains placeholder value'
   grep -q '^approved_by:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md approved_by is missing'
   grep -Eq '^approved_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md approved_at must be YYYY-MM-DD'
   grep -Eq '^deployment_date:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md deployment_date must be YYYY-MM-DD'
-  grep -q '^target_env:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md target_env is missing'
+  grep -Eq '^target_env:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md target_env is missing'
 
   log '✓ deployment-readiness gate passed'
 }
