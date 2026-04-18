@@ -20,7 +20,7 @@
 **与 work-item.yaml 的对应关系**：
 - contract.md 的 `consumers` 字段列出所有引用此契约的 WI
 - work-item.yaml 的 `contract_refs` 字段列出该 WI 依赖的所有契约
-- 两者必须保持一致
+- 两者必须保持一致（contract-boundary gate 会自动检查双向引用一致性）
 
 ---
 

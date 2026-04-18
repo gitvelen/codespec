@@ -1994,6 +1994,12 @@ gate_trace_consistency() {
 }
 
 gate_testing_coverage() {
+  # NOTE: This gate checks testing record quality (test_scope, verification_type, etc.).
+  # It is called by gate_verification() in Testing/Deployment phases.
+  # In contrast, gate_trace_consistency() only checks that testing records exist,
+  # without validating test_scope or other quality attributes.
+  # This separation allows trace-consistency to verify traceability independently
+  # of testing quality requirements.
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
   local accs=()
   mapfile -t accs < <(testing_target_acceptance_ids)

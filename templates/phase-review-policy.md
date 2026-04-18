@@ -100,7 +100,7 @@
 - `execution_group` / `execution_branch` 仅用于文档化，不由 runtime 强制。
 - 当前 git branch 与 `execution_branch` 一致（人工确认）；若设置了 `feature_branch`，执行分支未落后于 feature branch。
 - staged 改动全部在 `allowed_paths` 内，且未命中 `forbidden_paths`（由 scope gate 强制）。
-- staged 改动没有越过 `branch_execution.owned_paths`；命中 `shared_paths` 时已遵守 `shared_file_owner` / `conflict_policy`（人工审查，不由 runtime 强制；原因：需要跨分支信息，超出单分支 gate 的能力范围）。
+- staged 改动没有越过 `branch_execution.owned_paths`；命中 `shared_paths` 时已遵守 `shared_file_owner` / `conflict_policy`（人工审查，不由 runtime 强制；原因：需要跨分支信息，超出单分支 gate 的能力范围；审查方式：在 PR review 或 merge 前，手动对比当前改动与其他执行分支的 work-item.yaml，确认文件所有权和冲突策略）。
 - 没有修改 frozen contract；新增 frozen contract 走了显式 review flow：先以 `draft` 建档、review 后再冻结；直接新增 frozen contract 会被 `contract-boundary` gate 拒绝。
 - 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record（Implementation 阶段允许 test_scope=branch-local，Testing/Deployment 阶段要求 test_scope=full-integration）。
 - 当前实现仍能被 `spec.md`、`design.md`、当前 WI 合法解释，没有隐性扩 scope。
@@ -153,8 +153,8 @@
 - `residual_risk` 与 `reopen_required` 已经被认真填写。
 
 必须通过：
-- `./.codespec/codespec check-gate trace-consistency`
-- `./.codespec/codespec check-gate verification`
+- `./.codespec/codespec check-gate trace-consistency`（检查追溯链完整性和测试记录存在性，不检查 test_scope）
+- `./.codespec/codespec check-gate verification`（包含 testing-coverage，检查 full-integration pass 记录和 verification_type 要求）
 
 禁止切换：
 - 任一 approved acceptance 没有 pass record。
