@@ -469,15 +469,13 @@ Test deployment.
 1. Deploy test
 
 ## Verification Results
+smoke_test: pass
 All tests pass.
 
 ## Acceptance Conclusion
 status: pass
-smoke_test: pass
 approved_by: smoke-test
 approved_at: 2026-04-16
-deployment_date: 2026-04-16
-target_env: test
 
 ## Rollback Plan
 Revert commit.
@@ -488,11 +486,10 @@ Monitor logs.
 ## Post-deployment Actions
 None.
 
-## Deployment Metadata
-- deployment_method: automated
-- deployment_date: 2026-04-16
-- target_env: test
-- smoke_test: pass
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+deployment_method: automated
 EOF
 
 git add deployment.md

@@ -970,6 +970,11 @@ has_testing_record() {
       sub("^[[:space:]]*result:[[:space:]]*", "", line)
       sub(/[[:space:]]*$/, "", line)
       result = line
+      # Validate result value
+      if (result != "pass" && result != "fail") {
+        print "ERROR: invalid result value: " result " (must be pass or fail)" > "/dev/stderr"
+        exit 1
+      }
     }
     END {
       if (in_record && result == "pass") {
@@ -1010,6 +1015,11 @@ has_full_integration_pass() {
       sub("^[[:space:]]*result:[[:space:]]*", "", line)
       sub(/[[:space:]]*$/, "", line)
       result = line
+      # Validate result value
+      if (result != "pass" && result != "fail") {
+        print "ERROR: invalid result value: " result " (must be pass or fail)" > "/dev/stderr"
+        exit 1
+      }
     }
     END {
       if (in_record && test_scope == "full-integration" && result == "pass") {
@@ -2148,7 +2158,14 @@ gate_deployment_readiness() {
 
   grep -q '^## Acceptance Conclusion$' "$deployment_file" || die 'deployment.md missing Acceptance Conclusion'
   grep -q '^status: pass$' "$deployment_file" || die 'deployment.md acceptance conclusion is not pass'
-  grep -q 'smoke_test: pass' "$deployment_file" || die 'deployment.md smoke_test is not pass'
+
+  # Check smoke_test is in Verification Results section
+  awk '
+    /^## Verification Results$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /smoke_test: pass/ { found = 1; exit }
+    END { exit !found }
+  ' "$deployment_file" || die 'deployment.md smoke_test: pass must be in Verification Results section'
 
   # Check required sections exist
   grep -q '^## Deployment Plan$' "$deployment_file" || die 'deployment.md missing Deployment Plan section'
@@ -2159,14 +2176,34 @@ gate_deployment_readiness() {
   grep -q '^## Monitoring$' "$deployment_file" || die 'deployment.md missing Monitoring section'
   grep -q '^## Post-deployment Actions$' "$deployment_file" || die 'deployment.md missing Post-deployment Actions section'
 
-  local placeholders
-  placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[replace with[^]]*\]|\[STAGING/PRODUCTION\]|\[STAGING\]|\[PRODUCTION\]' "$deployment_file" || true)"
-  [ -z "$placeholders" ] || die 'deployment.md contains placeholder value'
+  # Check deployment_method is in Deployment Plan section
+  awk '
+    /^## Deployment Plan$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /^[[:space:]]*-?[[:space:]]*deployment_method:/ { found = 1; exit }
+    END { exit !found }
+  ' "$deployment_file" || die 'deployment.md deployment_method must be in Deployment Plan section'
+
+  # Check target_env and deployment_date are in Deployment Plan section
+  awk '
+    /^## Deployment Plan$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /^target_env:/ { found_env = 1 }
+    in_section && /^deployment_date:/ { found_date = 1 }
+    END { exit !(found_env && found_date) }
+  ' "$deployment_file" || die 'deployment.md target_env and deployment_date must be in Deployment Plan section'
+
+  # Check specific fields first for clearer error messages
   grep -q '^approved_by:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md approved_by is missing'
   grep -Eq '^approved_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md approved_at must be YYYY-MM-DD'
   grep -Eq '^deployment_date:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md deployment_date must be YYYY-MM-DD'
   grep -Eq '^[[:space:]]*-?[[:space:]]*deployment_method:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md deployment_method is missing'
   grep -Eq '^target_env:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md target_env is missing'
+
+  # Check for remaining placeholders
+  local placeholders
+  placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[replace with[^]]*\]|\[STAGING/PRODUCTION\]|\[STAGING\]|\[PRODUCTION\]' "$deployment_file" || true)"
+  [ -z "$placeholders" ] || die 'deployment.md contains placeholder value'
 
   log '✓ deployment-readiness gate passed'
 }
