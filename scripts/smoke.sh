@@ -85,7 +85,7 @@ phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Proposal" ] || die "initial phase should be Proposal, got: $phase"
 
 status=$(yq eval '.status' meta.yaml)
-[ "$status" = "in_progress" ] || die "initial status should be in_progress, got: $status"
+[ "$status" = "active" ] || die "initial status should be active, got: $status"
 log "✓ initial phase is Proposal"
 
 # Test 4: start-requirements
