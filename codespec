@@ -447,7 +447,7 @@ start_deployment() {
     cp "$FRAMEWORK_ROOT/templates/deployment.md" "$deployment_file"
   fi
 
-  meta_update "$meta" '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = []'
+  meta_update "$meta" '.phase = "Deployment" | .status = "active" | .focus_work_item = null'
   log "started Deployment phase"
 }
 

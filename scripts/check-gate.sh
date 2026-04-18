@@ -594,10 +594,12 @@ gate_metadata_consistency() {
     Testing)
       [ "$focus_wi" = 'null' ] || die 'Testing phase requires focus_work_item = null'
       # Testing 阶段保留 active_work_items 用于 verification gate
+      [ "${#active[@]}" -gt 0 ] || die 'Testing phase requires active_work_items to be non-empty (should be preserved from Implementation)'
       ;;
     Deployment)
       [ "$focus_wi" = 'null' ] || die 'Deployment phase requires focus_work_item = null'
-      [ "${#active[@]}" -eq 0 ] || die 'Deployment phase requires active_work_items = []'
+      # Deployment 阶段也保留 active_work_items
+      [ "${#active[@]}" -gt 0 ] || die 'Deployment phase requires active_work_items to be non-empty (should be preserved from Implementation)'
       ;;
   esac
 
@@ -1163,6 +1165,9 @@ review_file_matches() {
 }
 
 gate_review_verdict_present() {
+  # NOTE: This gate only supports Requirements/Design/Implementation phases.
+  # If future phases require review verdict checks, add corresponding cases below.
+  # Extensibility limitation: target_phase mapping must be manually maintained.
   local reviews_dir="$PROJECT_ROOT/reviews"
   local review_file expected_file expected_phase
   local target_phase="${CODESPEC_TARGET_PHASE:-}"
@@ -1854,7 +1859,68 @@ gate_contract_boundary() {
     if [ "$index_status" = 'frozen' ] && ! git -C "$PROJECT_ROOT" cat-file -e "HEAD:$file" 2>/dev/null; then
       die "new frozen contract requires explicit review flow: $file"
     fi
+
+    # Check frozen_at timestamp for frozen contracts
+    if [ "$index_status" = 'frozen' ]; then
+      local frozen_at
+      frozen_at="$(git -C "$PROJECT_ROOT" show ":$file" 2>/dev/null | grep '^frozen_at:' | awk '{print $2}' || true)"
+      [ -n "$frozen_at" ] && [ "$frozen_at" != 'null' ] || die "frozen contract $file must have frozen_at timestamp"
+      # Validate timestamp format YYYY-MM-DD
+      [[ "$frozen_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "frozen contract $file frozen_at must be YYYY-MM-DD format (got: $frozen_at)"
+    fi
   done < <(git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
+
+  # Check contract consumers consistency with work-item contract_refs
+  local contract_file contract_id consumers wi_file wi_id contract_refs
+  while IFS= read -r contract_file; do
+    [ -f "$PROJECT_ROOT/$contract_file" ] || continue
+    contract_id="$(yaml_scalar "$PROJECT_ROOT/$contract_file" contract_id)"
+    [ -n "$contract_id" ] && [ "$contract_id" != 'null' ] || continue
+
+    # Collect consumers from contract
+    local contract_consumers=()
+    mapfile -t contract_consumers < <(yaml_list "$PROJECT_ROOT/$contract_file" consumers)
+
+    # Verify each consumer actually references this contract
+    for wi_id in "${contract_consumers[@]}"; do
+      [ -n "$wi_id" ] && [ "$wi_id" != 'null' ] || continue
+      wi_file="$PROJECT_ROOT/work-items/${wi_id}.yaml"
+      [ -f "$wi_file" ] || die "contract $contract_file lists consumer $wi_id but work-item file not found"
+
+      local found=0
+      while IFS= read -r ref; do
+        [ -n "$ref" ] && [ "$ref" != 'null' ] || continue
+        if [ "$ref" = "$contract_file" ]; then
+          found=1
+          break
+        fi
+      done < <(yaml_list "$wi_file" contract_refs)
+
+      [ "$found" -eq 1 ] || die "contract $contract_file lists $wi_id as consumer but $wi_id does not reference it in contract_refs"
+    done
+  done < <(find "$PROJECT_ROOT/contracts" -name '*.md' 2>/dev/null || true)
+
+  # Verify work-items that reference contracts are listed as consumers
+  while IFS= read -r wi_file; do
+    [ -f "$wi_file" ] || continue
+    wi_id="$(basename "$wi_file" .yaml)"
+
+    while IFS= read -r ref; do
+      [ -n "$ref" ] && [ "$ref" != 'null' ] || continue
+      [ -f "$PROJECT_ROOT/$ref" ] || continue
+
+      local found=0
+      while IFS= read -r consumer; do
+        [ -n "$consumer" ] && [ "$consumer" != 'null' ] || continue
+        if [ "$consumer" = "$wi_id" ]; then
+          found=1
+          break
+        fi
+      done < <(yaml_list "$PROJECT_ROOT/$ref" consumers)
+
+      [ "$found" -eq 1 ] || die "work-item $wi_id references contract $ref but is not listed in contract consumers"
+    done < <(yaml_list "$wi_file" contract_refs)
+  done < <(find "$PROJECT_ROOT/work-items" -name '*.yaml' 2>/dev/null || true)
 
   log '✓ contract-boundary gate passed'
 }
