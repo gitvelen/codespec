@@ -4,12 +4,6 @@
 
 ---
 
-## 零、命令入口约定
-
-- 所有阶段切换和 `focus_work_item` 切换都必须通过标准 runtime 入口执行，不要手改 `meta.yaml`。
-- 入口解析顺序：先尝试 `codespec <cmd>`；若当前 shell 不可调用，再尝试工作区 runtime（常见布局：`../.codespec/codespec <cmd>`）；若两者都不可用，停止并报告 runtime not found。
-- `codespec start-implementation <WI-ID>` 既可用于 `Design -> Implementation`，也可用于 `Implementation` 阶段内切换 `focus_work_item`。
-
 ## 一、当前阶段要读什么
 
 **每次启动必读**：
@@ -103,18 +97,18 @@
 ## 四、阶段切换前检查
 
 **命令与 gate 映射**（runtime 会自动检查）：
-- `codespec start-requirements` → 检查 `proposal-maturity`
-- `codespec start-design` → 检查 `requirements-approval`
-- `codespec start-implementation <WI-ID>` → 检查 `implementation-ready`
-- `codespec start-testing` → 检查 `metadata-consistency` + `scope` + `contract-boundary` + `verification`
-- `codespec start-deployment` → 检查 `trace-consistency` + `verification`
-- `codespec complete-change` → 检查 `promotion-criteria`
-- `codespec promote-version` → 检查 `promotion`
+- `../.codespec/codespec start-requirements` → 检查 `proposal-maturity`
+- `../.codespec/codespec start-design` → 检查 `requirements-approval`
+- `../.codespec/codespec start-implementation <WI-ID>` → 检查 `implementation-ready`
+- `../.codespec/codespec start-testing` → 检查 `metadata-consistency` + `scope` + `contract-boundary` + `verification`
+- `../.codespec/codespec start-deployment` → 检查 `trace-consistency` + `verification`
+- `../.codespec/codespec complete-change` → 检查 `promotion-criteria`
+- `../.codespec/codespec promote-version` → 检查 `promotion`
 
 **说明**：
 - gate 检查由 runtime 自动执行，失败会阻止阶段切换
-- 手动检查：`codespec check-gate <gate-name>`
-- 详细检查项：`codespec check-gate <gate-name> --verbose`
+- 手动检查：`../.codespec/codespec check-gate <gate-name>`
+- 详细检查项：`../.codespec/codespec check-gate <gate-name> --verbose`
 
 ---
 
