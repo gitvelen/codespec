@@ -84,6 +84,10 @@ workspace/
     └── .claude/           # AI 工作区配置（自动创建）
 ```
 
+#### 命令入口约定
+
+在项目目录执行阶段命令时，优先使用 `codespec <cmd>`。如果当前 shell 找不到 `codespec`，则改用工作区 runtime（常见布局：`../.codespec/codespec <cmd>`）。如果两者都不可用，先修复 runtime 安装；不要手改 `meta.yaml` 推进阶段或切换 work item。
+
 #### 步骤 2：启动 AI 助手，开始协作
 
 ```bash
@@ -157,6 +161,7 @@ workspace/
 - 执行 `codespec add-work-item WI-001`, `WI-002`...
 - 填写每个工作项的详细信息（work-items/WI-XXX.yaml）
 - 执行 `codespec start-implementation WI-001`
+- 如需在同一 Implementation 阶段切换到下一个工作项，继续执行 `codespec start-implementation <next-WI>`
 - 编写代码实现工作项
 - 完成后告诉你测试
 
@@ -197,26 +202,25 @@ cd /path/to/existing-project
 # 克隆框架仓库到临时目录
 git clone <codespec-repo-url> /tmp/codespec-framework
 
-# 在项目的父目录创建工作区
-cd ..
-mkdir -p workspace
-/tmp/codespec-framework/scripts/install-workspace.sh $(pwd)/workspace
-
-# 将存量项目移动到工作区（或创建符号链接）
-mv existing-project workspace/existing-project
-# 或者：ln -s /path/to/existing-project workspace/existing-project
-
-cd workspace/existing-project
+# 在当前项目的父目录安装工作区运行时
+/tmp/codespec-framework/scripts/install-workspace.sh ..
 ```
+
+这一步会在项目父目录生成共享文件：
+- `../.codespec/`
+- `../lessons_learned.md`
+- `../phase-review-policy.md`
+- `../versions/`
+
+现有项目保持原地不动，不需要 `mv`，也不需要软链。
+
+如果你不想把这些共享文件放在当前父目录，再使用“专用 workspace + 软链”的旧方式。
 
 #### 步骤 2：初始化 Codespec 文档
 
 ```bash
-# 初始化 dossier（会创建 spec.md, design.md, meta.yaml 等）
-../workspace/.codespec/codespec init-dossier
-
-# 或者使用 init-dossier.sh 脚本
-bash ../workspace/.codespec/scripts/init-dossier.sh
+# 在当前项目目录初始化 dossier（会创建 spec.md, design.md, meta.yaml 等）
+../.codespec/scripts/init-dossier.sh
 ```
 
 #### 步骤 3：启动 AI，补充文档
@@ -273,6 +277,91 @@ workspace/
 # 每个人独立推进自己的阶段
 cd workspace/alice-feature-x
 codespec status  # 查看自己的项目状态
+```
+
+---
+
+### 场景 4：版本迭代工作流
+
+当一个版本完成后，如何开始下一个版本的开发？
+
+#### 步骤 1：完成当前版本
+
+```bash
+# AI 完成所有开发和测试后
+codespec complete-change
+# 状态变为：phase=Deployment, status=completed
+```
+
+**AI 会询问**："项目已完成验收，是否生成项目文档？（建议生成，用于后续版本参考）"
+
+如果你确认生成：
+
+```bash
+codespec generate-project-docs v1.0
+# 生成项目文档到 ../project-docs/v1.0/
+# 包含：系统功能说明书、技术方案设计、接口文档、用户手册、部署记录、测试报告
+```
+
+#### 步骤 2：归档当前版本
+
+```bash
+codespec promote-version v1.0
+# 将完整 dossier 归档到 ../versions/v1.0/
+```
+
+#### 步骤 3：开始新版本
+
+**方式 A：原地重置（推荐）**
+
+```bash
+# 在同一目录中开始新版本
+codespec reset-to-proposal
+# 自动重置到 Proposal 阶段
+# base_version 设置为 v1.0
+# 保留 CLAUDE.md, AGENTS.md, contracts/
+```
+
+**方式 B：新建分支（可选）**
+
+```bash
+# 如果你想在新分支中开发
+git checkout -b v1.1
+
+# AI 会检测到新分支，询问：
+# "检测到新分支，是否新建项目变更（执行 reset-to-proposal）？"
+
+# 你确认后，AI 自动执行：
+codespec reset-to-proposal
+```
+
+#### 步骤 4：参考上一版本
+
+在新版本的 Proposal 阶段，如果需要参考上一版本：
+
+```bash
+# 告诉 AI：
+"基于 v1.0 添加新功能：<功能描述>"
+```
+
+**AI 会自动**：
+- 读取 `../project-docs/v1.0/系统功能说明书.md` 了解现有功能
+- 读取 `../project-docs/v1.0/技术方案设计.md` 了解现有架构
+- 在此基础上设计新功能
+
+**注意**：
+- 项目文档不在 readset 中，只在你明确要求时读取
+- 项目文档是参考资料，真相源仍是 spec.md, design.md
+
+#### 查看所有版本
+
+```bash
+codespec list-versions
+# 输出：
+# Version    Created      Status      Base Version
+# -------    -------      ------      ------------
+# v1.0       2026-04-20   completed   null
+# v1.1       2026-04-21   completed   v1.0
 ```
 
 ---
@@ -345,6 +434,8 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 
 ## 命令参考
 
+下文中的 `codespec ...` 都表示“按上面的命令入口约定解析出的标准 runtime 入口”。
+
 ### 项目管理命令
 
 | 命令 | 说明 |
@@ -358,10 +449,19 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 |------|---------|------|
 | `codespec start-requirements` | Proposal 成熟，有审查文件 | 切换到 Requirements 阶段 |
 | `codespec start-design` | Requirements 完整，有审查文件 | 切换到 Design 阶段 |
-| `codespec start-implementation <WI-ID>` | Design 完整，工作项存在，有审查文件 | 切换到 Implementation 阶段 |
+| `codespec start-implementation <WI-ID>` | Design 完整或已在 Implementation，工作项存在，有审查文件 | 进入 Implementation 阶段或切换当前 focus WI |
 | `codespec start-testing` | 所有工作项实现完成 | 切换到 Testing 阶段 |
 | `codespec start-deployment` | 测试覆盖完整且通过 | 切换到 Deployment 阶段 |
 | `codespec complete-change` | 部署验证通过 | 完成项目 |
+
+### 版本管理命令
+
+| 命令 | 前置条件 | 作用 |
+|------|---------|------|
+| `codespec generate-project-docs <version>` | status=completed, phase=Deployment | 生成项目文档到 project-docs/<version>/ |
+| `codespec promote-version <version>` | status=completed | 归档 dossier 到 versions/<version>/ |
+| `codespec reset-to-proposal [--keep-contracts]` | status=completed, 已执行 promote-version | 重置 dossier 到 Proposal 阶段，开始新版本 |
+| `codespec list-versions [--json]` | - | 列出所有已归档版本 |
 
 ### 工作项管理命令
 
@@ -449,6 +549,8 @@ Codespec 框架设计为**人机协作**模式：
 6. **推进流程**：使用 `codespec` 命令切换阶段
 
 ### 典型协作流程
+
+以下示例里的 `codespec` 也遵循“命令入口约定”；如果 `codespec` 不在 PATH，请替换为对应的工作区 runtime 路径。
 
 ```bash
 # 1. 你：创建项目，填写初步需求

@@ -22,7 +22,8 @@ active_work_items: __ACTIVE_WORK_ITEMS__  # 当前活跃的 WI 列表（YAML arr
 # active_work_items 语义：
 # - Implementation 阶段：正在执行的 WI（单分支串行时累积，多分支并行时各分支独立）
 # - Testing 阶段：保留 Implementation 阶段的值，用于 verification gate 聚合所有需要验证的 work items
-# - Deployment 阶段：清空（所有 WI 已完成最终验收）
+# - Deployment 阶段（status=active）：保留 Testing 阶段的值，用于最终 verification / promotion gate
+# - Completed 状态（phase=Deployment, status=completed）：清空，表示当前已无活跃验证集合
 # 累积规则：
 # - 单分支串行：每开始一个新 WI，添加到列表（如 [WI-001] -> [WI-001, WI-002]）
 # - 多分支并行：执行分支只包含自己的 WI，parent feature 分支包含所有并行 WI

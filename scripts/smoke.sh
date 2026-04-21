@@ -266,6 +266,7 @@ cat > design.md <<'EOF'
 
 ## Goal / Scope Link
 - REQ-001 -> WI-001
+- REQ-001 -> WI-002
 
 ## Architecture Boundary
 Test architecture.
@@ -275,6 +276,7 @@ Single branch execution.
 
 ## Design Slice Index
 - WI-001: test work item
+- WI-002: follow-up test work item
 
 ## Work Item Derivation
 - wi_id: WI-001
@@ -289,6 +291,18 @@ Single branch execution.
   dependency_refs: []
   contract_needed: false
   notes_on_boundary: smoke verification scope
+- wi_id: WI-002
+  input_refs:
+    - docs/test.md#intent
+  requirement_refs:
+    - REQ-001
+  goal: implement same-phase WI switching capability
+  covered_acceptance_refs: [ACC-001]
+  verification_refs:
+    - VO-001
+  dependency_refs: []
+  contract_needed: false
+  notes_on_boundary: same-phase switching scope
 
 ## Contract Needs
 No contracts needed.
@@ -334,24 +348,36 @@ git add design.md
 git commit -m "feat: complete design"
 
 "$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-001
+"$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-002
 
 [ -f "work-items/WI-001.yaml" ] || die "add-work-item did not create WI-001.yaml"
+[ -f "work-items/WI-002.yaml" ] || die "add-work-item did not create WI-002.yaml"
 
-# Update WI-001.yaml with actual values from design.md
-yq eval '.goal = "implement smoke verification capability"' -i work-items/WI-001.yaml
-yq eval '.scope = ["add smoke verification"]' -i work-items/WI-001.yaml
-yq eval '.out_of_scope = ["production deployment"]' -i work-items/WI-001.yaml
-yq eval '.input_refs = ["docs/test.md#intent"]' -i work-items/WI-001.yaml
-yq eval '.requirement_refs = ["REQ-001"]' -i work-items/WI-001.yaml
-yq eval '.acceptance_refs = ["ACC-001"]' -i work-items/WI-001.yaml
-yq eval '.verification_refs = ["VO-001"]' -i work-items/WI-001.yaml
-yq eval '.branch_execution.owned_paths = ["src/**", "testing.md", "meta.yaml"]' -i work-items/WI-001.yaml
-yq eval '.branch_execution.shared_paths = []' -i work-items/WI-001.yaml
-yq eval '.branch_execution.merge_order = 1' -i work-items/WI-001.yaml
-yq eval '.required_verification = ["unit tests pass"]' -i work-items/WI-001.yaml
-yq eval '.stop_conditions = ["scope expansion"]' -i work-items/WI-001.yaml
-yq eval '.reopen_triggers = ["architecture change"]' -i work-items/WI-001.yaml
-yq eval '.hard_constraints = ["no breaking changes"]' -i work-items/WI-001.yaml
+# Update work item files with actual values from design.md
+for wi in WI-001 WI-002; do
+  if [ "$wi" = "WI-001" ]; then
+    goal="implement smoke verification capability"
+    scope_item="add smoke verification"
+  else
+    goal="implement same-phase WI switching capability"
+    scope_item="allow switching focus within Implementation"
+  fi
+
+  yq eval ".goal = \"$goal\"" -i "work-items/$wi.yaml"
+  yq eval ".scope = [\"$scope_item\"]" -i "work-items/$wi.yaml"
+  yq eval '.out_of_scope = ["production deployment"]' -i "work-items/$wi.yaml"
+  yq eval '.input_refs = ["docs/test.md#intent"]' -i "work-items/$wi.yaml"
+  yq eval '.requirement_refs = ["REQ-001"]' -i "work-items/$wi.yaml"
+  yq eval '.acceptance_refs = ["ACC-001"]' -i "work-items/$wi.yaml"
+  yq eval '.verification_refs = ["VO-001"]' -i "work-items/$wi.yaml"
+  yq eval '.branch_execution.owned_paths = ["src/**", "testing.md", "meta.yaml"]' -i "work-items/$wi.yaml"
+  yq eval '.branch_execution.shared_paths = []' -i "work-items/$wi.yaml"
+  yq eval '.branch_execution.merge_order = 1' -i "work-items/$wi.yaml"
+  yq eval '.required_verification = ["unit tests pass"]' -i "work-items/$wi.yaml"
+  yq eval '.stop_conditions = ["scope expansion"]' -i "work-items/$wi.yaml"
+  yq eval '.reopen_triggers = ["architecture change"]' -i "work-items/$wi.yaml"
+  yq eval '.hard_constraints = ["no breaking changes"]' -i "work-items/$wi.yaml"
+done
 
 log "✓ add-work-item succeeded"
 
@@ -373,8 +399,45 @@ phase=$(yq eval '.phase' meta.yaml)
 focus_wi=$(yq eval '.focus_work_item' meta.yaml)
 [ "$focus_wi" = "WI-001" ] || die "start-implementation did not set focus_work_item"
 
+active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
+assert_json_eq "$active_wis" '. | length' '1'
+assert_json_eq "$active_wis" '.[0]' '"WI-001"'
+
 [ -f "testing.md" ] || die "start-implementation did not create testing.md"
 log "✓ start-implementation succeeded"
+
+"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-002
+
+focus_wi=$(yq eval '.focus_work_item' meta.yaml)
+[ "$focus_wi" = "WI-002" ] || die "same-phase start-implementation did not switch focus_work_item"
+
+active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
+assert_json_eq "$active_wis" '. | length' '2'
+assert_json_eq "$active_wis" '.[0]' '"WI-001"'
+assert_json_eq "$active_wis" '.[1]' '"WI-002"'
+log "✓ same-phase WI switch succeeded"
+
+"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-002
+
+active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
+assert_json_eq "$active_wis" '. | length' '2'
+assert_json_eq "$active_wis" '.[0]' '"WI-001"'
+assert_json_eq "$active_wis" '.[1]' '"WI-002"'
+log "✓ same-phase WI switch is idempotent"
+
+"$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-003
+expect_fail_cmd "focus work item WI-003 is missing from design work item derivation" "\"$TMP_WORKSPACE/.codespec/codespec\" start-implementation WI-003"
+
+"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-001
+"$TMP_WORKSPACE/.codespec/codespec" set-active-work-items WI-001
+
+focus_wi=$(yq eval '.focus_work_item' meta.yaml)
+[ "$focus_wi" = "WI-001" ] || die "same-phase start-implementation did not switch focus back to WI-001"
+
+active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
+assert_json_eq "$active_wis" '. | length' '1'
+assert_json_eq "$active_wis" '.[0]' '"WI-001"'
+log "✓ active_work_items can be narrowed after same-phase switching"
 
 # Test 7: Implementation and testing
 log "\n=== Test 7: Implementation and testing ==="
@@ -501,8 +564,85 @@ status=$(yq eval '.status' meta.yaml)
 [ "$status" = "completed" ] || die "complete-change did not set status to completed"
 log "✓ complete-change succeeded"
 
-# Test 10: File modification rules
-log "\n=== Test 10: File modification rules ==="
+# Completed dossiers should remain re-verifiable
+"$TMP_WORKSPACE/.codespec/codespec" check-gate verification
+"$TMP_WORKSPACE/.codespec/codespec" check-gate promotion-criteria
+log "✓ completed dossier remains re-verifiable"
+
+"$TMP_WORKSPACE/.codespec/codespec" promote-version smoke-v1
+
+[ -f "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" ] || die "promote-version did not create versioned meta.yaml"
+promoted_status=$(yq eval '.status' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
+[ "$promoted_status" = "completed" ] || die "promote-version did not preserve completed status"
+promoted_active_wis=$(yq eval -o=json '.active_work_items' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
+assert_json_eq "$promoted_active_wis" '. | length' '0'
+log "✓ promote-version preserves completed metadata semantics"
+
+# Test 10: testing ledger selection semantics
+log "\n=== Test 10: testing ledger selection semantics ==="
+
+yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"] | .execution_group = null | .execution_branch = null' -i meta.yaml
+
+cat > testing.md <<'EOF'
+- acceptance_ref: ACC-001
+  work_item_ref: WI-001
+  test_type: integration
+  test_scope: full-integration
+  verification_type: manual
+  artifact_ref: reports/older-pass.txt
+  result: pass
+  tested_at: 2026-04-16
+  tested_by: smoke-test
+  residual_risk: none
+  reopen_required: false
+
+- acceptance_ref: ACC-001
+  work_item_ref: WI-001
+  test_type: integration
+  test_scope: full-integration
+  verification_type: automated
+  artifact_ref: reports/newer-pass.txt
+  result: pass
+  tested_at: 2026-04-17
+  tested_by: smoke-test
+  residual_risk: none
+  reopen_required: false
+EOF
+
+"$TMP_WORKSPACE/.codespec/codespec" check-gate verification
+log "✓ verification uses the latest matching pass record without duplicating extracted fields"
+
+cat > testing.md <<'EOF'
+- acceptance_ref: ACC-001
+  work_item_ref: WI-001
+  test_type: integration
+  test_scope: full-integration
+  verification_type: automated
+  artifact_ref: reports/pass-before-fail.txt
+  result: pass
+  tested_at: 2026-04-18
+  tested_by: smoke-test
+  residual_risk: none
+  reopen_required: false
+
+- acceptance_ref: ACC-001
+  work_item_ref: WI-001
+  test_type: manual
+  test_scope: full-integration
+  verification_type: manual
+  artifact_ref: reports/fail-after-pass.txt
+  result: fail
+  tested_at: 2026-04-19
+  tested_by: smoke-test
+  residual_risk: medium
+  reopen_required: true
+EOF
+
+"$TMP_WORKSPACE/.codespec/codespec" check-gate verification
+log "✓ verification still recognizes an earlier full-integration pass record when a later failure exists"
+
+# Test 11: File modification rules
+log "\n=== Test 11: File modification rules ==="
 
 # Reset to Implementation phase for testing
 yq eval '.phase = "Implementation" | .status = "in_progress" | .focus_work_item = "WI-001" | .active_work_items = ["WI-001"]' -i meta.yaml
@@ -542,8 +682,8 @@ git add src/test.txt
 git commit -m "feat: src modification allowed"
 log "✓ pre-commit allows src/** modification in execution branch"
 
-# Test 11: Gate checks
-log "\n=== Test 11: Gate checks ==="
+# Test 12: Gate checks
+log "\n=== Test 12: Gate checks ==="
 
 git checkout master
 cd "$TMP_WORKSPACE/test-project"
@@ -560,6 +700,17 @@ set -e
 log "✓ metadata-consistency gate works"
 
 yq eval '.active_work_items = ["WI-001"]' -i meta.yaml
+
+# Test: active Deployment still requires active_work_items until completed
+yq eval '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = []' -i meta.yaml
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "metadata-consistency gate should fail for active Deployment with empty active_work_items"
+assert_contains "$output" "Deployment phase requires active_work_items to be non-empty"
+log "✓ active Deployment still requires active_work_items"
 
 # Test phase-capability gate
 yq eval '.phase = "Proposal"' -i meta.yaml
@@ -578,8 +729,8 @@ log "✓ phase-capability gate works"
 git reset HEAD src/forbidden.txt
 rm -f src/forbidden.txt
 
-# Test 12: Readset
-log "\n=== Test 12: Readset ==="
+# Test 13: Readset
+log "\n=== Test 13: Readset ==="
 
 yq eval '.phase = "Requirements" | .status = "in_progress"' -i meta.yaml
 
@@ -597,4 +748,3 @@ assert_json_eq "$readset_json" '.minimal_readset | map(select(.path == "meta.yam
 log "✓ readset JSON output correct"
 
 log "\n=== All tests passed ==="
-

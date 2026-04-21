@@ -1,6 +1,6 @@
 # Phase Review Policy
 
-阶段切换前先做走查，再改 `meta.yaml`。`check-gate` 是最低硬门槛，不替代语义审查；需要严格闭环时，使用 `rfr` skill 并以本文件为准。**check-gate pass 仍不等于允许切换**，phase 推进必须同时满足本文件中的人工审查结论。注意：进入 Requirements / Design / Implementation 前，runtime 已强制检查对应 review verdict artifact（`requirements-review.yaml` / `design-review.yaml` / `implementation-review.yaml`）的存在性；但 artifact 存在不等于审查质量、组织批准或 reviewer judgment 已自动成立。
+阶段切换前先做走查，再通过标准 runtime 入口执行命令；不要手改 `meta.yaml` 推进 phase 或切换 `focus_work_item`。标准入口解析顺序：先尝试 `codespec <cmd>`；若当前 shell 不可调用，再尝试工作区 runtime（常见布局：`../.codespec/codespec <cmd>`）；若两者都不可用，停止并报告 runtime not found。`check-gate` 是最低硬门槛，不替代语义审查；需要严格闭环时，使用 `rfr` skill 并以本文件为准。**check-gate pass 仍不等于允许切换**，phase 推进必须同时满足本文件中的人工审查结论。注意：进入 Requirements / Design / Implementation 前，runtime 已强制检查对应 review verdict artifact（`requirements-review.yaml` / `design-review.yaml` / `implementation-review.yaml`）的存在性；但 artifact 存在不等于审查质量、组织批准或 reviewer judgment 已自动成立。
 
 本文件按三层理解：
 - `必须通过`：runtime / hooks 会执行的最低机器门槛。
@@ -110,6 +110,11 @@
 - `active_work_items` 保留 Implementation 阶段的值（start-testing 不清空），用于 verification gate 聚合所有需要验证的 work items。
 - `execution_group` / `execution_branch` 被清空（start-testing 会清空）。
 
+必须确认（Completed 状态）：
+- `phase = Deployment` 且 `status = completed`。
+- `focus_work_item = null`。
+- `active_work_items = []`；completed dossier 不再表示“活跃验证集合”，但必须仍可重跑 `verification` / `promotion-criteria` 进行验真。
+
 ### Testing 字段定义
 
 **测试结果（result）**：
@@ -170,6 +175,7 @@
 
 必须确认：
 - `start-deployment` 只表示进入 Deployment 阶段，并在缺少 `deployment.md` 时自动 materialize 工作载体；不等于 deployment readiness 已达成。
+- `complete-change` 会把 dossier 置为 completed 状态，并清空 `active_work_items`；后续重跑 gate 时应以 completed 语义验真，而不是继续要求活跃 WI 集合。
 - `deployment.md` 已 materialize，并包含 `Deployment Plan`、`Pre-deployment Checklist`、`Deployment Steps`、`Verification Results`、`Acceptance Conclusion`、`Rollback Plan`、`Monitoring`、`Post-deployment Actions`。
 - `Acceptance Conclusion.status = pass`，`approved_by` 非空，`approved_at` 日期合法。
 - `deployment_date` 与 `target_env` 合法。
@@ -194,7 +200,7 @@
 ## 命令映射
 - `start-requirements` -> `proposal-maturity` + `review-verdict-present`（要求 reviews/requirements-review.yaml 存在且 phase=Proposal, verdict=approved）
 - `start-design` -> `requirements-approval` + `review-verdict-present`（要求 reviews/design-review.yaml 存在且 phase=Requirements, verdict=approved）
-- `start-implementation` -> `implementation-ready` + `review-verdict-present`（要求 reviews/implementation-review.yaml 存在且 phase=Design, verdict=approved）
+- `start-implementation` -> `implementation-ready` + `review-verdict-present`（从 `Design` 进入 `Implementation`，或在 `Implementation` 内切换 `focus_work_item`；要求 reviews/implementation-review.yaml 存在且 phase=Design, verdict=approved）
 - `start-testing` -> `metadata-consistency` + `scope` + `contract-boundary` + `verification`
 - `start-deployment` -> `trace-consistency` + `verification`，并在缺少 `deployment.md` 时自动 materialize
 - `complete-change` -> `promotion-criteria`

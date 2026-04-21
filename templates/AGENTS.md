@@ -4,6 +4,12 @@
 
 ---
 
+## 零、命令入口约定
+
+- 所有阶段切换和 `focus_work_item` 切换都必须通过标准 runtime 入口执行，不要手改 `meta.yaml`。
+- 入口解析顺序：先尝试 `codespec <cmd>`；若当前 shell 不可调用，再尝试工作区 runtime（常见布局：`../.codespec/codespec <cmd>`）；若两者都不可用，停止并报告 runtime not found。
+- `codespec start-implementation <WI-ID>` 既可用于 `Design -> Implementation`，也可用于 `Implementation` 阶段内切换 `focus_work_item`。
+
 ## 一、当前阶段要读什么
 
 **每次启动必读**：
@@ -48,6 +54,8 @@
 - `focus_work_item` 为 null 时跳过 work-items 读取
 - `contract_refs` 为空时跳过 contracts 读取
 - appendices 按需深入，不是每次必读
+- 项目文档（`../project-docs/<base_version>/`）不在 readset 中，只在用户明确要求时读取
+- 第一个版本（v1.0）的 base_version 为 null，无项目文档可读
 
 ---
 

@@ -121,9 +121,9 @@ collect_active_work_items() {
     if [ "$unique_count" -ne "$total_count" ]; then
       die "Duplicate work items found in active_work_items"
     fi
-  fi
 
-  echo "$items"
+    printf '%s\n' "$items"
+  fi
 }
 
 contains_exact_line() {
@@ -583,8 +583,9 @@ clarification_deferred_missing_exit_phase_items() {
 }
 
 gate_metadata_consistency() {
-  local phase focus_wi execution_group execution_branch active=() wi
+  local phase status focus_wi execution_group execution_branch active=() wi
   phase="$(yaml_scalar "$META_FILE" phase)"
+  status="$(yaml_scalar "$META_FILE" status)"
   focus_wi="$(yaml_scalar "$META_FILE" focus_work_item)"
   execution_group="$(yaml_scalar "$META_FILE" execution_group)"
   execution_branch="$(yaml_scalar "$META_FILE" execution_branch)"
@@ -611,8 +612,12 @@ gate_metadata_consistency() {
       ;;
     Deployment)
       [ "$focus_wi" = 'null' ] || die 'Deployment phase requires focus_work_item = null'
-      # Deployment 阶段也保留 active_work_items
-      [ "${#active[@]}" -gt 0 ] || die 'Deployment phase requires active_work_items to be non-empty (should be preserved from Implementation)'
+      if [ "$status" = 'completed' ]; then
+        [ "${#active[@]}" -eq 0 ] || die 'completed status requires active_work_items = []'
+      else
+        # Deployment 阶段也保留 active_work_items
+        [ "${#active[@]}" -gt 0 ] || die 'Deployment phase requires active_work_items to be non-empty (should be preserved from Implementation)'
+      fi
       ;;
   esac
 
@@ -836,96 +841,111 @@ testing_target_acceptance_ids() {
 testing_record_scalar() {
   local acc="$1"
   local key="$2"
-  awk -v acc="$acc" -v key="$key" '
-    BEGIN { in_record = 0 }
-    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
-      in_record = 1
-      next
-    }
-    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
-      exit
-    }
-    in_record && $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
-      sub(/[[:space:]]*$/, "", line)
-      print line
-      exit
-    }
-  ' "$TESTING_FILE"
+  testing_record_pass_scalar "$acc" "$key"
 }
 
 testing_record_scalar_from_scope() {
   local acc="$1"
   local key="$2"
   local scope="$3"
+  testing_record_pass_scalar "$acc" "$key" "$scope"
+}
+
+testing_record_pass_scalar() {
+  local acc="$1"
+  local key="$2"
+  local scope="${3:-}"
   awk -v acc="$acc" -v key="$key" -v scope="$scope" '
-    BEGIN { in_record = 0; record_scope = ""; record_lines = "" }
-    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
-      # Process previous record if any
-      if (in_record && record_scope == scope) {
-        # Extract key from record_lines
-        split(record_lines, lines, "\n")
-        for (i in lines) {
-          if (lines[i] ~ "^[[:space:]]*" key ":[[:space:]]*") {
-            line = lines[i]
-            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
-            sub(/[[:space:]]*$/, "", line)
-            print line
-            exit
-          }
-        }
-      }
-      # Start new record
-      in_record = 1
-      record_scope = ""
-      record_lines = ""
-      next
-    }
-    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
-      # Process current record before starting new one
-      if (record_scope == scope) {
-        split(record_lines, lines, "\n")
-        for (i in lines) {
-          if (lines[i] ~ "^[[:space:]]*" key ":[[:space:]]*") {
-            line = lines[i]
-            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
-            sub(/[[:space:]]*$/, "", line)
-            print line
-            exit
-          }
-        }
-      }
+    function reset_record() {
       in_record = 0
       record_scope = ""
-      record_lines = ""
+      record_result = ""
+      record_value = ""
+    }
+
+    function flush_record() {
+      if (!in_record) {
+        return
+      }
+
+      if (record_result != "" && record_result != "pass" && record_result != "fail") {
+        print "ERROR: invalid result value: " record_result " (must be pass or fail)" > "/dev/stderr"
+        exit_code = 1
+        should_abort = 1
+        return
+      }
+
+      if (record_result != "pass") {
+        return
+      }
+
+      if (scope != "" && record_scope != scope) {
+        return
+      }
+
+      selected = record_value
+      found = 1
+    }
+
+    BEGIN {
+      reset_record()
+      found = 0
+      should_abort = 0
+      exit_code = 0
+    }
+
+    /^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$/ {
+      flush_record()
+      if (should_abort) {
+        exit exit_code
+      }
+
+      reset_record()
+      if ($0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$") {
+        in_record = 1
+      }
       next
     }
-    in_record {
-      # Collect all lines in the record
-      if (record_lines != "") record_lines = record_lines "\n"
-      record_lines = record_lines $0
-      # Extract test_scope
-      if ($0 ~ "^[[:space:]]*test_scope:[[:space:]]*") {
-        line = $0
-        sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
-        sub(/[[:space:]]*$/, "", line)
-        record_scope = line
+
+    !in_record { next }
+
+    /^[[:space:]]*test_scope:[[:space:]]*/ {
+      line = $0
+      sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_scope = line
+      if (key == "test_scope") {
+        record_value = line
       }
+      next
     }
+
+    /^[[:space:]]*result:[[:space:]]*/ {
+      line = $0
+      sub("^[[:space:]]*result:[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_result = tolower(line)
+      if (key == "result") {
+        record_value = record_result
+      }
+      next
+    }
+
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_value = line
+      next
+    }
+
     END {
-      # Process last record
-      if (in_record && record_scope == scope) {
-        split(record_lines, lines, "\n")
-        for (i in lines) {
-          if (lines[i] ~ "^[[:space:]]*" key ":[[:space:]]*") {
-            line = lines[i]
-            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
-            sub(/[[:space:]]*$/, "", line)
-            print line
-            exit
-          }
-        }
+      flush_record()
+      if (should_abort) {
+        exit exit_code
+      }
+      if (found) {
+        print selected
       }
     }
   ' "$TESTING_FILE"
@@ -961,86 +981,18 @@ spec_acceptance_priority() {
 
 has_testing_record() {
   local acc="$1"
+  local result
   [ -f "$TESTING_FILE" ] || return 1
-  awk -v acc="$acc" '
-    BEGIN { in_record = 0; found = 0 }
-    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
-      in_record = 1
-      result = ""
-      next
-    }
-    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
-      if (result == "pass") {
-        found = 1
-        exit
-      }
-      in_record = 0
-      result = ""
-      next
-    }
-    in_record && $0 ~ "^[[:space:]]*result:[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*result:[[:space:]]*", "", line)
-      sub(/[[:space:]]*$/, "", line)
-      result = line
-      # Validate result value
-      if (result != "pass" && result != "fail") {
-        print "ERROR: invalid result value: " result " (must be pass or fail)" > "/dev/stderr"
-        exit 1
-      }
-    }
-    END {
-      if (in_record && result == "pass") {
-        found = 1
-      }
-      exit (found ? 0 : 1)
-    }
-  ' "$TESTING_FILE"
+  result="$(testing_record_scalar "$acc" result)" || return 1
+  [ "$result" = 'pass' ]
 }
 
 has_full_integration_pass() {
   local acc="$1"
+  local result
   [ -f "$TESTING_FILE" ] || return 1
-  awk -v acc="$acc" '
-    BEGIN { in_record = 0; found = 0 }
-    $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
-      in_record = 1
-      test_scope = ""
-      result = ""
-      next
-    }
-    in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
-      if (test_scope == "full-integration" && result == "pass") {
-        found = 1
-        exit
-      }
-      in_record = 0
-      next
-    }
-    in_record && $0 ~ "^[[:space:]]*test_scope:[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*test_scope:[[:space:]]*", "", line)
-      sub(/[[:space:]]*$/, "", line)
-      test_scope = line
-    }
-    in_record && $0 ~ "^[[:space:]]*result:[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*result:[[:space:]]*", "", line)
-      sub(/[[:space:]]*$/, "", line)
-      result = line
-      # Validate result value
-      if (result != "pass" && result != "fail") {
-        print "ERROR: invalid result value: " result " (must be pass or fail)" > "/dev/stderr"
-        exit 1
-      }
-    }
-    END {
-      if (in_record && test_scope == "full-integration" && result == "pass") {
-        found = 1
-      }
-      exit (found ? 0 : 1)
-    }
-  ' "$TESTING_FILE"
+  result="$(testing_record_scalar_from_scope "$acc" result full-integration)" || return 1
+  [ "$result" = 'pass' ]
 }
 
 check_circular_dependencies() {

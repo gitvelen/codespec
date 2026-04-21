@@ -271,7 +271,10 @@ assert_phase_transition() {
       [ "$current_phase" = 'Requirements' ] || die "cannot move from ${current_phase} to ${target_phase}"
       ;;
     Implementation)
-      [ "$current_phase" = 'Design' ] || die "cannot move from ${current_phase} to ${target_phase}"
+      if [ "$current_phase" = 'Design' ] || [ "$current_phase" = 'Implementation' ]; then
+        return
+      fi
+      die "cannot move from ${current_phase} to ${target_phase}"
       ;;
     Testing)
       [ "$current_phase" = 'Implementation' ] || die "cannot move from ${current_phase} to ${target_phase}"
@@ -472,6 +475,232 @@ complete_change() {
   log "completed change"
 }
 
+generate_project_docs() {
+  require_yq
+  local version="${1:?usage: codespec generate-project-docs <version>}"
+  local project_root workspace_root
+  project_root="$(find_project_root)"
+  workspace_root="$(find_workspace_root)"
+  local meta="$project_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml"
+
+  local current_status current_phase
+  current_status="$(yaml_scalar "$meta" status)"
+  current_phase="$(yaml_scalar "$meta" phase)"
+
+  [ "$current_status" = 'completed' ] || die 'generate-project-docs requires completed status'
+  [ "$current_phase" = 'Deployment' ] || die 'generate-project-docs requires Deployment phase'
+
+  [ -f "$project_root/deployment.md" ] || die 'deployment.md not found'
+
+  local target_dir="$workspace_root/project-docs/$version"
+  [ ! -e "$target_dir" ] || die "project docs already exist: project-docs/$version"
+
+  log "generating project documentation for version $version..."
+
+  mkdir -p "$target_dir"
+
+  log "generating 系统功能说明书.md..."
+  cat > "$target_dir/系统功能说明书.md" <<'EOF'
+# 系统功能说明书
+
+> 本文档从 spec.md 生成，描述系统当前功能全貌。
+
+## 文档元信息
+| 项 | 值 |
+|---|---|
+| 版本 | __VERSION__ |
+| 生成时间 | __DATE__ |
+| 状态 | Approved |
+
+## 功能概述
+
+（从 spec.md 提取功能列表）
+
+---
+
+## 详细内容
+
+请参考源文件：
+- spec.md - 完整需求规格
+- design.md - 技术设计
+- work-items/*.yaml - 工作项详情
+
+EOF
+
+  log "generating 技术方案设计.md..."
+  cat > "$target_dir/技术方案设计.md" <<'EOF'
+# 技术方案设计
+
+> 本文档从 design.md 生成，描述系统架构和技术决策。
+
+## 文档元信息
+| 项 | 值 |
+|---|---|
+| 版本 | __VERSION__ |
+| 生成时间 | __DATE__ |
+| 状态 | Approved |
+
+## 架构概述
+
+（从 design.md 提取架构设计）
+
+---
+
+## 详细内容
+
+请参考源文件：
+- design.md - 完整设计文档
+- contracts/*.md - 接口合约
+
+EOF
+
+  log "generating 接口文档.md..."
+  cat > "$target_dir/接口文档.md" <<'EOF'
+# 接口文档
+
+> 本文档从 contracts/ 生成，描述系统接口定义。
+
+## 文档元信息
+| 项 | 值 |
+|---|---|
+| 版本 | __VERSION__ |
+| 生成时间 | __DATE__ |
+| 状态 | Approved |
+
+## 接口列表
+
+（从 contracts/ 提取接口定义）
+
+---
+
+## 详细内容
+
+请参考源文件：
+- contracts/*.md - 接口合约详情
+
+EOF
+
+  log "generating 用户手册.md..."
+  cat > "$target_dir/用户手册.md" <<'EOF'
+# 用户手册
+
+> 本文档从 spec.md 和 design.md 综合生成，描述系统使用方式。
+
+## 文档元信息
+| 项 | 值 |
+|---|---|
+| 版本 | __VERSION__ |
+| 生成时间 | __DATE__ |
+| 状态 | Approved |
+
+## 快速开始
+
+（从 spec.md 和 design.md 提取使用说明）
+
+---
+
+## 详细内容
+
+请参考源文件：
+- spec.md - 功能说明
+- design.md - 技术实现
+
+EOF
+
+  log "generating 部署记录.md..."
+  if [ -f "$project_root/deployment.md" ]; then
+    cp "$project_root/deployment.md" "$target_dir/部署记录.md"
+  fi
+
+  log "generating 测试报告.md..."
+  if [ -f "$project_root/testing.md" ]; then
+    cp "$project_root/testing.md" "$target_dir/测试报告.md"
+  fi
+
+  TODAY="$(date +%F)"
+  for doc in "$target_dir"/*.md; do
+    [ -f "$doc" ] || continue
+    sed -i "s/__VERSION__/$version/g" "$doc"
+    sed -i "s/__DATE__/$TODAY/g" "$doc"
+  done
+
+  log "project documentation generated: project-docs/$version"
+  log "documents:"
+  log "  - 系统功能说明书.md"
+  log "  - 技术方案设计.md"
+  log "  - 接口文档.md"
+  log "  - 用户手册.md"
+  log "  - 部署记录.md"
+  log "  - 测试报告.md"
+}
+
+reset_to_proposal() {
+  require_yq
+  local project_root workspace_root
+  project_root="$(find_project_root)"
+  workspace_root="$(find_workspace_root)"
+  local meta="$project_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml"
+
+  local current_status current_phase change_id
+  current_status="$(yaml_scalar "$meta" status)"
+  current_phase="$(yaml_scalar "$meta" phase)"
+  change_id="$(yaml_scalar "$meta" change_id)"
+
+  [ "$current_status" = 'completed' ] || die 'reset-to-proposal requires completed status'
+  [ "$current_phase" = 'Deployment' ] || die 'reset-to-proposal requires Deployment phase'
+
+  [ -d "$workspace_root/versions/$change_id" ] || die "version $change_id not found in versions/ (run promote-version first)"
+
+  local keep_contracts=false
+  if find_optional_arg '--keep-contracts' "$@"; then
+    keep_contracts=true
+  fi
+
+  log "resetting dossier to Proposal phase..."
+
+  cp "$workspace_root/.codespec/templates/spec.md" "$project_root/spec.md"
+  cp "$workspace_root/.codespec/templates/design.md" "$project_root/design.md"
+
+  rm -f "$project_root/testing.md"
+  rm -f "$project_root/deployment.md"
+  rm -rf "$project_root/work-items"
+  mkdir -p "$project_root/work-items"
+
+  rm -rf "$project_root/reviews"
+  mkdir -p "$project_root/reviews"
+  TODAY="$(date +%F)"
+  cat > "$project_root/reviews/requirements-review.yaml" <<EOF
+phase: Proposal
+verdict: approved
+reviewed_by: codespec-reset
+reviewed_at: $TODAY
+EOF
+
+  if [ "$keep_contracts" = false ]; then
+    rm -rf "$project_root/contracts"
+    mkdir -p "$project_root/contracts"
+  fi
+
+  RENDER_DATE="$TODAY" \
+  RENDER_CHANGE_ID="$change_id-next" \
+  RENDER_BASE_VERSION="$change_id" \
+  RENDER_FEATURE_BRANCH="$(current_git_branch "$project_root")" \
+  RENDER_EXECUTION_GROUP="null" \
+  RENDER_EXECUTION_BRANCH="null" \
+  RENDER_PHASE="Proposal" \
+  RENDER_STATUS="active" \
+  RENDER_FOCUS_WORK_ITEM="null" \
+  RENDER_ACTIVE_WORK_ITEMS="[]" \
+  RENDER_UPDATED_BY="codespec-reset" \
+  render_template "$workspace_root/.codespec/templates/meta.yaml" "$project_root/meta.yaml"
+
+  log "reset to Proposal phase"
+  log "base_version: $change_id"
+  log "new change_id: $change_id-next"
+}
+
 set_active_work_items() {
   require_yq
   local raw="${1:?usage: codespec set-active-work-items <WI-001,WI-002|[]>}"
@@ -529,11 +758,76 @@ promote_version() {
     copy_dir_contents "$project_root/src" "$target_root/src"
   fi
 
-  TODAY="$(date +%F)" yq eval '.status = "completed" | .focus_work_item = null | .updated_at = env(TODAY) | .updated_by = "codespec-promote"' -i "$target_root/meta.yaml"
+  TODAY="$(date +%F)" yq eval '.status = "completed" | .focus_work_item = null | .active_work_items = [] | .updated_at = env(TODAY) | .updated_by = "codespec-promote"' -i "$target_root/meta.yaml"
 
   log "promoted dossier"
   log "source: $project_root"
   log "target: versions/$stable_version"
+}
+
+list_versions() {
+  require_yq
+  local workspace_root
+  workspace_root="$(find_workspace_root)"
+  local versions_dir="$workspace_root/versions"
+
+  [ -d "$versions_dir" ] || die "versions directory not found: $versions_dir"
+
+  local output_json=false
+  if find_optional_arg '--json' "$@"; then
+    output_json=true
+  fi
+
+  if [ "$output_json" = true ]; then
+    printf '[\n'
+    local first=1
+    for version_dir in "$versions_dir"/*; do
+      [ -d "$version_dir" ] || continue
+      local version_name
+      version_name="$(basename "$version_dir")"
+      local meta_file="$version_dir/meta.yaml"
+      [ -f "$meta_file" ] || continue
+
+      if [ "$first" -eq 0 ]; then
+        printf ',\n'
+      fi
+
+      local change_id status base_version created_at
+      change_id="$(yaml_scalar "$meta_file" change_id)"
+      status="$(yaml_scalar "$meta_file" status)"
+      base_version="$(yaml_scalar "$meta_file" base_version)"
+      created_at="$(yaml_scalar "$meta_file" created_at)"
+
+      printf '  {\n'
+      printf '    "version": %s,\n' "$(json_quote "$version_name")"
+      printf '    "change_id": %s,\n' "$(json_quote "$change_id")"
+      printf '    "status": %s,\n' "$(json_quote "$status")"
+      printf '    "base_version": %s,\n' "$(json_quote "$base_version")"
+      printf '    "created_at": %s\n' "$(json_quote "$created_at")"
+      printf '  }'
+
+      first=0
+    done
+    printf '\n]\n'
+  else
+    printf 'Version\t\tCreated\t\tStatus\t\tBase Version\n'
+    printf -- '-------\t\t-------\t\t------\t\t------------\n'
+    for version_dir in "$versions_dir"/*; do
+      [ -d "$version_dir" ] || continue
+      local version_name
+      version_name="$(basename "$version_dir")"
+      local meta_file="$version_dir/meta.yaml"
+      [ -f "$meta_file" ] || continue
+
+      local change_id status base_version created_at
+      change_id="$(yaml_scalar "$meta_file" change_id)"
+      status="$(yaml_scalar "$meta_file" status)"
+      base_version="$(yaml_scalar "$meta_file" base_version)"
+      created_at="$(yaml_scalar "$meta_file" created_at)"
+
+      printf '%s\t%s\t%s\t%s\n' "$version_name" "$created_at" "$status" "$base_version"
+    done
+  fi
 }
 
 install_hooks() {
@@ -756,16 +1050,26 @@ Usage:
   codespec start-testing
   codespec start-deployment
   codespec complete-change
+  codespec generate-project-docs <version>
+  codespec reset-to-proposal [--keep-contracts]
   codespec install-hooks
   codespec check-gate <name>
   codespec status
   codespec readset
   codespec materialize-deployment
   codespec promote-version <stable-version>
+  codespec list-versions [--json]
 
 Installation:
   /path/to/.codespec/scripts/install-workspace.sh <workspace_root>
   /path/to/.codespec/scripts/init-dossier.sh
+
+Version lifecycle:
+  complete-change -> mark Deployment change completed
+  generate-project-docs -> generate project documentation from dossier
+  promote-version -> archive dossier to versions/<version>
+  reset-to-proposal -> reset dossier to Proposal phase for next version
+  list-versions -> list all archived versions
 
 Gate views:
   spec-completeness -> proposal-maturity + requirements-approval
@@ -781,7 +1085,7 @@ Gate views:
 Lifecycle commands:
   start-requirements -> Proposal -> Requirements
   start-design -> Requirements -> Design
-  start-implementation -> Design -> Implementation and set focus_work_item
+  start-implementation -> Design -> Implementation or Implementation -> Implementation, and set/switch focus_work_item
   set-active-work-items -> update active_work_items explicitly (design/manual branch execution set; runtime does not provide complete multi-WI union enforcement)
   start-testing -> Implementation -> Testing (preserves active_work_items for verification gate)
   start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment in_progress reopen; auto-materializes deployment.md if missing)
@@ -829,6 +1133,15 @@ main() {
       ;;
     complete-change)
       complete_change "$@"
+      ;;
+    generate-project-docs)
+      generate_project_docs "$@"
+      ;;
+    reset-to-proposal)
+      reset_to_proposal "$@"
+      ;;
+    list-versions)
+      list_versions "$@"
       ;;
     install-hooks)
       install_hooks "$@"

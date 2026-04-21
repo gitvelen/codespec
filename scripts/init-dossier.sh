@@ -13,6 +13,20 @@ die() {
   exit 1
 }
 
+resolve_codespec_cmd() {
+  if command -v codespec >/dev/null 2>&1; then
+    printf 'codespec'
+    return
+  fi
+
+  if [ -x "$WORKSPACE_ROOT/.codespec/codespec" ]; then
+    printf '%s' "$WORKSPACE_ROOT/.codespec/codespec"
+    return
+  fi
+
+  die "could not resolve codespec runtime; expected codespec in PATH or $WORKSPACE_ROOT/.codespec/codespec"
+}
+
 # 查找工作区根目录
 find_workspace_root() {
   local dir="$PWD"
@@ -98,4 +112,5 @@ log "initialized dossier in: $PROJECT_ROOT"
 log ""
 log "Next steps:"
 log "1. Edit spec.md to define requirements"
-log "2. Run: codespec start-requirements"
+log "2. Run: $(resolve_codespec_cmd) start-requirements"
+log "3. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"

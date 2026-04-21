@@ -24,6 +24,22 @@ error() {
   exit 1
 }
 
+resolve_codespec_cmd() {
+  local workspace_dir="$1"
+
+  if command -v codespec >/dev/null 2>&1; then
+    printf 'codespec'
+    return
+  fi
+
+  if [ -x "$workspace_dir/.codespec/codespec" ]; then
+    printf '%s' "$workspace_dir/.codespec/codespec"
+    return
+  fi
+
+  error "无法解析 codespec 运行时：既不在 PATH 中，也不存在 $workspace_dir/.codespec/codespec"
+}
+
 usage() {
   cat <<EOF
 codespec v2.0 一键安装脚本
@@ -48,7 +64,9 @@ codespec v2.0 一键安装脚本
 
 安装后:
   cd <workspace-dir>/<project-name>
-  codespec start-requirements
+  # 使用标准 runtime 入口推进阶段：
+  # 优先 `codespec start-requirements`
+  # 若 codespec 不在 PATH，则使用 <workspace-dir>/.codespec/codespec start-requirements
 EOF
 }
 
@@ -130,6 +148,8 @@ show_next_steps() {
   local workspace_dir="$1"
   local project_name="${2:-main}"
   local project_dir="$workspace_dir/$project_name"
+  local codespec_cmd
+  codespec_cmd="$(resolve_codespec_cmd "$workspace_dir")"
 
   cat <<EOF
 
@@ -148,7 +168,7 @@ ${GREEN}========================================${NC}
   vim spec.md
 
   ${YELLOW}# 3. 开始 Requirements 阶段${NC}
-  codespec start-requirements
+  $codespec_cmd start-requirements
 
   ${YELLOW}# 4. 创建 review verdict 并进入 Design 阶段${NC}
   mkdir -p reviews
@@ -158,16 +178,18 @@ verdict: approved
 reviewed_by: $(git config user.name || echo "your-name")
 reviewed_at: \$(date +%F)
 EOFR
-  codespec start-design
+  $codespec_cmd start-design
 
   ${YELLOW}# 5. 查看当前状态${NC}
-  codespec status
+  $codespec_cmd status
 
   ${YELLOW}# 6. 查看推荐阅读文件${NC}
-  codespec readset
+  $codespec_cmd readset
+
+  ${YELLOW}# 7. 后续阶段/焦点切换继续使用同一入口，不要手改 meta.yaml${NC}
 
 更多帮助:
-  - 查看命令帮助: codespec --help
+  - 查看命令帮助: $codespec_cmd --help
   - 运行测试: bash $workspace_dir/.codespec/scripts/smoke.sh
 
 EOF

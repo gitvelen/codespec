@@ -13,6 +13,20 @@ die() {
   exit 1
 }
 
+resolve_codespec_cmd() {
+  if command -v codespec >/dev/null 2>&1; then
+    printf 'codespec'
+    return
+  fi
+
+  if [ -x "$WORKSPACE_ROOT/.codespec/codespec" ]; then
+    printf '%s' "$WORKSPACE_ROOT/.codespec/codespec"
+    return
+  fi
+
+  die "could not resolve codespec runtime; expected codespec in PATH or $WORKSPACE_ROOT/.codespec/codespec"
+}
+
 WORKSPACE_ROOT="${1:-$PWD}"
 
 [ -d "$WORKSPACE_ROOT" ] || die "workspace root does not exist: $WORKSPACE_ROOT"
@@ -80,4 +94,5 @@ log ""
 log "Next steps:"
 log "1. Create or clone a Git repository in this workspace"
 log "2. cd into the repository directory"
-log "3. Run: codespec init-dossier"
+log "3. Initialize a dossier from the project directory: $WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh"
+log "4. Advance phases via the standard runtime entry: $(resolve_codespec_cmd) start-requirements"
