@@ -747,4 +747,58 @@ assert_json_eq "$readset_json" '.entry_files[0].path' '"AGENTS.md"'
 assert_json_eq "$readset_json" '.minimal_readset | map(select(.path == "meta.yaml")) | length' '1'
 log "✓ readset JSON output correct"
 
+# Test 14: reset-to-proposal resolves promoted version from archived baseline metadata
+log "\n=== Test 14: reset-to-proposal ==="
+
+yq eval '.change_id = "baseline" | .base_version = null | .phase = "Deployment" | .status = "completed" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml
+
+"$TMP_WORKSPACE/.codespec/codespec" promote-version smoke-v2.8
+
+[ -f "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml" ] || die "promote-version did not archive baseline version"
+promoted_version=$(yq eval '.promoted_version' "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml")
+[ "$promoted_version" = "smoke-v2.8" ] || die "promoted_version metadata missing from archived meta"
+promoted_at=$(yq eval '.promoted_at' "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml")
+[ "$promoted_at" != "null" ] || die "promoted_at metadata missing from archived meta"
+
+list_versions_output=$("$TMP_WORKSPACE/.codespec/codespec" list-versions)
+assert_contains "$list_versions_output" "Promoted Version"
+assert_contains "$list_versions_output" "Promoted At"
+assert_contains "$list_versions_output" "smoke-v2.8"
+log "✓ list-versions text output includes promoted metadata"
+
+list_versions_json=$("$TMP_WORKSPACE/.codespec/codespec" list-versions --json)
+assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].promoted_version' '"smoke-v2.8"'
+assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].promoted_at | length > 0' 'true'
+log "✓ list-versions JSON output includes promoted metadata"
+
+"$TMP_WORKSPACE/.codespec/codespec" reset-to-proposal
+
+reset_phase=$(yq eval '.phase' meta.yaml)
+[ "$reset_phase" = "Proposal" ] || die "reset-to-proposal did not return to Proposal phase"
+reset_status=$(yq eval '.status' meta.yaml)
+[ "$reset_status" = "active" ] || die "reset-to-proposal did not reactivate dossier"
+reset_base_version=$(yq eval '.base_version' meta.yaml)
+[ "$reset_base_version" = "smoke-v2.8" ] || die "reset-to-proposal did not carry promoted version into base_version"
+reset_change_id=$(yq eval '.change_id' meta.yaml)
+[ "$reset_change_id" = "smoke-v2.8-next" ] || die "reset-to-proposal did not derive next change_id from promoted version"
+log "✓ reset-to-proposal resolves promoted baseline version"
+
+# Legacy compatibility: same-name archive should still reset through the direct path.
+mkdir -p "$TMP_WORKSPACE/versions/release-1"
+cp "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml" "$TMP_WORKSPACE/versions/release-1/meta.yaml"
+yq eval '.change_id = "release-1" | .promoted_version = "release-1"' -i "$TMP_WORKSPACE/versions/release-1/meta.yaml"
+yq eval '.change_id = "release-1" | .base_version = null | .phase = "Deployment" | .status = "completed" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml
+
+"$TMP_WORKSPACE/.codespec/codespec" reset-to-proposal
+
+legacy_base_version=$(yq eval '.base_version' meta.yaml)
+[ "$legacy_base_version" = "release-1" ] || die "reset-to-proposal should preserve direct same-name archive compatibility"
+legacy_change_id=$(yq eval '.change_id' meta.yaml)
+[ "$legacy_change_id" = "release-1-next" ] || die "legacy same-name archive should derive release-1-next change_id"
+log "✓ reset-to-proposal preserves same-name archive compatibility"
+
+expect_fail_cmd \
+  "current completed dossier has not been promoted yet" \
+  "cd '$TMP_WORKSPACE/test-project' && yq eval '.change_id = \"unpromoted\" | .base_version = null | .phase = \"Deployment\" | .status = \"completed\" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml && '$TMP_WORKSPACE/.codespec/codespec' reset-to-proposal"
+
 log "\n=== All tests passed ==="

@@ -237,6 +237,45 @@ current_git_branch() {
   printf 'none'
 }
 
+resolve_promoted_base_version() {
+  local workspace_root="$1"
+  local current_change_id="$2"
+  local versions_dir="$workspace_root/versions"
+  local direct_meta="$versions_dir/$current_change_id/meta.yaml"
+
+  if [ -f "$direct_meta" ] && [ "$(yaml_scalar "$direct_meta" change_id)" = "$current_change_id" ]; then
+    printf '%s\n' "$current_change_id"
+    return
+  fi
+
+  [ -d "$versions_dir" ] || die "versions directory not found: $versions_dir"
+
+  local candidate_lines=""
+  local meta_file version_dir version_name archived_change_id promoted_at promoted_flag mtime
+  while IFS= read -r -d '' meta_file; do
+    version_dir="$(dirname "$meta_file")"
+    version_name="$(basename "$version_dir")"
+    archived_change_id="$(yaml_scalar "$meta_file" change_id)"
+    [ "$archived_change_id" = "$current_change_id" ] || continue
+
+    promoted_at="$(yq eval '.promoted_at // ""' "$meta_file")"
+    promoted_flag=0
+    if [ -n "$promoted_at" ]; then
+      promoted_flag=1
+    fi
+    mtime="$(stat -c '%Y' "$version_dir")"
+
+    candidate_lines+="$promoted_flag"$'\t'"$promoted_at"$'\t'"$mtime"$'\t'"$version_name"$'\n'
+  done < <(find "$versions_dir" -mindepth 2 -maxdepth 2 -name meta.yaml -print0)
+
+  [ -n "$candidate_lines" ] || die "current completed dossier has not been promoted yet (run promote-version <stable-version> first)"
+
+  printf '%s' "$candidate_lines" \
+    | sort -t $'\t' -k1,1nr -k2,2r -k3,3nr -k4,4r \
+    | head -n 1 \
+    | cut -f4
+}
+
 branch_alignment_status() {
   local project_root="$1"
   local expected_branch="$2"
@@ -643,15 +682,14 @@ reset_to_proposal() {
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
 
-  local current_status current_phase change_id
+  local current_status current_phase change_id base_version
   current_status="$(yaml_scalar "$meta" status)"
   current_phase="$(yaml_scalar "$meta" phase)"
   change_id="$(yaml_scalar "$meta" change_id)"
 
   [ "$current_status" = 'completed' ] || die 'reset-to-proposal requires completed status'
   [ "$current_phase" = 'Deployment' ] || die 'reset-to-proposal requires Deployment phase'
-
-  [ -d "$workspace_root/versions/$change_id" ] || die "version $change_id not found in versions/ (run promote-version first)"
+  base_version="$(resolve_promoted_base_version "$workspace_root" "$change_id")"
 
   local keep_contracts=false
   if find_optional_arg '--keep-contracts' "$@"; then
@@ -684,8 +722,8 @@ EOF
   fi
 
   RENDER_DATE="$TODAY" \
-  RENDER_CHANGE_ID="$change_id-next" \
-  RENDER_BASE_VERSION="$change_id" \
+  RENDER_CHANGE_ID="$base_version-next" \
+  RENDER_BASE_VERSION="$base_version" \
   RENDER_FEATURE_BRANCH="$(current_git_branch "$project_root")" \
   RENDER_EXECUTION_GROUP="null" \
   RENDER_EXECUTION_BRANCH="null" \
@@ -697,8 +735,8 @@ EOF
   render_template "$workspace_root/.codespec/templates/meta.yaml" "$project_root/meta.yaml"
 
   log "reset to Proposal phase"
-  log "base_version: $change_id"
-  log "new change_id: $change_id-next"
+  log "base_version: $base_version"
+  log "new change_id: $base_version-next"
 }
 
 set_active_work_items() {
@@ -758,7 +796,10 @@ promote_version() {
     copy_dir_contents "$project_root/src" "$target_root/src"
   fi
 
-  TODAY="$(date +%F)" yq eval '.status = "completed" | .focus_work_item = null | .active_work_items = [] | .updated_at = env(TODAY) | .updated_by = "codespec-promote"' -i "$target_root/meta.yaml"
+  TODAY="$(date +%F)" \
+  STABLE_VERSION="$stable_version" \
+  PROMOTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
+    yq eval '.status = "completed" | .focus_work_item = null | .active_work_items = [] | .updated_at = env(TODAY) | .updated_by = "codespec-promote" | .promoted_version = strenv(STABLE_VERSION) | .promoted_at = strenv(PROMOTED_AT)' -i "$target_root/meta.yaml"
 
   log "promoted dossier"
   log "source: $project_root"
@@ -792,26 +833,30 @@ list_versions() {
         printf ',\n'
       fi
 
-      local change_id status base_version created_at
+      local change_id status base_version created_at promoted_version promoted_at
       change_id="$(yaml_scalar "$meta_file" change_id)"
       status="$(yaml_scalar "$meta_file" status)"
       base_version="$(yaml_scalar "$meta_file" base_version)"
       created_at="$(yaml_scalar "$meta_file" created_at)"
+      promoted_version="$(yq eval '.promoted_version // ""' "$meta_file")"
+      promoted_at="$(yq eval '.promoted_at // ""' "$meta_file")"
 
       printf '  {\n'
       printf '    "version": %s,\n' "$(json_quote "$version_name")"
       printf '    "change_id": %s,\n' "$(json_quote "$change_id")"
       printf '    "status": %s,\n' "$(json_quote "$status")"
       printf '    "base_version": %s,\n' "$(json_quote "$base_version")"
-      printf '    "created_at": %s\n' "$(json_quote "$created_at")"
+      printf '    "created_at": %s,\n' "$(json_quote "$created_at")"
+      printf '    "promoted_version": %s,\n' "$(json_quote "$promoted_version")"
+      printf '    "promoted_at": %s\n' "$(json_quote "$promoted_at")"
       printf '  }'
 
       first=0
     done
     printf '\n]\n'
   else
-    printf 'Version\t\tCreated\t\tStatus\t\tBase Version\n'
-    printf -- '-------\t\t-------\t\t------\t\t------------\n'
+    printf 'Version\tCreated\tStatus\tBase Version\tPromoted Version\tPromoted At\n'
+    printf -- '-------\t-------\t------\t------------\t----------------\t-----------\n'
     for version_dir in "$versions_dir"/*; do
       [ -d "$version_dir" ] || continue
       local version_name
@@ -819,13 +864,15 @@ list_versions() {
       local meta_file="$version_dir/meta.yaml"
       [ -f "$meta_file" ] || continue
 
-      local change_id status base_version created_at
+      local change_id status base_version created_at promoted_version promoted_at
       change_id="$(yaml_scalar "$meta_file" change_id)"
       status="$(yaml_scalar "$meta_file" status)"
       base_version="$(yaml_scalar "$meta_file" base_version)"
       created_at="$(yaml_scalar "$meta_file" created_at)"
+      promoted_version="$(yq eval '.promoted_version // ""' "$meta_file")"
+      promoted_at="$(yq eval '.promoted_at // ""' "$meta_file")"
 
-      printf '%s\t%s\t%s\t%s\n' "$version_name" "$created_at" "$status" "$base_version"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$version_name" "$created_at" "$status" "$base_version" "$promoted_version" "$promoted_at"
     done
   fi
 }

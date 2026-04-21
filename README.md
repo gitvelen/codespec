@@ -319,7 +319,24 @@ codespec promote-version v1.0
 codespec reset-to-proposal
 # 自动重置到 Proposal 阶段
 # base_version 设置为 v1.0
+# 新 change_id 设置为 v1.0-next
 # 保留 CLAUDE.md, AGENTS.md, contracts/
+```
+
+`reset-to-proposal` 的前提是：当前 completed dossier 已至少执行过一次 `promote-version`。
+它会从 `versions/` 归档记录中解析最近一次 promote 的稳定版本名，而不是要求当前
+`meta.yaml.change_id` 与归档目录名完全一致。
+
+首次基线场景示例：
+
+```bash
+# 假设当前 live dossier 的 change_id 仍然是 baseline
+codespec promote-version v1.0
+codespec reset-to-proposal
+
+# reset 后：
+# base_version = v1.0
+# change_id = v1.0-next
 ```
 
 **方式 B：新建分支（可选）**
@@ -358,10 +375,10 @@ codespec reset-to-proposal
 ```bash
 codespec list-versions
 # 输出：
-# Version    Created      Status      Base Version
-# -------    -------      ------      ------------
-# v1.0       2026-04-20   completed   null
-# v1.1       2026-04-21   completed   v1.0
+# Version    Created      Status      Base Version    Promoted Version    Promoted At
+# -------    -------      ------      ------------    ----------------    -----------
+# v1.0       2026-04-20   completed   null            v1.0                2026-04-20T10:00:00Z
+# v1.1       2026-04-21   completed   v1.0            v1.1                2026-04-21T09:30:00Z
 ```
 
 ---
@@ -460,7 +477,7 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 |------|---------|------|
 | `codespec generate-project-docs <version>` | status=completed, phase=Deployment | 生成项目文档到 project-docs/<version>/ |
 | `codespec promote-version <version>` | status=completed | 归档 dossier 到 versions/<version>/ |
-| `codespec reset-to-proposal [--keep-contracts]` | status=completed, 已执行 promote-version | 重置 dossier 到 Proposal 阶段，开始新版本 |
+| `codespec reset-to-proposal [--keep-contracts]` | status=completed, 当前 completed dossier 已至少执行一次 promote-version | 重置 dossier 到 Proposal 阶段，开始新版本 |
 | `codespec list-versions [--json]` | - | 列出所有已归档版本 |
 
 ### 工作项管理命令
