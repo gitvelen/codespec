@@ -180,6 +180,10 @@
 - `Acceptance Conclusion.status = pass`，`approved_by` 非空，`approved_at` 日期合法。
 - `deployment_date` 与 `target_env` 合法。
 - `smoke_test: pass`。
+- 已显式给出 `restart_required` 判断；不能把“是否要重启”留给人工自己猜。
+- `runtime_ready: pass`，且有可复核证据证明运行态已经就绪，当前运行实例已加载本次部署的新版本，而不是旧进程/旧静态资源。
+- 若 `restart_required: yes`，`runtime_ready_evidence` 必须同时证明重启已经完成；若 `restart_required: no`，理由必须能解释为什么当前部署方式已天然完成热更新/滚动替换。
+- 只有部署闭环已经达到可交接状态时，才能标记 `manual_verification_ready: pass`，然后再提示人工验证。
 - 文档中没有任何模板占位。
 - rollback plan 与 monitoring 能覆盖本次变更的主要失败模式。
 - 若要 promotion，`versions/` 目录存在且允许归档。
@@ -194,6 +198,8 @@
 禁止切换：
 - deployment.md 仍是模板。
 - smoke / deployment verification 没有真实通过证据。
+- 尚未确认当前服务跑的是新代码，却试图把验证交给人工。
+- 需要重启却未完成重启确认，或不需要重启的理由站不住脚。
 - rollback 或 monitoring 只是形式条目。
 - promotion 证据不足却尝试归档稳定版本。
 

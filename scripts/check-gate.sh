@@ -2159,6 +2159,27 @@ gate_deployment_readiness() {
     END { exit !found }
   ' "$deployment_file" || die 'deployment.md smoke_test: pass must be in Verification Results section'
 
+  awk '
+    /^## Verification Results$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /runtime_ready: pass/ { found = 1; exit }
+    END { exit !found }
+  ' "$deployment_file" || die 'deployment.md runtime_ready: pass must be in Verification Results section'
+
+  awk '
+    /^## Verification Results$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /^runtime_ready_evidence:[[:space:]]*[^[]/ { found = 1; exit }
+    END { exit !found }
+  ' "$deployment_file" || die 'deployment.md runtime_ready_evidence is required in Verification Results section'
+
+  awk '
+    /^## Verification Results$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /manual_verification_ready: pass/ { found = 1; exit }
+    END { exit !found }
+  ' "$deployment_file" || die 'deployment.md manual_verification_ready: pass must be in Verification Results section'
+
   # Check required sections exist
   grep -q '^## Deployment Plan$' "$deployment_file" || die 'deployment.md missing Deployment Plan section'
   grep -q '^## Pre-deployment Checklist$' "$deployment_file" || die 'deployment.md missing Pre-deployment Checklist section'
@@ -2185,16 +2206,57 @@ gate_deployment_readiness() {
     END { exit !(found_env && found_date) }
   ' "$deployment_file" || die 'deployment.md target_env and deployment_date must be in Deployment Plan section'
 
+  awk '
+    /^## Deployment Plan$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /^restart_required:[[:space:]]*(yes|no)$/ { found = 1; exit }
+    END { exit !found }
+  ' "$deployment_file" || die 'deployment.md restart_required must be yes or no in Deployment Plan section'
+
+  grep -Eq '^restart_reason:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md restart_reason is missing'
+
+  local restart_required
+  restart_required="$(awk '
+    /^## Deployment Plan$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /^restart_required:[[:space:]]*(yes|no)$/ {
+      sub(/^restart_required:[[:space:]]*/, "")
+      gsub(/[[:space:]]+$/, "")
+      print
+      exit
+    }
+  ' "$deployment_file")"
+
+  local runtime_ready_evidence
+  runtime_ready_evidence="$(awk '
+    /^## Verification Results$/ { in_section = 1; next }
+    /^## / { in_section = 0 }
+    in_section && /^runtime_ready_evidence:[[:space:]]*[^[]/ {
+      sub(/^runtime_ready_evidence:[[:space:]]*/, "")
+      gsub(/[[:space:]]+$/, "")
+      print
+      exit
+    }
+  ' "$deployment_file")"
+
+  if [ "$restart_required" = 'yes' ]; then
+    printf '%s\n' "$runtime_ready_evidence" | grep -Eqi 'restart|restarted|rolled|reloaded|recreated' || die 'deployment.md runtime_ready_evidence must include restart evidence for restart-required deployment'
+  else
+    printf '%s\n' "$runtime_ready_evidence" | grep -Eqi 'not needed|hot reload|hot-reload|rolling update|rollout|replaced in place|no restart' || die 'deployment.md runtime_ready_evidence must explain why restart was not needed when restart_required: no'
+  fi
+
   # Check specific fields first for clearer error messages
   grep -q '^approved_by:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md approved_by is missing'
   grep -Eq '^approved_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md approved_at must be YYYY-MM-DD'
   grep -Eq '^deployment_date:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md deployment_date must be YYYY-MM-DD'
   grep -Eq '^[[:space:]]*-?[[:space:]]*deployment_method:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md deployment_method is missing'
   grep -Eq '^target_env:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md target_env is missing'
+  grep -Eq '^restart_required:[[:space:]]*(yes|no)$' "$deployment_file" || die 'deployment.md restart_required must be yes or no'
+  grep -Eq '^restart_reason:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md restart_reason is missing'
 
   # Check for remaining placeholders
   local placeholders
-  placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[replace with[^]]*\]|\[STAGING/PRODUCTION\]|\[STAGING\]|\[PRODUCTION\]' "$deployment_file" || true)"
+  placeholders="$(grep -nE 'YYYY-MM-DD|\[name\]|\[step\]|\[condition\]|\[metric\]|\[alert\]|\[deployment conclusion\]|\[yes/no\]|\[replace with[^]]*\]|\[STAGING/PRODUCTION\]|\[STAGING\]|\[PRODUCTION\]' "$deployment_file" || true)"
   [ -z "$placeholders" ] || die 'deployment.md contains placeholder value'
 
   log '✓ deployment-readiness gate passed'

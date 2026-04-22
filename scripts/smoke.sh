@@ -522,7 +522,11 @@ cat > deployment.md <<'EOF'
 # deployment.md
 
 ## Deployment Plan
-Test deployment.
+target_env: test
+deployment_date: 2026-04-16
+deployment_method: automated
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
 
 ## Pre-deployment Checklist
 - [x] Tests pass
@@ -530,10 +534,13 @@ Test deployment.
 
 ## Deployment Steps
 1. Deploy test
+2. Restart service
 
 ## Verification Results
 smoke_test: pass
-All tests pass.
+runtime_ready: pass
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+manual_verification_ready: pass
 
 ## Acceptance Conclusion
 status: pass
@@ -548,11 +555,6 @@ Monitor logs.
 
 ## Post-deployment Actions
 None.
-
-## Deployment Plan
-target_env: test
-deployment_date: 2026-04-16
-deployment_method: automated
 EOF
 
 git add deployment.md
@@ -568,6 +570,195 @@ log "✓ complete-change succeeded"
 "$TMP_WORKSPACE/.codespec/codespec" check-gate verification
 "$TMP_WORKSPACE/.codespec/codespec" check-gate promotion-criteria
 log "✓ completed dossier remains re-verifiable"
+
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+deployment_method: automated
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Verification Results
+smoke_test: pass
+manual_verification_ready: pass
+
+## Acceptance Conclusion
+status: pass
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+Revert commit.
+
+## Monitoring
+Monitor logs.
+
+## Post-deployment Actions
+None.
+EOF
+
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate deployment-readiness 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime readiness is missing"
+assert_contains "$output" "runtime_ready: pass"
+log "✓ deployment-readiness requires runtime readiness"
+
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+deployment_method: automated
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Verification Results
+smoke_test: pass
+runtime_ready: pass
+
+## Acceptance Conclusion
+status: pass
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+Revert commit.
+
+## Monitoring
+Monitor logs.
+
+## Post-deployment Actions
+None.
+EOF
+
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate deployment-readiness 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime readiness evidence is missing"
+assert_contains "$output" "runtime_ready_evidence"
+log "✓ deployment-readiness requires runtime readiness evidence"
+
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+deployment_method: automated
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Verification Results
+smoke_test: pass
+runtime_ready: pass
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+
+## Acceptance Conclusion
+status: pass
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+Revert commit.
+
+## Monitoring
+Monitor logs.
+
+## Post-deployment Actions
+None.
+EOF
+
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate deployment-readiness 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "deployment-readiness should fail when manual verification readiness is missing"
+assert_contains "$output" "manual_verification_ready: pass"
+log "✓ deployment-readiness blocks handoff before manual verification is ready"
+
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+deployment_method: automated
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Verification Results
+smoke_test: pass
+runtime_ready: pass
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16
+manual_verification_ready: pass
+
+## Acceptance Conclusion
+status: pass
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+Revert commit.
+
+## Monitoring
+Monitor logs.
+
+## Post-deployment Actions
+None.
+EOF
+
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate deployment-readiness 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime evidence does not show restart for restart-required deployment"
+assert_contains "$output" "restart-required deployment"
+log "✓ deployment-readiness requires restart evidence when restart is required"
+
+git checkout -- deployment.md
 
 "$TMP_WORKSPACE/.codespec/codespec" promote-version smoke-v1
 
