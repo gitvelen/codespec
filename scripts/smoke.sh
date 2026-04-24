@@ -177,7 +177,6 @@ Test summary for smoke test.
   source_ref: REQ-001
   expected_outcome: test passes
   priority: P0
-  status: approved
 
 ## Verification
 
