@@ -89,7 +89,7 @@ RENDER_BASE_VERSION="null" \
 RENDER_FEATURE_BRANCH="$CURRENT_BRANCH" \
 RENDER_EXECUTION_GROUP="null" \
 RENDER_EXECUTION_BRANCH="null" \
-RENDER_PHASE="Proposal" \
+RENDER_PHASE="Requirement" \
 RENDER_STATUS="active" \
 RENDER_FOCUS_WORK_ITEM="null" \
 RENDER_ACTIVE_WORK_ITEMS="[]" \
@@ -107,7 +107,7 @@ fi
 
 # 创建初始 review verdict 以支持首次 start-requirements
 cat > "$PROJECT_ROOT/reviews/requirements-review.yaml" <<EOF
-phase: Proposal
+phase: Requirement
 verdict: approved
 reviewed_by: codespec-init
 reviewed_at: $TODAY
@@ -117,5 +117,5 @@ log "initialized dossier in: $PROJECT_ROOT"
 log ""
 log "Next steps:"
 log "1. Edit spec.md to define requirements"
-log "2. Run: $(resolve_codespec_cmd) start-requirements"
+log "2. Run: $(resolve_codespec_cmd) start-design"
 log "3. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"

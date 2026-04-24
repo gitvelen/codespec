@@ -512,6 +512,37 @@ start_design() {
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" requirement-complete >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
+  local workspace_root
+  workspace_root="$(find_workspace_root)"
+
+  # Create testing.md if it doesn't exist
+  if [ ! -f "$project_root/testing.md" ]; then
+    if [ -f "$workspace_root/.codespec/templates/testing.md" ]; then
+      RENDER_PHASE="Design" \
+      envsubst < "$workspace_root/.codespec/templates/testing.md" \
+        > "$project_root/testing.md"
+    else
+      cat > "$project_root/testing.md" <<'EOF'
+# Testing Strategy
+
+## Test Levels
+- Unit tests
+- Integration tests
+- E2E tests
+
+## Coverage Goals
+TBD
+
+## Test Data
+TBD
+
+## CI/CD Integration
+TBD
+EOF
+    fi
+    log "created testing.md"
+  fi
+
   meta_update "$meta" '.phase = "Design" | .status = "active"'
   log "started Design phase"
 }
@@ -934,13 +965,6 @@ reset_to_requirement() {
 
   rm -rf "$project_root/reviews"
   mkdir -p "$project_root/reviews"
-  TODAY="$(date +%F)"
-  cat > "$project_root/reviews/design-review.yaml" <<EOF
-phase: Requirement
-verdict: approved
-reviewed_by: codespec-reset
-reviewed_at: $TODAY
-EOF
 
   if [ "$keep_contracts" = false ]; then
     rm -rf "$project_root/contracts"

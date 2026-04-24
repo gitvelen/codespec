@@ -280,7 +280,7 @@ validate_input_evidence_refs() {
 
 requirements_source_refs() {
   awk '
-    BEGIN { in_requirements = 0; keep = 0 }
+    BEGIN { in_requirements = 0 }
     /^## Requirements$/ {
       in_requirements = 1
       next
@@ -291,17 +291,6 @@ requirements_source_refs() {
     !in_requirements {
       next
     }
-    /^### Source Coverage$/ || /^### Proposal Coverage Map$/ {
-      keep = 1
-      next
-    }
-    /^### / {
-      keep = 0
-      next
-    }
-    !keep {
-      next
-    }
 
     /^[[:space:]]*-[[:space:]]*source_ref:[[:space:]]*/ || /^[[:space:]]*source_ref:[[:space:]]*/ {
       line = $0
@@ -309,16 +298,6 @@ requirements_source_refs() {
       sub(/^[[:space:]]*source_ref:[[:space:]]*/, "", line)
       sub(/[[:space:]]*$/, "", line)
       print line
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]+/ && /->/ {
-      line = $0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
-      split(line, parts, /[[:space:]]*->[[:space:]]*/)
-      left = parts[1]
-      sub(/[[:space:]]*$/, "", left)
-      print left
       next
     }
   ' "$SPEC_FILE" | grep -v '^$' | sort -u
@@ -536,29 +515,19 @@ gate_metadata_consistency() {
 
 collect_formal_requirement_ids() {
   awk '
-    BEGIN { in_requirements = 0; in_functional = 0 }
+    BEGIN { in_requirements = 0 }
     /^## Requirements$/ {
       in_requirements = 1
-      in_functional = 0
       next
     }
     /^## / {
       if (in_requirements) {
         in_requirements = 0
-        in_functional = 0
       }
       next
     }
     !in_requirements { next }
-    /^### Functional$/ || /^### Functional Requirements$/ {
-      in_functional = 1
-      next
-    }
-    /^### / {
-      in_functional = 0
-      next
-    }
-    in_functional && /^[[:space:]]*-[[:space:]]*REQ-[0-9]{3}[[:space:]]*$/ {
+    /^[[:space:]]*-[[:space:]]*REQ-[0-9]{3}[[:space:]]*$/ {
       line = $0
       sub(/^[[:space:]]*-[[:space:]]*/, "", line)
       sub(/[[:space:]]*$/, "", line)
@@ -1037,7 +1006,7 @@ gate_review_verdict_present() {
       ;;
     Design)
       expected_file='design-review.yaml'
-      expected_phase='Requirements'
+      expected_phase='Requirement'
       ;;
     Implementation)
       expected_file='implementation-review.yaml'
