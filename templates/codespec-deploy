@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat >&2 <<'EOF'
+Edit scripts/codespec-deploy for this project before running `codespec deploy`.
+The script must write YAML result data to $CODESPEC_DEPLOY_RESULT_FILE.
+EOF
+
+cat > "${CODESPEC_DEPLOY_RESULT_FILE:?}" <<'EOF'
+status: fail
+execution_ref: pending
+deployment_method: pending
+deployed_at: pending
+deployed_revision: pending
+restart_required: pending
+restart_reason: pending
+smoke_test: fail
+runtime_ready: fail
+runtime_observed_revision: pending
+runtime_ready_evidence: pending
+manual_verification_ready: fail
+EOF
+
+exit 1

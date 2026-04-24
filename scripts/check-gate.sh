@@ -151,7 +151,7 @@ is_placeholder_token() {
   normalized_value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr -d "'\"")"
 
   case "$normalized_value" in
-    null|todo|tbd|placeholder|none)
+    null|pending|todo|tbd|placeholder|none|yyyy-mm-dd)
       return 0
       ;;
   esac
@@ -160,11 +160,33 @@ is_placeholder_token() {
   return 1
 }
 
+markdown_section_scalar() {
+  local file="$1"
+  local header="$2"
+  local key="$3"
+  awk -v header="$header" -v key="$key" '
+    $0 == header {
+      in_section = 1
+      next
+    }
+    in_section && /^## / {
+      exit
+    }
+    in_section && $0 ~ "^[[:space:]]*-?[[:space:]]*" key ":[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*-?[[:space:]]*" key ":[[:space:]]*", "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      exit
+    }
+  ' "$file"
+}
+
 input_intake_scalar() {
   local key="$1"
   awk -v key="$key" '
     BEGIN { in_intake = 0 }
-    /^### Input Intake Summary$/ || /^### Input Intake$/ {
+    /^## Inputs$/ || /^### Input Intake Summary$/ || /^### Input Intake$/ {
       in_intake = 1
       next
     }
@@ -187,7 +209,7 @@ input_intake_scalar() {
 input_intake_refs() {
   awk '
     BEGIN { capture = 0; in_intake = 0 }
-    /^### Input Intake Summary$/ || /^### Input Intake$/ {
+    /^## Inputs$/ || /^### Input Intake Summary$/ || /^### Input Intake$/ {
       in_intake = 1
       next
     }
@@ -197,7 +219,7 @@ input_intake_refs() {
     in_intake && /^## / {
       exit
     }
-    in_intake && /^[[:space:]]*-[[:space:]]*input_refs:[[:space:]]*$/ {
+    in_intake && (/^[[:space:]]*-[[:space:]]*source_refs:[[:space:]]*$/ || /^[[:space:]]*-[[:space:]]*input_refs:[[:space:]]*$/) {
       capture = 1
       next
     }
@@ -269,11 +291,7 @@ requirements_source_refs() {
     !in_requirements {
       next
     }
-    /^### Proposal Coverage Map$/ {
-      keep = 1
-      next
-    }
-    /^### Clarification Status$/ {
+    /^### Source Coverage$/ || /^### Proposal Coverage Map$/ {
       keep = 1
       next
     }
@@ -306,101 +324,39 @@ requirements_source_refs() {
   ' "$SPEC_FILE" | grep -v '^$' | sort -u
 }
 
-clarification_ids() {
+open_decision_ids() {
   awk '
-    BEGIN { in_requirements = 0; in_clarification = 0 }
-    /^## Requirements$/ {
-      in_requirements = 1
+    BEGIN { in_decisions = 0 }
+    /^## Open Decisions$/ {
+      in_decisions = 1
       next
     }
-    /^## / && in_requirements {
+    /^## / && in_decisions {
       exit
     }
-    !in_requirements {
+    !in_decisions {
       next
     }
-    /^### Clarification Status$/ {
-      in_clarification = 1
-      next
-    }
-    /^### / && in_clarification {
-      in_clarification = 0
-      next
-    }
-    !in_clarification {
-      next
-    }
-    /^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*CLR-[0-9]{3}[[:space:]]*$/ {
+    /^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*DEC-[0-9]{3}[[:space:]]*$/ {
       line = $0
-      sub(/^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/, "", line)
+      sub(/^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/, "", line)
       sub(/[[:space:]]*$/, "", line)
       print line
     }
   ' "$SPEC_FILE" | sort -u
 }
 
-clarification_target_refs() {
+open_decision_status_values() {
   awk '
-    BEGIN { in_requirements = 0; in_coverage = 0 }
-    /^## Requirements$/ {
-      in_requirements = 1
+    BEGIN { in_decisions = 0 }
+    /^## Open Decisions$/ {
+      in_decisions = 1
       next
     }
-    /^## / && in_requirements {
+    /^## / && in_decisions {
       exit
     }
-    !in_requirements {
-      next
-    }
-    /^### Proposal Coverage Map$/ {
-      in_coverage = 1
-      next
-    }
-    /^### / && in_coverage {
-      in_coverage = 0
-      next
-    }
-    !in_coverage {
-      next
-    }
-    /^[[:space:]]*target_ref:[[:space:]]*CLR-[0-9]{3}[[:space:]]*$/ {
-      line = $0
-      sub(/^[[:space:]]*target_ref:[[:space:]]*/, "", line)
-      sub(/[[:space:]]*$/, "", line)
-      print line
-      next
-    }
-    /^[[:space:]]*-[[:space:]]*target_ref:[[:space:]]*CLR-[0-9]{3}[[:space:]]*$/ {
-      line = $0
-      sub(/^[[:space:]]*-[[:space:]]*target_ref:[[:space:]]*/, "", line)
-      sub(/[[:space:]]*$/, "", line)
-      print line
-    }
-  ' "$SPEC_FILE" | sort -u
-}
-
-clarification_status_values() {
-  awk '
-    BEGIN { in_requirements = 0; in_clarification = 0 }
-    /^## Requirements$/ {
-      in_requirements = 1
-      next
-    }
-    /^## / && in_requirements {
-      exit
-    }
-    !in_requirements {
-      next
-    }
-    /^### Clarification Status$/ {
-      in_clarification = 1
-      next
-    }
-    /^### / && in_clarification {
-      in_clarification = 0
-      next
-    }
-    !in_clarification {
+    !in_decisions {
       next
     }
 
@@ -412,18 +368,10 @@ clarification_status_values() {
       next
     }
 
-    /^[[:space:]]*-[[:space:]]+/ && /->/ {
-      line = $0
-      split(line, parts, /[[:space:]]*->[[:space:]]*/)
-      right = parts[2]
-      split(right, words, /[[:space:]]+/)
-      if (words[1] != "") print tolower(words[1])
-      next
-    }
   ' "$SPEC_FILE" | grep -v '^$'
 }
 
-clarification_high_open_items() {
+open_decision_high_open_items() {
   awk '
     function flush_item() {
       if (current != "" && status == "open" && impact == "high") {
@@ -432,49 +380,30 @@ clarification_high_open_items() {
     }
 
     BEGIN {
-      in_requirements = 0
-      in_clarification = 0
+      in_decisions = 0
       current = ""
       status = ""
       impact = ""
     }
 
-    /^## Requirements$/ {
-      in_requirements = 1
+    /^## Open Decisions$/ {
+      in_decisions = 1
       next
     }
 
-    /^## / && in_requirements {
+    /^## / && in_decisions {
       flush_item()
       exit
     }
 
-    !in_requirements {
+    !in_decisions {
       next
     }
 
-    /^### Clarification Status$/ {
-      in_clarification = 1
-      current = ""
-      status = ""
-      impact = ""
-      next
-    }
-
-    /^### / && in_clarification {
-      flush_item()
-      in_clarification = 0
-      next
-    }
-
-    !in_clarification {
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/ {
+    /^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/ {
       flush_item()
       current = $0
-      sub(/^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/, "", current)
+      sub(/^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/, "", current)
       sub(/[[:space:]]*$/, "", current)
       status = ""
       impact = ""
@@ -503,61 +432,42 @@ clarification_high_open_items() {
   ' "$SPEC_FILE"
 }
 
-clarification_deferred_missing_exit_phase_items() {
+open_decision_deferred_missing_target_phase_items() {
   awk '
     function flush_item() {
-      if (current != "" && status == "deferred" && deferred_exit_phase == "") {
+      if (current != "" && status == "deferred" && target_phase == "") {
         print current
       }
     }
 
     BEGIN {
-      in_requirements = 0
-      in_clarification = 0
+      in_decisions = 0
       current = ""
       status = ""
-      deferred_exit_phase = ""
+      target_phase = ""
     }
 
-    /^## Requirements$/ {
-      in_requirements = 1
+    /^## Open Decisions$/ {
+      in_decisions = 1
       next
     }
 
-    /^## / && in_requirements {
+    /^## / && in_decisions {
       flush_item()
       exit
     }
 
-    !in_requirements {
+    !in_decisions {
       next
     }
 
-    /^### Clarification Status$/ {
-      in_clarification = 1
-      current = ""
-      status = ""
-      deferred_exit_phase = ""
-      next
-    }
-
-    /^### / && in_clarification {
-      flush_item()
-      in_clarification = 0
-      next
-    }
-
-    !in_clarification {
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/ {
+    /^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/ {
       flush_item()
       current = $0
-      sub(/^[[:space:]]*-[[:space:]]*clr_id:[[:space:]]*/, "", current)
+      sub(/^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/, "", current)
       sub(/[[:space:]]*$/, "", current)
       status = ""
-      deferred_exit_phase = ""
+      target_phase = ""
       next
     }
 
@@ -569,10 +479,10 @@ clarification_deferred_missing_exit_phase_items() {
       next
     }
 
-    current != "" && /^[[:space:]]*deferred_exit_phase:[[:space:]]*/ {
-      deferred_exit_phase = $0
-      sub(/^[[:space:]]*deferred_exit_phase:[[:space:]]*/, "", deferred_exit_phase)
-      sub(/[[:space:]]*$/, "", deferred_exit_phase)
+    current != "" && /^[[:space:]]*target_phase:[[:space:]]*/ {
+      target_phase = $0
+      sub(/^[[:space:]]*target_phase:[[:space:]]*/, "", target_phase)
+      sub(/[[:space:]]*$/, "", target_phase)
       next
     }
 
@@ -640,7 +550,7 @@ collect_formal_requirement_ids() {
       next
     }
     !in_requirements { next }
-    /^### Functional Requirements$/ {
+    /^### Functional$/ || /^### Functional Requirements$/ {
       in_functional = 1
       next
     }
@@ -1096,37 +1006,6 @@ intent_anchor_lines() {
   ' "$SPEC_FILE"
 }
 
-requirements_closure_text() {
-  awk '
-    BEGIN { in_requirements = 0; keep = 0 }
-    /^## Requirements$/ { in_requirements = 1; next }
-    /^## / && in_requirements { exit }
-    !in_requirements { next }
-    /^### Proposal Coverage Map$/ { keep = 1; next }
-    /^### Clarification Status$/ { keep = 1; next }
-    /^### / { keep = 0; next }
-    !keep { next }
-
-    /^[[:space:]]*anchor_ref:[[:space:]]*/ {
-      line = $0
-      sub(/^[[:space:]]*anchor_ref:[[:space:]]*/, "", line)
-      sub(/[[:space:]]*$/, "", line)
-      print line
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]+/ && /->/ {
-      line = $0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
-      split(line, parts, /[[:space:]]*->[[:space:]]*/)
-      line = parts[1]
-      sub(/[[:space:]]*$/, "", line)
-      print line
-      next
-    }
-  ' "$SPEC_FILE"
-}
-
 review_file_matches() {
   local review_file="$1"
   local expected_file="$2"
@@ -1436,23 +1315,19 @@ check_appendix_authority() {
   fi
 }
 
-gate_proposal_maturity() {
+gate_requirement_complete() {
   check_appendix_authority
-  grep -q '^## Default Read Layer$' "$SPEC_FILE" || die 'spec.md missing Default Read Layer'
-  grep -q '^## Intent$' "$SPEC_FILE" || die 'spec.md missing Intent section'
+  grep -q '^## Summary$' "$SPEC_FILE" || die 'spec.md missing Summary section'
+  grep -q '^## Inputs$' "$SPEC_FILE" || die 'spec.md missing Inputs section'
+  grep -q '^## Scope$' "$SPEC_FILE" || die 'spec.md missing Scope section'
   grep -q '^## Requirements$' "$SPEC_FILE" || die 'spec.md missing Requirements section'
   grep -q '^## Acceptance$' "$SPEC_FILE" || die 'spec.md missing Acceptance section'
   grep -q '^## Verification$' "$SPEC_FILE" || die 'spec.md missing Verification section'
-  grep -q '^### Goals$' "$SPEC_FILE" || die 'spec.md missing Goals'
-  grep -q '^### Input Intake Summary$' "$SPEC_FILE" || die 'spec.md missing Input Intake Summary'
-  grep -q '^### Input Intake$' "$SPEC_FILE" || die 'spec.md missing Input Intake'
-  grep -q '^### Testing Priority Rules$' "$SPEC_FILE" || die 'spec.md missing Testing Priority Rules'
-  grep -q '<!-- SKELETON-END -->' "$SPEC_FILE" || die 'spec.md missing SKELETON-END marker'
 
-  local input_maturity normalization_status input_owner approval_basis source_ref
-  input_maturity="$(input_intake_scalar input_maturity)"
-  normalization_status="$(input_intake_scalar normalization_status)"
-  input_owner="$(input_intake_scalar input_owner)"
+  local input_maturity normalization_note input_owner approval_basis source_ref
+  input_maturity="$(input_intake_scalar maturity)"
+  normalization_note="$(input_intake_scalar normalization_note)"
+  input_owner="$(input_intake_scalar source_owner)"
   approval_basis="$(input_intake_scalar approval_basis)"
 
   case "$input_maturity" in
@@ -1460,13 +1335,9 @@ gate_proposal_maturity() {
     *) die "input_maturity must be one of L0/L1/L2/L3 (got: ${input_maturity:-missing})" ;;
   esac
 
-  case "$normalization_status" in
-    raw|anchored|ready-for-requirements) ;;
-    *) die "normalization_status must be one of raw/anchored/ready-for-requirements (got: ${normalization_status:-missing})" ;;
-  esac
-
   is_placeholder_token "$input_owner" && die 'input_owner contains placeholder value'
   is_placeholder_token "$approval_basis" && die 'approval_basis contains placeholder value'
+  is_placeholder_token "$normalization_note" && die 'normalization_note contains placeholder value'
 
   local source_refs=()
   mapfile -t source_refs < <(input_intake_refs)
@@ -1477,92 +1348,51 @@ gate_proposal_maturity() {
   done
   validate_input_evidence_refs "${source_refs[@]}"
 
-  log '✓ proposal-maturity gate passed'
-}
-
-gate_requirements_approval() {
-  check_appendix_authority
-  grep -q '^### Proposal Coverage Map$' "$SPEC_FILE" || die 'spec.md missing Proposal Coverage Map'
-  grep -q '^### Clarification Status$' "$SPEC_FILE" || die 'spec.md missing Clarification Status'
-
   local reqs=()
   local accs=()
   local vos=()
-  local intake_refs=()
-  local closure_refs=()
-  local clarification_ids_list=()
-  local clarification_targets=()
-  local anchor closure_text req intake_ref status clarification_ref
-  closure_text="$(requirements_closure_text)"
   mapfile -t reqs < <(collect_spec_ids 'REQ')
   mapfile -t accs < <(collect_spec_ids 'ACC')
   mapfile -t vos < <(collect_spec_ids 'VO')
-  mapfile -t intake_refs < <(input_intake_refs)
-  mapfile -t closure_refs < <(requirements_source_refs)
-  mapfile -t clarification_ids_list < <(clarification_ids)
-  mapfile -t clarification_targets < <(clarification_target_refs)
 
   [ "${#reqs[@]}" -gt 0 ] || die 'no REQ-* entries found in spec.md'
   [ "${#accs[@]}" -gt 0 ] || die 'no ACC-* entries found in spec.md'
   [ "${#vos[@]}" -gt 0 ] || die 'no VO-* entries found in spec.md'
 
-  while IFS= read -r anchor; do
-    [ -n "$anchor" ] || continue
-    grep -Fqx -- "$anchor" <<<"$closure_text" || die "proposal anchor not closed in Requirements: ${anchor}"
-  done < <(intent_anchor_lines)
-
-  local req
+  local req acc
   for req in "${reqs[@]}"; do
-    grep -q "source_ref: ${req}" "$SPEC_FILE" || die "requirement ${req} has no acceptance mapping"
+    grep -q "source_ref:.*${req}" "$SPEC_FILE" || die "requirement ${req} has no acceptance mapping"
   done
 
-  local acc
   for acc in "${accs[@]}"; do
     grep -q "acceptance_ref: ${acc}" "$SPEC_FILE" || die "acceptance ${acc} has no verification mapping"
     is_placeholder_token "$(acceptance_expected_outcome "$acc")" && die "acceptance ${acc} expected_outcome contains placeholder value"
   done
 
+  local intake_refs=()
+  local closure_refs=()
+  mapfile -t intake_refs < <(input_intake_refs)
+  mapfile -t closure_refs < <(requirements_source_refs)
+
   for intake_ref in "${intake_refs[@]}"; do
-    contains_exact_line "$intake_ref" "${closure_refs[@]}" || die "input_ref is not closed in Requirements coverage or clarification: ${intake_ref}"
+    contains_exact_line "$intake_ref" "${closure_refs[@]}" || \
+      die "input_ref is not closed in Requirements source coverage: ${intake_ref}"
   done
 
-  for clarification_ref in "${clarification_targets[@]}"; do
-    contains_exact_line "$clarification_ref" "${clarification_ids_list[@]}" || die 'clarification entry missing clr_id for unresolved decision closure'
-  done
-
-  while IFS= read -r status; do
-    case "$status" in
-      open|resolved|deferred|closed)
-        ;;
-      *)
-        die "clarification status must be open/resolved/deferred/closed (got: ${status})"
-        ;;
-    esac
-  done < <(clarification_status_values)
-
-  local deferred_missing_exit_phase=()
-  mapfile -t deferred_missing_exit_phase < <(clarification_deferred_missing_exit_phase_items)
-  [ "${#deferred_missing_exit_phase[@]}" -eq 0 ] || die "${deferred_missing_exit_phase[0]} deferred requires deferred_exit_phase"
-
-  local high_open=()
-  mapfile -t high_open < <(clarification_high_open_items)
-  [ "${#high_open[@]}" -eq 0 ] || die "high-impact clarification remains open: ${high_open[0]}"
-
-  log '✓ requirements-approval gate passed'
+  log '✓ requirement-complete gate passed'
 }
+
 
 gate_design_structure_complete() {
   check_appendix_authority
-  grep -q '^## Default Read Layer$' "$DESIGN_FILE" || die 'design.md missing Default Read Layer'
-  grep -q '^## Goal / Scope Link$' "$DESIGN_FILE" || die 'design.md missing Goal / Scope Link'
-  grep -q '^## Architecture Boundary$' "$DESIGN_FILE" || die 'design.md missing Architecture Boundary'
-  grep -q '^## Work Item Execution Strategy$' "$DESIGN_FILE" || die 'design.md missing Work Item Execution Strategy'
-  grep -q '^## Design Slice Index$' "$DESIGN_FILE" || die 'design.md missing Design Slice Index'
+  grep -q '^## Summary$' "$DESIGN_FILE" || die 'design.md missing Summary'
+  grep -q '^## Technical Approach$' "$DESIGN_FILE" || die 'design.md missing Technical Approach'
+  grep -q '^## Boundaries & Impacted Surfaces$' "$DESIGN_FILE" || die 'design.md missing Boundaries & Impacted Surfaces'
+  grep -q '^## Execution Model$' "$DESIGN_FILE" || die 'design.md missing Execution Model'
+  grep -q '^## Work Item Mapping$' "$DESIGN_FILE" || die 'design.md missing Work Item Mapping'
   grep -q '^## Work Item Derivation$' "$DESIGN_FILE" || die 'design.md missing Work Item Derivation'
-  grep -q '^## Contract Needs$' "$DESIGN_FILE" || die 'design.md missing Contract Needs'
   grep -q '^## Verification Design$' "$DESIGN_FILE" || die 'design.md missing Verification Design'
-  grep -q '^## Failure Paths / Reopen Triggers$' "$DESIGN_FILE" || die 'design.md missing Failure Paths / Reopen Triggers'
-  grep -q '^## Appendix Map$' "$DESIGN_FILE" || die 'design.md missing Appendix Map'
+  grep -q '^## Failure Paths / Reopen Triggers$\|^## Reopen Triggers$' "$DESIGN_FILE" || die 'design.md missing Reopen Triggers'
 
   local derivation_rows=()
   mapfile -t derivation_rows < <(design_work_item_acceptance_rows)
@@ -1603,21 +1433,9 @@ baseline_section_has_real_content() {
 }
 
 gate_implementation_readiness_baseline() {
-  grep -q '^## Implementation Readiness Baseline$' "$DESIGN_FILE" || die 'design.md missing Implementation Readiness Baseline'
-  grep -q '^### Environment Configuration Matrix$' "$DESIGN_FILE" || die 'design.md missing Environment Configuration Matrix'
-  grep -q '^### Security Baseline$' "$DESIGN_FILE" || die 'design.md missing Security Baseline'
-  grep -q '^### Data / Migration Strategy$' "$DESIGN_FILE" || die 'design.md missing Data / Migration Strategy'
-  grep -q '^### Operability / Health Checks$' "$DESIGN_FILE" || die 'design.md missing Operability / Health Checks'
-  grep -q '^### Backup / Restore$' "$DESIGN_FILE" || die 'design.md missing Backup / Restore'
-
-  [ "$(baseline_section_has_real_content '### Environment Configuration Matrix')" = 'yes' ] || die 'design.md Environment Configuration Matrix contains placeholder content'
-  [ "$(baseline_section_has_real_content '### Security Baseline')" = 'yes' ] || die 'design.md Security Baseline contains placeholder content'
-  [ "$(baseline_section_has_real_content '### Data / Migration Strategy')" = 'yes' ] || die 'design.md Data / Migration Strategy contains placeholder content'
-
-  if grep -q '^## Experience Acceptance$' "$SPEC_FILE"; then
-    grep -q '^### UX / Experience Readiness$' "$DESIGN_FILE" || die 'design.md missing UX / Experience Readiness'
-  fi
-
+  grep -q '^## Technical Approach$' "$DESIGN_FILE" || die 'design.md missing Technical Approach'
+  grep -q '^## Boundaries & Impacted Surfaces$' "$DESIGN_FILE" || die 'design.md missing Boundaries & Impacted Surfaces'
+  grep -q '^## Verification Design$' "$DESIGN_FILE" || die 'design.md missing Verification Design'
   log '✓ implementation-readiness-baseline gate passed'
 }
 
@@ -1746,7 +1564,7 @@ gate_implementation_start() {
 gate_phase_capability() {
   local phase
   phase="$(yaml_scalar "$META_FILE" phase)"
-  if [ "$phase" != 'Proposal' ] && [ "$phase" != 'Requirements' ]; then
+  if [ "$phase" != 'Requirement' ]; then
     log "✓ phase-capability gate passed (phase ${phase})"
     return
   fi
@@ -2148,111 +1966,56 @@ gate_deployment_readiness() {
     return
   fi
 
-  grep -q '^## Acceptance Conclusion$' "$deployment_file" || die 'deployment.md missing Acceptance Conclusion'
-  grep -q '^status: pass$' "$deployment_file" || die 'deployment.md acceptance conclusion is not pass'
-
-  # Check smoke_test is in Verification Results section
-  awk '
-    /^## Verification Results$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /smoke_test: pass/ { found = 1; exit }
-    END { exit !found }
-  ' "$deployment_file" || die 'deployment.md smoke_test: pass must be in Verification Results section'
-
-  awk '
-    /^## Verification Results$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /runtime_ready: pass/ { found = 1; exit }
-    END { exit !found }
-  ' "$deployment_file" || die 'deployment.md runtime_ready: pass must be in Verification Results section'
-
-  awk '
-    /^## Verification Results$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /^runtime_ready_evidence:[[:space:]]*[^[]/ { found = 1; exit }
-    END { exit !found }
-  ' "$deployment_file" || die 'deployment.md runtime_ready_evidence is required in Verification Results section'
-
-  awk '
-    /^## Verification Results$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /manual_verification_ready: pass/ { found = 1; exit }
-    END { exit !found }
-  ' "$deployment_file" || die 'deployment.md manual_verification_ready: pass must be in Verification Results section'
-
-  # Check required sections exist
   grep -q '^## Deployment Plan$' "$deployment_file" || die 'deployment.md missing Deployment Plan section'
   grep -q '^## Pre-deployment Checklist$' "$deployment_file" || die 'deployment.md missing Pre-deployment Checklist section'
   grep -q '^## Deployment Steps$' "$deployment_file" || die 'deployment.md missing Deployment Steps section'
+  grep -q '^## Execution Evidence$' "$deployment_file" || die 'deployment.md missing Execution Evidence section'
   grep -q '^## Verification Results$' "$deployment_file" || die 'deployment.md missing Verification Results section'
+  grep -q '^## Acceptance Conclusion$' "$deployment_file" || die 'deployment.md missing Acceptance Conclusion section'
   grep -q '^## Rollback Plan$' "$deployment_file" || die 'deployment.md missing Rollback Plan section'
   grep -q '^## Monitoring$' "$deployment_file" || die 'deployment.md missing Monitoring section'
   grep -q '^## Post-deployment Actions$' "$deployment_file" || die 'deployment.md missing Post-deployment Actions section'
 
-  # Check deployment_method is in Deployment Plan section
-  awk '
-    /^## Deployment Plan$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /^[[:space:]]*-?[[:space:]]*deployment_method:/ { found = 1; exit }
-    END { exit !found }
-  ' "$deployment_file" || die 'deployment.md deployment_method must be in Deployment Plan section'
+  local target_env deployment_date execution_status execution_ref deployment_method deployed_at deployed_revision restart_required restart_reason runtime_observed_revision runtime_ready_evidence smoke_test runtime_ready manual_verification_ready
+  target_env="$(markdown_section_scalar "$deployment_file" '## Deployment Plan' 'target_env')"
+  deployment_date="$(markdown_section_scalar "$deployment_file" '## Deployment Plan' 'deployment_date')"
+  execution_status="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'status')"
+  execution_ref="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'execution_ref')"
+  deployment_method="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'deployment_method')"
+  deployed_at="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'deployed_at')"
+  deployed_revision="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'deployed_revision')"
+  restart_required="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'restart_required')"
+  restart_reason="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'restart_reason')"
+  runtime_observed_revision="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'runtime_observed_revision')"
+  runtime_ready_evidence="$(markdown_section_scalar "$deployment_file" '## Execution Evidence' 'runtime_ready_evidence')"
+  smoke_test="$(markdown_section_scalar "$deployment_file" '## Verification Results' 'smoke_test')"
+  runtime_ready="$(markdown_section_scalar "$deployment_file" '## Verification Results' 'runtime_ready')"
+  manual_verification_ready="$(markdown_section_scalar "$deployment_file" '## Verification Results' 'manual_verification_ready')"
 
-  # Check target_env and deployment_date are in Deployment Plan section
-  awk '
-    /^## Deployment Plan$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /^target_env:/ { found_env = 1 }
-    in_section && /^deployment_date:/ { found_date = 1 }
-    END { exit !(found_env && found_date) }
-  ' "$deployment_file" || die 'deployment.md target_env and deployment_date must be in Deployment Plan section'
-
-  awk '
-    /^## Deployment Plan$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /^restart_required:[[:space:]]*(yes|no)$/ { found = 1; exit }
-    END { exit !found }
-  ' "$deployment_file" || die 'deployment.md restart_required must be yes or no in Deployment Plan section'
-
-  grep -Eq '^restart_reason:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md restart_reason is missing'
-
-  local restart_required
-  restart_required="$(awk '
-    /^## Deployment Plan$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /^restart_required:[[:space:]]*(yes|no)$/ {
-      sub(/^restart_required:[[:space:]]*/, "")
-      gsub(/[[:space:]]+$/, "")
-      print
-      exit
-    }
-  ' "$deployment_file")"
-
-  local runtime_ready_evidence
-  runtime_ready_evidence="$(awk '
-    /^## Verification Results$/ { in_section = 1; next }
-    /^## / { in_section = 0 }
-    in_section && /^runtime_ready_evidence:[[:space:]]*[^[]/ {
-      sub(/^runtime_ready_evidence:[[:space:]]*/, "")
-      gsub(/[[:space:]]+$/, "")
-      print
-      exit
-    }
-  ' "$deployment_file")"
+  is_placeholder_token "$target_env" && die 'deployment.md target_env is missing'
+  printf '%s\n' "$deployment_date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || die 'deployment.md deployment_date must be YYYY-MM-DD'
+  [ "$execution_status" = 'pass' ] || die 'deployment.md execution evidence status must be pass'
+  is_placeholder_token "$execution_ref" && die 'deployment.md execution_ref is missing'
+  is_placeholder_token "$deployment_method" && die 'deployment.md deployment_method is missing'
+  printf '%s\n' "$deployed_at" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' || die 'deployment.md deployed_at must be an RFC3339 timestamp'
+  is_placeholder_token "$deployed_revision" && die 'deployment.md deployed_revision is missing'
+  case "$restart_required" in
+    yes|no) ;;
+    *) die 'deployment.md restart_required must be yes or no in Execution Evidence section' ;;
+  esac
+  is_placeholder_token "$restart_reason" && die 'deployment.md restart_reason is missing'
+  [ "$smoke_test" = 'pass' ] || die 'deployment.md smoke_test: pass must be in Verification Results section'
+  [ "$runtime_ready" = 'pass' ] || die 'deployment.md runtime_ready: pass must be in Verification Results section'
+  [ "$manual_verification_ready" = 'pass' ] || die 'deployment.md manual_verification_ready: pass must be in Verification Results section'
+  is_placeholder_token "$runtime_observed_revision" && die 'deployment.md runtime_observed_revision is missing'
+  is_placeholder_token "$runtime_ready_evidence" && die 'deployment.md runtime_ready_evidence is required in Execution Evidence section'
+  [ "$deployed_revision" = "$runtime_observed_revision" ] || die 'deployment.md runtime_observed_revision must match deployed_revision'
 
   if [ "$restart_required" = 'yes' ]; then
     printf '%s\n' "$runtime_ready_evidence" | grep -Eqi 'restart|restarted|rolled|reloaded|recreated' || die 'deployment.md runtime_ready_evidence must include restart evidence for restart-required deployment'
   else
     printf '%s\n' "$runtime_ready_evidence" | grep -Eqi 'not needed|hot reload|hot-reload|rolling update|rollout|replaced in place|no restart' || die 'deployment.md runtime_ready_evidence must explain why restart was not needed when restart_required: no'
   fi
-
-  # Check specific fields first for clearer error messages
-  grep -q '^approved_by:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md approved_by is missing'
-  grep -Eq '^approved_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md approved_at must be YYYY-MM-DD'
-  grep -Eq '^deployment_date:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$deployment_file" || die 'deployment.md deployment_date must be YYYY-MM-DD'
-  grep -Eq '^[[:space:]]*-?[[:space:]]*deployment_method:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md deployment_method is missing'
-  grep -Eq '^target_env:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md target_env is missing'
-  grep -Eq '^restart_required:[[:space:]]*(yes|no)$' "$deployment_file" || die 'deployment.md restart_required must be yes or no'
-  grep -Eq '^restart_reason:[[:space:]]*[^[]' "$deployment_file" || die 'deployment.md restart_reason is missing'
 
   # Check for remaining placeholders
   local placeholders
@@ -2273,6 +2036,16 @@ gate_promotion_criteria() {
   [ "$phase" = 'Deployment' ] || [ "$status" = 'completed' ] || die 'promotion requires Deployment phase or completed status'
   gate_testing_coverage
   gate_deployment_readiness
+  local deployment_file="$PROJECT_ROOT/deployment.md"
+  local acceptance_status acceptance_notes approved_by approved_at
+  acceptance_status="$(markdown_section_scalar "$deployment_file" '## Acceptance Conclusion' 'status')"
+  acceptance_notes="$(markdown_section_scalar "$deployment_file" '## Acceptance Conclusion' 'notes')"
+  approved_by="$(markdown_section_scalar "$deployment_file" '## Acceptance Conclusion' 'approved_by')"
+  approved_at="$(markdown_section_scalar "$deployment_file" '## Acceptance Conclusion' 'approved_at')"
+  [ "$acceptance_status" = 'pass' ] || die 'deployment.md acceptance conclusion status must be pass'
+  is_placeholder_token "$acceptance_notes" && die 'deployment.md acceptance conclusion notes is missing'
+  is_placeholder_token "$approved_by" && die 'deployment.md approved_by is missing'
+  printf '%s\n' "$approved_at" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || die 'deployment.md approved_at must be YYYY-MM-DD'
   log '✓ promotion-criteria gate passed'
 }
 
@@ -2281,15 +2054,8 @@ main() {
   require_context
 
   case "$GATE" in
-    spec-completeness)
-      gate_proposal_maturity
-      gate_requirements_approval
-      ;;
-    proposal-maturity)
-      gate_proposal_maturity
-      ;;
-    requirements-approval)
-      gate_requirements_approval
+    requirement-complete)
+      gate_requirement_complete
       ;;
     review-verdict-present)
       gate_review_verdict_present

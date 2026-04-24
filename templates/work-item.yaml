@@ -68,7 +68,7 @@ acceptance_refs:
 verification_refs:
   - VO-001
 # keep acceptance_refs aligned with design.md Work Item Derivation.covered_acceptance_refs
-# keep requirement_refs / verification_refs aligned with design.md Goal / Scope Link and Work Item Derivation
+# keep requirement_refs / verification_refs aligned with design.md Work Item Mapping and Work Item Derivation
 derived_from: __DERIVED_FROM__
 dependency_refs: []
 dependency_type: none  # 依赖类型：strong（强依赖，必须等待依赖 WI 完成）| weak（弱依赖，可以并行但需要协调）| none（无依赖）

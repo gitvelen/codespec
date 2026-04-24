@@ -49,6 +49,44 @@ expect_fail_cmd() {
   log "✓ expected failure: $expected"
 }
 
+replace_markdown_section() {
+  local file="$1"
+  local header="$2"
+  local content="$3"
+  local tmp
+  tmp="$(mktemp)"
+
+  awk -v header="$header" -v replacement="$content" '
+    BEGIN {
+      in_section = 0
+      replaced = 0
+      section_lines = split(replacement, lines, /\n/)
+    }
+    $0 == header {
+      print
+      for (i = 1; i <= section_lines; i++) {
+        print lines[i]
+      }
+      in_section = 1
+      replaced = 1
+      next
+    }
+    in_section && /^## / {
+      in_section = 0
+    }
+    !in_section {
+      print
+    }
+    END {
+      if (!replaced) {
+        exit 2
+      }
+    }
+  ' "$file" > "$tmp" || die "failed to replace section $header in $file"
+
+  mv "$tmp" "$file"
+}
+
 log "smoke workspace: $TMP_WORKSPACE"
 
 # Test 1: Install workspace
@@ -75,6 +113,7 @@ git config user.email "smoke@test.local"
 [ -f "spec.md" ] || die "init-dossier did not create spec.md"
 [ -f "AGENTS.md" ] || die "init-dossier did not create AGENTS.md"
 [ -f "CLAUDE.md" ] || die "init-dossier did not create CLAUDE.md"
+[ -x "scripts/codespec-deploy" ] || die "init-dossier did not create executable scripts/codespec-deploy"
 [ -d ".git/hooks" ] || die "init-dossier did not create .git/hooks"
 [ -x ".git/hooks/pre-commit" ] || die "init-dossier did not install pre-commit hook"
 log "✓ dossier initialized"
@@ -104,95 +143,55 @@ EOF
 cat > spec.md <<'EOF'
 # spec.md
 
-## Default Read Layer
+## Summary
 
-### Intent Summary
-- Problem: test problem
-- Goals:
-  - test goal
-- Non-goals:
-  - test non-goal
-- Must-have Anchors:
-  - test anchor
-- Prohibition Anchors:
-  - test prohibition
-- Success Anchors:
-  - test success
-- Boundary Alerts:
-  - test boundary
-- Unresolved Decisions:
-  - none
+Test summary for smoke test.
 
-### Input Intake Summary
-- input_maturity: L1
-- input_refs:
+## Inputs
+
+- source_refs:
   - docs/test.md#intent
-- input_owner: smoke-test
+- source_owner: smoke-test
+- maturity: L1
+- normalization_note: normalized into minimal smoke requirement set
 - approval_basis: test-approval
-- normalization_status: ready-for-requirements
 
 ## Intent
 
-### Problem
+### Problem / Background
 Test problem description.
 
 ### Goals
 - test goal
 
-### Non-goals
-- test non-goal
+### Boundaries
+- do not expand beyond smoke test scope
+
+## Open Decisions
+
+- none
 
 ## Requirements
 
-### Proposal Coverage Map
+### Source Coverage
 - source_ref: docs/test.md#intent
-  anchor_ref: test goal
-  target_ref: REQ-001
-  status: covered
-- source_ref: docs/test.md#intent
-  anchor_ref: test anchor
-  target_ref: REQ-001
-  status: covered
-- source_ref: docs/test.md#intent
-  anchor_ref: test prohibition
-  target_ref: REQ-001
-  status: covered
-- source_ref: docs/test.md#intent
-  anchor_ref: test success
-  target_ref: REQ-001
-  status: covered
-- source_ref: docs/test.md#intent
-  anchor_ref: test boundary
-  target_ref: REQ-001
+  covered_by_reqs: [REQ-001]
+  open_clarifications: []
   status: covered
 
-### Clarification Status
-No clarifications needed.
-
-### Functional Requirements
+### Functional
 - REQ-001
   - summary: test requirement
   - rationale: for smoke test
 
-### Requirements Detail
-
-- req_id: REQ-001
-  description: test requirement
-  acceptance_refs:
-    - ACC-001
-  verification_refs:
-    - VO-001
-  priority: P0
-  status: approved
+### Constraints
+- keep the smoke dossier minimal
 
 ## Acceptance
 
 - acc_id: ACC-001
   source_ref: REQ-001
-  requirement_refs:
-    - REQ-001
   expected_outcome: test passes
-  description: test acceptance
   priority: P0
   status: approved
 
@@ -200,20 +199,11 @@ No clarifications needed.
 
 - vo_id: VO-001
   acceptance_ref: ACC-001
-  acceptance_refs:
-    - ACC-001
   verification_type: automated
-  description: test verification
-
-### Input Intake
-
-#### docs/test.md#intent
-Test input.
-
-### Testing Priority Rules
-- P0: automated
-- P1: automated or manual
-- P2: manual acceptable
+  verification_profile: focused
+  obligations:
+    - smoke requirement can advance to next phase
+  artifact_expectation: gate check passes
 
 <!-- SKELETON-END -->
 EOF
@@ -262,21 +252,36 @@ log "\n=== Test 6: add-work-item and start-implementation ==="
 cat > design.md <<'EOF'
 # design.md
 
-## Default Read Layer
+## Summary
 
-## Goal / Scope Link
-- REQ-001 -> WI-001
-- REQ-001 -> WI-002
+Smoke design summary.
 
-## Architecture Boundary
-Test architecture.
+## Technical Approach
 
-## Work Item Execution Strategy
-Single branch execution.
+Keep the smoke implementation minimal and tied to one requirement.
 
-## Design Slice Index
-- WI-001: test work item
-- WI-002: follow-up test work item
+## Boundaries & Impacted Surfaces
+
+- impacted_surfaces:
+  - src/**
+- out_of_scope:
+  - production deployment
+
+## Execution Model
+
+- mode: single-branch
+- rationale: smoke test does not need parallelism
+
+## Work Item Mapping
+
+- wi_id: WI-001
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  summary: implement smoke verification capability
+- wi_id: WI-002
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  summary: implement same-phase WI switching capability
 
 ## Work Item Derivation
 - wi_id: WI-001
@@ -304,44 +309,19 @@ Single branch execution.
   contract_needed: false
   notes_on_boundary: same-phase switching scope
 
-## Contract Needs
-No contracts needed.
-
 ## Verification Design
-Automated tests.
+
+- ACC-001:
+  - approach: smoke gates and lifecycle commands pass
+  - evidence: scripts/smoke.sh completes
+
+## Reopen Triggers
+
+- if lifecycle gates require duplicate spec/design sections again
 
 ## Failure Paths / Reopen Triggers
-None identified.
 
-## Implementation Readiness Baseline
-
-### Environment Configuration Matrix
-- dev: local development environment with hot reload
-- staging: pre-production environment for integration testing
-- prod: production environment with monitoring and alerting
-
-### Security Baseline
-- Authentication: JWT-based authentication required for all endpoints
-- Authorization: role-based access control with admin/user roles
-- Data encryption: TLS 1.3 for transport, AES-256 for data at rest
-
-### Data / Migration Strategy
-- No data migration needed for smoke test
-- All test data is ephemeral and generated at runtime
-- No schema changes required
-
-### Operability / Health Checks
-- Basic health endpoint available at /health
-- Returns 200 OK when service is running
-- Includes uptime and version information
-
-### Backup / Restore
-- Not applicable for smoke test
-- No persistent data to backup
-- Test data is regenerated on each run
-
-## Appendix Map
-No appendices.
+- if work item derivation drifts from work-items/*.yaml
 EOF
 
 git add design.md
@@ -517,16 +497,13 @@ log "✓ start-deployment succeeded"
 # Test 9: Complete change
 log "\n=== Test 9: Complete change ==="
 
-# Fill deployment.md
+# Fill deployment.md and provide a project deploy script
 cat > deployment.md <<'EOF'
 # deployment.md
 
 ## Deployment Plan
 target_env: test
 deployment_date: 2026-04-16
-deployment_method: automated
-restart_required: yes
-restart_reason: application code changed and running process must reload new code
 
 ## Pre-deployment Checklist
 - [x] Tests pass
@@ -536,35 +513,120 @@ restart_reason: application code changed and running process must reload new cod
 1. Deploy test
 2. Restart service
 
+## Execution Evidence
+status: pending
+execution_ref: pending
+deployment_method: pending
+deployed_at: pending
+deployed_revision: pending
+restart_required: pending
+restart_reason: pending
+runtime_observed_revision: pending
+runtime_ready_evidence: pending
+
 ## Verification Results
-smoke_test: pass
-runtime_ready: pass
-runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
-manual_verification_ready: pass
+smoke_test: pending
+runtime_ready: pending
+manual_verification_ready: pending
 
 ## Acceptance Conclusion
-status: pass
-approved_by: smoke-test
-approved_at: 2026-04-16
+status: pending
+notes: pending manual acceptance
+approved_by: pending
+approved_at: pending
 
 ## Rollback Plan
-Revert commit.
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
 
 ## Monitoring
-Monitor logs.
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
 
 ## Post-deployment Actions
-None.
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
 EOF
 
-git add deployment.md
-git commit -m "docs: complete deployment"
+cat > scripts/codespec-deploy <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
 
-"$TMP_WORKSPACE/.codespec/codespec" complete-change
+cat > "${CODESPEC_DEPLOY_RESULT_FILE:?}" <<'RESULT'
+status: pass
+execution_ref: smoke-run-001
+deployment_method: automated
+deployed_at: 2026-04-16T09:30:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+smoke_test: pass
+runtime_ready: pass
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+manual_verification_ready: pass
+RESULT
+EOF
+chmod +x scripts/codespec-deploy
+
+git add deployment.md scripts/codespec-deploy
+git commit -m "docs: prepare deployment flow"
+
+"$TMP_WORKSPACE/.codespec/codespec" deploy
+"$TMP_WORKSPACE/.codespec/codespec" check-gate deployment-readiness
+
+assert_contains "$(<deployment.md)" "execution_ref: smoke-run-001"
+assert_contains "$(<deployment.md)" "status: pending"
+log "✓ deploy writes execution evidence and readiness data"
+
+expect_fail_cmd \
+  "acceptance conclusion status must be pass" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' complete-change smoke-v1"
+
+replace_markdown_section deployment.md "## Acceptance Conclusion" "$(cat <<'EOF'
+status: fail
+notes: manual verification found a regression
+approved_by: pending
+approved_at: pending
+EOF
+)"
+
+"$TMP_WORKSPACE/.codespec/codespec" reopen-implementation WI-001
+
+phase=$(yq eval '.phase' meta.yaml)
+[ "$phase" = "Implementation" ] || die "reopen-implementation did not set phase to Implementation"
+focus_wi=$(yq eval '.focus_work_item' meta.yaml)
+[ "$focus_wi" = "WI-001" ] || die "reopen-implementation did not set focus_work_item"
+log "✓ reopen-implementation re-enters Implementation for failed manual verification"
+
+"$TMP_WORKSPACE/.codespec/codespec" start-testing
+"$TMP_WORKSPACE/.codespec/codespec" start-deployment
+"$TMP_WORKSPACE/.codespec/codespec" deploy
+
+assert_contains "$(<deployment.md)" "notes: pending manual acceptance"
+log "✓ redeploy resets manual acceptance conclusion to pending"
+
+replace_markdown_section deployment.md "## Acceptance Conclusion" "$(cat <<'EOF'
+status: pass
+notes: manual acceptance passed after redeploy
+approved_by: smoke-test
+approved_at: 2026-04-16
+EOF
+)"
+
+git add deployment.md
+git commit -m "docs: record manual acceptance"
+
+"$TMP_WORKSPACE/.codespec/codespec" complete-change smoke-v1
 
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "completed" ] || die "complete-change did not set status to completed"
-log "✓ complete-change succeeded"
+[ -f "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" ] || die "complete-change did not archive stable version"
+log "✓ complete-change archived the accepted stable version"
 
 # Completed dossiers should remain re-verifiable
 "$TMP_WORKSPACE/.codespec/codespec" check-gate verification
@@ -577,9 +639,6 @@ cat > deployment.md <<'EOF'
 ## Deployment Plan
 target_env: test
 deployment_date: 2026-04-16
-deployment_method: automated
-restart_required: yes
-restart_reason: application code changed and running process must reload new code
 
 ## Pre-deployment Checklist
 - [x] Tests pass
@@ -589,23 +648,43 @@ restart_reason: application code changed and running process must reload new cod
 1. Deploy test
 2. Restart service
 
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-002
+deployment_method: automated
+deployed_at: 2026-04-16T09:30:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+
 ## Verification Results
 smoke_test: pass
+runtime_ready: pending
 manual_verification_ready: pass
 
 ## Acceptance Conclusion
-status: pass
-approved_by: smoke-test
-approved_at: 2026-04-16
+status: pending
+notes: pending manual acceptance
+approved_by: pending
+approved_at: pending
 
 ## Rollback Plan
-Revert commit.
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
 
 ## Monitoring
-Monitor logs.
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
 
 ## Post-deployment Actions
-None.
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
 EOF
 
 set +e
@@ -623,9 +702,6 @@ cat > deployment.md <<'EOF'
 ## Deployment Plan
 target_env: test
 deployment_date: 2026-04-16
-deployment_method: automated
-restart_required: yes
-restart_reason: application code changed and running process must reload new code
 
 ## Pre-deployment Checklist
 - [x] Tests pass
@@ -635,23 +711,41 @@ restart_reason: application code changed and running process must reload new cod
 1. Deploy test
 2. Restart service
 
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-003
+deployment_method: automated
+deployed_at: 2026-04-16T09:30:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+
 ## Verification Results
 smoke_test: pass
 runtime_ready: pass
 
 ## Acceptance Conclusion
-status: pass
-approved_by: smoke-test
-approved_at: 2026-04-16
+status: pending
+notes: pending manual acceptance
+approved_by: pending
+approved_at: pending
 
 ## Rollback Plan
-Revert commit.
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
 
 ## Monitoring
-Monitor logs.
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
 
 ## Post-deployment Actions
-None.
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
 EOF
 
 set +e
@@ -660,7 +754,6 @@ status=$?
 set -e
 
 [ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime readiness evidence is missing"
-assert_contains "$output" "runtime_ready_evidence"
 log "✓ deployment-readiness requires runtime readiness evidence"
 
 cat > deployment.md <<'EOF'
@@ -669,9 +762,6 @@ cat > deployment.md <<'EOF'
 ## Deployment Plan
 target_env: test
 deployment_date: 2026-04-16
-deployment_method: automated
-restart_required: yes
-restart_reason: application code changed and running process must reload new code
 
 ## Pre-deployment Checklist
 - [x] Tests pass
@@ -681,24 +771,42 @@ restart_reason: application code changed and running process must reload new cod
 1. Deploy test
 2. Restart service
 
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-004
+deployment_method: automated
+deployed_at: 2026-04-16T09:30:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+
 ## Verification Results
 smoke_test: pass
 runtime_ready: pass
-runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
 
 ## Acceptance Conclusion
-status: pass
-approved_by: smoke-test
-approved_at: 2026-04-16
+status: pending
+notes: pending manual acceptance
+approved_by: pending
+approved_at: pending
 
 ## Rollback Plan
-Revert commit.
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
 
 ## Monitoring
-Monitor logs.
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
 
 ## Post-deployment Actions
-None.
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
 EOF
 
 set +e
@@ -716,9 +824,6 @@ cat > deployment.md <<'EOF'
 ## Deployment Plan
 target_env: test
 deployment_date: 2026-04-16
-deployment_method: automated
-restart_required: yes
-restart_reason: application code changed and running process must reload new code
 
 ## Pre-deployment Checklist
 - [x] Tests pass
@@ -728,25 +833,43 @@ restart_reason: application code changed and running process must reload new cod
 1. Deploy test
 2. Restart service
 
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-005
+deployment_method: automated
+deployed_at: 2026-04-16T09:30:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16
+
 ## Verification Results
 smoke_test: pass
 runtime_ready: pass
-runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16
 manual_verification_ready: pass
 
 ## Acceptance Conclusion
-status: pass
-approved_by: smoke-test
-approved_at: 2026-04-16
+status: pending
+notes: pending manual acceptance
+approved_by: pending
+approved_at: pending
 
 ## Rollback Plan
-Revert commit.
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
 
 ## Monitoring
-Monitor logs.
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
 
 ## Post-deployment Actions
-None.
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
 EOF
 
 set +e
@@ -758,16 +881,11 @@ set -e
 assert_contains "$output" "restart-required deployment"
 log "✓ deployment-readiness requires restart evidence when restart is required"
 
-git checkout -- deployment.md
-
-"$TMP_WORKSPACE/.codespec/codespec" promote-version smoke-v1
-
-[ -f "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" ] || die "promote-version did not create versioned meta.yaml"
 promoted_status=$(yq eval '.status' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
-[ "$promoted_status" = "completed" ] || die "promote-version did not preserve completed status"
+[ "$promoted_status" = "completed" ] || die "complete-change did not preserve completed status in archived meta"
 promoted_active_wis=$(yq eval -o=json '.active_work_items' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
 assert_json_eq "$promoted_active_wis" '. | length' '0'
-log "✓ promote-version preserves completed metadata semantics"
+log "✓ complete-change preserves completed metadata semantics in archive"
 
 # Test 10: testing ledger selection semantics
 log "\n=== Test 10: testing ledger selection semantics ==="
@@ -941,7 +1059,61 @@ log "✓ readset JSON output correct"
 # Test 14: reset-to-proposal resolves promoted version from archived baseline metadata
 log "\n=== Test 14: reset-to-proposal ==="
 
-yq eval '.change_id = "baseline" | .base_version = null | .phase = "Deployment" | .status = "completed" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml
+yq eval '.change_id = "baseline" | .base_version = null | .phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"] | .execution_group = null | .execution_branch = null' -i meta.yaml
+
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-006
+deployment_method: automated
+deployed_at: 2026-04-16T10:00:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+
+## Verification Results
+smoke_test: pass
+runtime_ready: pass
+manual_verification_ready: pass
+
+## Acceptance Conclusion
+status: pass
+notes: manual acceptance passed for alias flow
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
+
+## Monitoring
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
+
+## Post-deployment Actions
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
+EOF
 
 "$TMP_WORKSPACE/.codespec/codespec" promote-version smoke-v2.8
 

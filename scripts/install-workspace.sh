@@ -59,6 +59,7 @@ cp "$FRAMEWORK_ROOT/templates/work-item.yaml" "$WORKSPACE_ROOT/.codespec/templat
 cp "$FRAMEWORK_ROOT/templates/testing.md" "$WORKSPACE_ROOT/.codespec/templates/testing.md"
 cp "$FRAMEWORK_ROOT/templates/contract.md" "$WORKSPACE_ROOT/.codespec/templates/contract.md"
 cp "$FRAMEWORK_ROOT/templates/deployment.md" "$WORKSPACE_ROOT/.codespec/templates/deployment.md"
+cp "$FRAMEWORK_ROOT/templates/codespec-deploy" "$WORKSPACE_ROOT/.codespec/templates/codespec-deploy"
 cp "$FRAMEWORK_ROOT/templates/lessons_learned.md" "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md"
 cp -R "$FRAMEWORK_ROOT/skills/." "$WORKSPACE_ROOT/.codespec/skills/"
 

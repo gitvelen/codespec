@@ -12,22 +12,19 @@
 
 **按当前 phase 读取**（从 meta.yaml 的 phase 字段获取）：
 
-**Proposal**：
-- `spec.md` - 首次浏览读 Default Read Layer（到 `<!-- SKELETON-END -->`）；工作时填充 Intent、Proposal Coverage Map、Clarification Status（替换模板占位和示例）
+**Requirement**：
+- `spec.md` - 完整读取，一次性填充 Inputs、Scope、Requirements、Acceptance、Verification
 - `spec-appendices/*` - 按需深入，但不能在 appendix 中定义正式 REQ/ACC/VO
-
-**Requirements**：
-- `spec.md` - 完整读取，填充 REQ-*、ACC-*、VO-*（替换模板占位）
-- `spec-appendices/*` - 按需深入
+- **写完后必须自检**：确保没有未决策项，所有需求都明确清晰，不要带着歧义进入 Design 阶段
 
 **Design**：
 - `spec.md` - 读取 approved requirements、acceptance、verification
-- `design.md` - 首次浏览读 Default Read Layer（Goal/Scope Link、Architecture Boundary、Work Item Derivation、Design Slice Index）；工作时填充 Goal/Scope Link、Architecture Boundary、Work Item Derivation、Verification Design、Implementation Readiness Baseline（替换模板占位）
-- `design-appendices/*` - 按需深入（通过 Design Slice Index）
+- `design.md` - 读取 `Summary`、`Technical Approach`、`Boundaries & Impacted Surfaces`、`Work Item Mapping`、`Work Item Derivation`、`Verification Design`
+- `design-appendices/*` - 按需深入；appendix 只能补充细节，不能替代主文档中的正式派生关系
 
 **Implementation**：
 - `work-items/<focus_work_item>.yaml` - 读取当前 WI 的 goal、allowed_paths、requirement_refs、acceptance_refs、verification_refs
-- `design.md` - 读取当前 WI 对应的 design slice（通过 Design Slice Index）
+- `design.md` - 读取当前 WI 在 `Work Item Mapping` 和 `Work Item Derivation` 中的条目
 - `spec.md` - 验证 REQ/ACC/VO 引用是否存在
 - `contracts/*.md` - 如果当前 WI 的 contract_refs 非空，读取对应合约
 - `testing.md` - 添加 branch-local 测试记录
@@ -39,18 +36,19 @@
 - `design.md` - 参考 Verification Design
 
 **Deployment**：
-- `deployment.md` - 填充 Deployment Plan、Verification Results、Acceptance Conclusion、Rollback Plan、Monitoring（替换模板占位）
+- `deployment.md` - 维护 Deployment Plan / Deployment Steps / Rollback Plan / Monitoring，并读取 `codespec deploy` 回写的 Execution Evidence / Verification Results / Acceptance Conclusion
 - `testing.md` - 验证所有 approved acceptance 都有 test_scope=full-integration 且 result=pass 的记录
+- `scripts/codespec-deploy` - 项目内真实部署入口；`codespec deploy` 会调用它并读取 YAML 结果
 
 **Deployment 交接规则**：
-- 先判断 `restart_required`；不能在未判断的情况下直接让用户验证
-- 若需要重启，先完成重启；不得跳过
-- 在提示人工验证前，先确认运行态已就绪，并记录 `runtime_ready: pass` 与 `runtime_ready_evidence`
-- 只有 smoke / runtime readiness / restart decision 都闭环后，才能标记 `manual_verification_ready: pass` 并通知用户人工验证
+- 先执行 `../.codespec/codespec deploy`，不要只手写 deployment.md 假装已经部署
+- `manual_verification_ready: pass` 只表示“可以开始人工验收”，不表示人工验收已通过
+- 如果人工验收发现需要改代码，执行 `../.codespec/codespec reopen-implementation <WI-ID>` 返回同一 change 的修复回路
+- 只有用户显式确认人工验收通过后，才能把 `Acceptance Conclusion.status` 记为 `pass`，再执行 `../.codespec/codespec complete-change <stable-version>`
 
 **说明**：
 - 文档可能是模板内容（阶段刚开始）或已填充内容（阶段进行中），都要读取
-- Default Read Layer 是快速索引，首次浏览时读取；工作时需要读取完整章节
+- 同一事实只应存在一个权威位置；不要把 `spec` 中已有事实再搬运到 `design` 或 appendix 中
 - `focus_work_item` 为 null 时跳过 work-items 读取
 - `contract_refs` 为空时跳过 contracts 读取
 - appendices 按需深入，不是每次必读
@@ -71,14 +69,14 @@
 - 目标/边界/验收不清楚 → 先问用户
 - `spec.md` / `design.md` / `work-items/*.yaml` 之间描述不一致 → 先对齐
 - 需要做产品判断（非纯工程判断）→ 先问用户
-- `Clarification Status` 中有 open decision 影响当前动作 → 先澄清
+- `Open Decisions` 中有 high-impact open/deferred decision 影响当前动作 → 先澄清
 
 **执行偏离**：
 - 连续失败或复杂度超预期 → 停下重新规划
 - 发现需要先回写权威文件（spec/design/testing/deployment）→ 停止当前任务，先更新文档
 - 依赖 Work Item 尚未完成，但当前任务需要其结果 → 停止，等待依赖
 - 测试失败且无法在当前 scope 内修复 → 回看 work-item.yaml，可能需要扩大 allowed_paths
-- Proposal 阶段在 appendix 中定义正式 REQ/ACC/VO → 停止，只能在主文档中定义
+- Requirement 阶段在 appendix 中定义正式 REQ/ACC/VO → 停止，只能在主文档中定义
 
 ---
 
@@ -148,16 +146,17 @@
 ## 四、阶段切换前检查
 
 **必须人工审核的阶段**：
-- `proposal→requirements`、`requirements→design`、`design→implementation`，这三个阶段切换必须经过人工显示确认
+- `requirement→design`、`design→implementation`，这两个阶段切换必须经过人工显式确认
 
 **命令与 gate 映射**（runtime 会自动检查）：
-- `../.codespec/codespec start-requirements` → 检查 `proposal-maturity`
-- `../.codespec/codespec start-design` → 检查 `requirements-approval`
+- `../.codespec/codespec start-design` → 检查 `requirement-complete`
 - `../.codespec/codespec start-implementation <WI-ID>` → 检查 `implementation-ready`
+- `../.codespec/codespec reopen-implementation <WI-ID>` → 从 Testing / Deployment 返回 Implementation
 - `../.codespec/codespec start-testing` → 检查 `metadata-consistency` + `scope` + `contract-boundary` + `verification`
 - `../.codespec/codespec start-deployment` → 检查 `trace-consistency` + `verification`
-- `../.codespec/codespec complete-change` → 检查 `promotion-criteria`
-- `../.codespec/codespec promote-version` → 检查 `promotion`
+- `../.codespec/codespec deploy` → 调用 `scripts/codespec-deploy` 并回写 deployment evidence
+- `../.codespec/codespec complete-change <stable-version>` → 检查 `promotion-criteria`，并归档稳定版本
+- `../.codespec/codespec promote-version <stable-version>` → `complete-change <stable-version>` 的兼容别名
 
 **说明**：
 - gate 检查由 runtime 自动执行，失败会阻止阶段切换

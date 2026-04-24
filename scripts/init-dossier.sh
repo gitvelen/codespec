@@ -64,7 +64,8 @@ mkdir -p "$PROJECT_ROOT/work-items" \
   "$PROJECT_ROOT/contracts" \
   "$PROJECT_ROOT/design-appendices" \
   "$PROJECT_ROOT/spec-appendices" \
-  "$PROJECT_ROOT/reviews"
+  "$PROJECT_ROOT/reviews" \
+  "$PROJECT_ROOT/scripts"
 
 # 复制模板文件
 cp "$WORKSPACE_ROOT/.codespec/templates/spec.md" "$PROJECT_ROOT/spec.md"
@@ -72,6 +73,10 @@ cp "$WORKSPACE_ROOT/.codespec/templates/design.md" "$PROJECT_ROOT/design.md"
 cp "$WORKSPACE_ROOT/.codespec/templates/testing.md" "$PROJECT_ROOT/testing.md"
 cp "$WORKSPACE_ROOT/.codespec/templates/CLAUDE.md" "$PROJECT_ROOT/CLAUDE.md"
 cp "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md" "$PROJECT_ROOT/AGENTS.md"
+if [ ! -f "$PROJECT_ROOT/scripts/codespec-deploy" ]; then
+  cp "$WORKSPACE_ROOT/.codespec/templates/codespec-deploy" "$PROJECT_ROOT/scripts/codespec-deploy"
+  chmod +x "$PROJECT_ROOT/scripts/codespec-deploy"
+fi
 
 # 创建 meta.yaml
 TODAY="$(date +%F)"

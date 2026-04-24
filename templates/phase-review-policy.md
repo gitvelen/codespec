@@ -11,50 +11,31 @@
 - 先定位当前 `./meta.yaml` 中的 `phase`、`status`、`focus_work_item`、`execution_branch`。
 - 先读当前 dossier 的 agent 入口文件（`AGENTS.md` 或 `CLAUDE.md`，根据使用的 agent 选择），再读本 phase 对应的权威文件。
 - 每次 phase 切换前都要给出一个结论：`允许切换`、`有条件允许切换`、`禁止切换`。
-- 只有 gate 通过且人工走查未发现阻塞项，才允许执行 `codespec start-*`、`complete-change` 或 `promote-version`。
+- 只有 gate 通过且人工走查未发现阻塞项，才允许执行 `codespec start-*`、`deploy`、`reopen-implementation`、`complete-change` 或 `promote-version`。
 
-## Proposal -> Requirements
+## Requirement -> Design
 必须读取：
 - `./spec.md`
 
 必须确认：
-- `spec.md` 结构完整，至少包含 `Default Read Layer`、`Intent`、`Requirements`、`Acceptance`、`Verification`、`Input Intake Summary`、`Input Intake`、`Testing Priority Rules`、`<!-- SKELETON-END -->`。
-- `input_owner`、`approval_basis`、`input_refs` 不是 placeholder。
-- `input_maturity` 与 `normalization_status` 使用合法枚举值。
-- Goals / Anchors / Boundary Alerts / Unresolved Decisions 已经足以支撑 Requirements 正规化。
+- `spec.md` 结构完整，至少包含 `Summary`、`Inputs`、`Scope`、`Requirements`、`Acceptance`、`Verification`。
+- `source_owner`、`approval_basis`、`source_refs`、`normalization_note` 不是 placeholder。
+- `maturity` 使用合法枚举值。
+- 至少有一组真实 `REQ-*`、`ACC-*`、`VO-*`。
+- 每个 `REQ` 都有 `source_ref` 追溯到 `Inputs`，都有 acceptance 映射，每个 `ACC` 都有 verification 映射。
 - appendix 没有私自定义正式 `REQ/ACC/VO`。
-- Proposal 阶段只允许 authority 文档与输入沉淀类改动；当前粗粒度 runtime/hook 只会硬拦最明显的实现产物（`src/**`、`Dockerfile`），其他越阶段实现仍需 reviewer 明确阻止。
-- 进入 Requirements 前，当前 Proposal 审查结论必须以 `./reviews/requirements-review.yaml` 落盘，并至少包含 `phase: Proposal`、`verdict: approved`、`reviewed_by`、`reviewed_at`。
+- acceptance 可观测、可判 PASS/FAIL，verification 描述了证据形状而不是"以后补"。
+- Requirement 阶段只允许 authority 文档与输入沉淀类改动；当前粗粒度 runtime/hook 只会硬拦最明显的实现产物（`src/**`、`Dockerfile`），其他越阶段实现仍需 reviewer 明确阻止。
+- 进入 Design 前，当前 Requirement 审查结论必须以 `./reviews/design-review.yaml` 落盘，并至少包含 `phase: Requirement`、`verdict: approved`、`reviewed_by`、`reviewed_at`。
 
 必须通过：
-- `./.codespec/codespec check-gate proposal-maturity`
+- `./.codespec/codespec check-gate requirement-complete`
 
 禁止切换：
 - 输入仍是模板占位。
-- 目标、边界或未决策模糊到无法拆成 requirements。
-- 需要靠 appendix 才能知道正式要求编号。
-
-## Requirements -> Design
-必须读取：
-- `./spec.md`
-
-必须确认：
-- `Proposal Coverage Map` 与 `Clarification Status` 存在。
-- 至少有一组真实 `REQ-*`、`ACC-*`、`VO-*`。
-- 每个 `REQ` 都有 acceptance 映射，每个 `ACC` 都有 verification 映射。
-- 所有 intake refs 都在 Requirements coverage 或 clarification 中闭合。
-- 没有 high-impact clarification 仍保持 `open`。
-- acceptance 可观测、可判 PASS/FAIL，verification 描述了证据形状而不是“以后补”。
-- Requirements 阶段只允许 authority 文档与输入沉淀类改动；当前粗粒度 runtime/hook 只会硬拦最明显的实现产物（`src/**`、`Dockerfile`），其他越阶段实现仍需 reviewer 明确阻止。
-
-必须通过：
-- `./.codespec/codespec check-gate requirements-approval`
-
-禁止切换：
-- proposal anchor 未闭合。
 - acceptance 不可测或语义过大。
 - verification 义务无法指导后续 testing。
-- 高影响澄清项仍未关闭。
+- 需要靠 appendix 才能知道正式要求编号。
 
 ## Design -> Implementation
 必须读取：
@@ -64,14 +45,14 @@
 - `./contracts/*.md`（若当前 WI 使用）
 
 必须确认：
-- `design.md` 的 `Goal / Scope Link`、`Architecture Boundary`、`Work Item Execution Strategy`、`Design Slice Index`、`Work Item Derivation`、`Contract Needs`、`Verification Design`、`Failure Paths / Reopen Triggers` 完整。
+- `design.md` 的 `Summary`、`Technical Approach`、`Boundaries & Impacted Surfaces`、`Execution Model`、`Work Item Mapping`、`Work Item Derivation`、`Verification Design`、`Reopen Triggers` 完整。
 - 至少存在一个真实 `WI-*` 派生项。
-- 若计划并行执行，`Work Item Execution Strategy` 已明确每条执行线的 execution_branch、work_items、owned_paths、shared_paths、shared_file_owner、forbidden_paths、merge_order 和 conflict_policy（这些字段仅用于文档化和人工审查，只有 allowed_paths/forbidden_paths 由 runtime 强制）。execution_group 非 null 表示多分支并行模式，此时 gate 会检查 owned_paths 非空。
+- 若计划并行执行，`Execution Model` 与 `work-items/*.yaml` 已明确每条执行线的 execution_branch、owned_paths、shared_paths、shared_file_owner、merge_order 和 conflict_policy（这些字段仅用于文档化和人工审查，只有 allowed_paths/forbidden_paths 由 runtime 强制）。execution_group 非 null 表示多分支并行模式，此时 gate 会检查 owned_paths 非空。
 - 当前 WI 的 `goal`、`input_refs`、`requirement_refs`、`acceptance_refs`、`verification_refs`、`allowed_paths`、`derived_from` 完整且非 placeholder。
 - 当前 WI 的 `branch_execution` 与 `design.md` 的并行分支计划一致；共享文件已有唯一 owner 或父 feature 分支集成策略。
 - 当前 WI 与 `design.md` 中同名 derivation row 的 input / requirement / acceptance / verification refs 完全一致。
 - 当前 WI 引用的 `REQ/ACC/VO` 都存在于 `spec.md`。
-- 当前 WI 的 `input_refs` 能在 spec coverage 中找到落点。
+- 当前 WI 的 `input_refs` 能在 spec source coverage 中找到落点。
 - 若 `contract_refs` 非空，对应 contract 文件存在且已 `status: frozen`。
 - 若需要新增 shared contract，先以 `status: draft` 建档并完成显式 review，再冻结为 `status: frozen` 后被当前 WI 引用；不要直接新增 frozen contract。
 - 若存在依赖 WI，依赖项已有 pass record。
@@ -175,39 +156,42 @@
 
 必须确认：
 - `start-deployment` 只表示进入 Deployment 阶段，并在缺少 `deployment.md` 时自动 materialize 工作载体；不等于 deployment readiness 已达成。
-- `complete-change` 会把 dossier 置为 completed 状态，并清空 `active_work_items`；后续重跑 gate 时应以 completed 语义验真，而不是继续要求活跃 WI 集合。
-- `deployment.md` 已 materialize，并包含 `Deployment Plan`、`Pre-deployment Checklist`、`Deployment Steps`、`Verification Results`、`Acceptance Conclusion`、`Rollback Plan`、`Monitoring`、`Post-deployment Actions`。
-- `Acceptance Conclusion.status = pass`，`approved_by` 非空，`approved_at` 日期合法。
+- `codespec deploy` 才表示真实部署已执行；它会调用项目内 `scripts/codespec-deploy`，并把结果回写到 `deployment.md` 的 `Execution Evidence` 与 `Verification Results`。
+- `deployment.md` 已 materialize，并包含 `Deployment Plan`、`Pre-deployment Checklist`、`Deployment Steps`、`Execution Evidence`、`Verification Results`、`Acceptance Conclusion`、`Rollback Plan`、`Monitoring`、`Post-deployment Actions`。
 - `deployment_date` 与 `target_env` 合法。
-- `smoke_test: pass`。
-- 已显式给出 `restart_required` 判断；不能把“是否要重启”留给人工自己猜。
-- `runtime_ready: pass`，且有可复核证据证明运行态已经就绪，当前运行实例已加载本次部署的新版本，而不是旧进程/旧静态资源。
-- 若 `restart_required: yes`，`runtime_ready_evidence` 必须同时证明重启已经完成；若 `restart_required: no`，理由必须能解释为什么当前部署方式已天然完成热更新/滚动替换。
-- 只有部署闭环已经达到可交接状态时，才能标记 `manual_verification_ready: pass`，然后再提示人工验证。
+- `Execution Evidence.status = pass`，且 `execution_ref`、`deployment_method`、`deployed_at`、`deployed_revision`、`restart_required`、`restart_reason`、`runtime_observed_revision`、`runtime_ready_evidence` 全部可复核。
+- `smoke_test: pass`、`runtime_ready: pass`、`manual_verification_ready: pass`。
+- `deployed_revision = runtime_observed_revision`，证明当前运行实例已加载本次部署的新版本。
+- 若 `restart_required: yes`，`runtime_ready_evidence` 必须同时证明重启/rollout 已完成；若 `restart_required: no`，理由必须能解释为什么当前部署方式已天然完成热更新/滚动替换。
+- `manual_verification_ready: pass` 只表示“可以开始人工验收”；人工验收失败时，应使用 `reopen-implementation <WI-ID>` 返回同一 change 的修复回路，而不是 reset 成新 change。
+- 只有用户显式确认人工验收通过后，才能把 `Acceptance Conclusion.status` 设为 `pass`，并填写 `approved_by` / `approved_at`。
+- `complete-change <stable-version>` 会同时完成两件事：把 dossier 置为 completed，并归档到 `versions/<stable-version>/`。
 - 文档中没有任何模板占位。
 - rollback plan 与 monitoring 能覆盖本次变更的主要失败模式。
-- 若要 promotion，`versions/` 目录存在且允许归档。
+- 若要 complete-change / promotion，`versions/` 目录存在且允许归档。
 
 必须通过：
 - `./.codespec/codespec check-gate trace-consistency`（start-deployment 时检查）
 - `./.codespec/codespec check-gate verification`（start-deployment 时检查）
-- `./.codespec/codespec check-gate deployment-readiness`（complete-change 时通过 promotion-criteria 间接检查）
-- `./.codespec/codespec check-gate promotion-criteria`（complete-change 时检查）
-- `./.codespec/codespec check-gate promotion`（执行 promote-version 前检查）
+- `./.codespec/codespec check-gate deployment-readiness`（执行 `deploy` 后应通过，表示已达到人工验收就绪）
+- `./.codespec/codespec check-gate promotion-criteria`（执行 `complete-change <stable-version>` 时检查）
+- `./.codespec/codespec check-gate promotion`（执行 `promote-version <stable-version>` 兼容别名时检查）
 
 禁止切换：
 - deployment.md 仍是模板。
 - smoke / deployment verification 没有真实通过证据。
 - 尚未确认当前服务跑的是新代码，却试图把验证交给人工。
 - 需要重启却未完成重启确认，或不需要重启的理由站不住脚。
+- 人工验收尚未明确通过，却试图执行 `complete-change <stable-version>`。
 - rollback 或 monitoring 只是形式条目。
 - promotion 证据不足却尝试归档稳定版本。
 
 ## 命令映射
-- `start-requirements` -> `proposal-maturity` + `review-verdict-present`（要求 reviews/requirements-review.yaml 存在且 phase=Proposal, verdict=approved）
-- `start-design` -> `requirements-approval` + `review-verdict-present`（要求 reviews/design-review.yaml 存在且 phase=Requirements, verdict=approved）
+- `start-design` -> `requirement-complete` + `review-verdict-present`（要求 reviews/design-review.yaml 存在且 phase=Requirement, verdict=approved）
 - `start-implementation` -> `implementation-ready` + `review-verdict-present`（从 `Design` 进入 `Implementation`，或在 `Implementation` 内切换 `focus_work_item`；要求 reviews/implementation-review.yaml 存在且 phase=Design, verdict=approved）
+- `reopen-implementation` -> Testing / Deployment -> Implementation（不新建 change，用于失败验收后的返工）
 - `start-testing` -> `metadata-consistency` + `scope` + `contract-boundary` + `verification`
 - `start-deployment` -> `trace-consistency` + `verification`，并在缺少 `deployment.md` 时自动 materialize
-- `complete-change` -> `promotion-criteria`
-- `promote-version` -> `promotion`
+- `deploy` -> 调用 `scripts/codespec-deploy` 并更新 `deployment.md`
+- `complete-change <stable-version>` -> `promotion-criteria`，并归档稳定版本
+- `promote-version <stable-version>` -> `promotion`（兼容别名）
