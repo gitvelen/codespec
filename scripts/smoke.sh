@@ -118,8 +118,8 @@ git config user.email "smoke@test.local"
 [ -x ".git/hooks/pre-commit" ] || die "init-dossier did not install pre-commit hook"
 log "✓ dossier initialized"
 
-# Test 3: Proposal phase
-log "\n=== Test 3: Proposal phase ==="
+# Test 3: Requirement phase
+log "\n=== Test 3: Requirement phase ==="
 phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Proposal" ] || die "initial phase should be Proposal, got: $phase"
 
@@ -127,8 +127,8 @@ status=$(yq eval '.status' meta.yaml)
 [ "$status" = "active" ] || die "initial status should be active, got: $status"
 log "✓ initial phase is Proposal"
 
-# Test 4: start-requirements
-log "\n=== Test 4: start-requirements ==="
+# Test 4: start-design
+log "\n=== Test 4: start-design ==="
 
 # Create input file
 mkdir -p docs
@@ -209,7 +209,7 @@ Test problem description.
 EOF
 
 mkdir -p reviews
-cat > reviews/requirements-review.yaml <<'EOF'
+cat > reviews/design-review.yaml <<'EOF'
 phase: Proposal
 verdict: approved
 reviewed_by: smoke-test
@@ -219,11 +219,11 @@ EOF
 git add .
 git commit -m "feat: initial proposal"
 
-"$TMP_WORKSPACE/.codespec/codespec" start-requirements
+"$TMP_WORKSPACE/.codespec/codespec" start-design
 
 phase=$(yq eval '.phase' meta.yaml)
-[ "$phase" = "Requirements" ] || die "start-requirements did not set phase to Requirements"
-log "✓ start-requirements succeeded"
+[ "$phase" = "Requirements" ] || die "start-design did not set phase to Design"
+log "✓ start-design succeeded"
 
 # Test 5: start-design
 log "\n=== Test 5: start-design ==="
@@ -1032,7 +1032,7 @@ output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.co
 status=$?
 set -e
 
-[ "$status" -ne 0 ] || die "phase-capability gate should fail when src/** exists in Proposal phase"
+[ "$status" -ne 0 ] || die "phase-capability gate should fail when src/** exists in Requirement phase"
 log "✓ phase-capability gate works"
 
 git reset HEAD src/forbidden.txt
@@ -1056,8 +1056,8 @@ assert_json_eq "$readset_json" '.entry_files[0].path' '"AGENTS.md"'
 assert_json_eq "$readset_json" '.minimal_readset | map(select(.path == "meta.yaml")) | length' '1'
 log "✓ readset JSON output correct"
 
-# Test 14: reset-to-proposal resolves promoted version from archived baseline metadata
-log "\n=== Test 14: reset-to-proposal ==="
+# Test 14: reset-to-requirement resolves promoted version from archived baseline metadata
+log "\n=== Test 14: reset-to-requirement ==="
 
 yq eval '.change_id = "baseline" | .base_version = null | .phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"] | .execution_group = null | .execution_branch = null' -i meta.yaml
 
@@ -1134,17 +1134,17 @@ assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].p
 assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].promoted_at | length > 0' 'true'
 log "✓ list-versions JSON output includes promoted metadata"
 
-"$TMP_WORKSPACE/.codespec/codespec" reset-to-proposal
+"$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
 
 reset_phase=$(yq eval '.phase' meta.yaml)
-[ "$reset_phase" = "Proposal" ] || die "reset-to-proposal did not return to Proposal phase"
+[ "$reset_phase" = "Proposal" ] || die "reset-to-requirement did not return to Requirement phase"
 reset_status=$(yq eval '.status' meta.yaml)
-[ "$reset_status" = "active" ] || die "reset-to-proposal did not reactivate dossier"
+[ "$reset_status" = "active" ] || die "reset-to-requirement did not reactivate dossier"
 reset_base_version=$(yq eval '.base_version' meta.yaml)
-[ "$reset_base_version" = "smoke-v2.8" ] || die "reset-to-proposal did not carry promoted version into base_version"
+[ "$reset_base_version" = "smoke-v2.8" ] || die "reset-to-requirement did not carry promoted version into base_version"
 reset_change_id=$(yq eval '.change_id' meta.yaml)
-[ "$reset_change_id" = "smoke-v2.8-next" ] || die "reset-to-proposal did not derive next change_id from promoted version"
-log "✓ reset-to-proposal resolves promoted baseline version"
+[ "$reset_change_id" = "smoke-v2.8-next" ] || die "reset-to-requirement did not derive next change_id from promoted version"
+log "✓ reset-to-requirement resolves promoted baseline version"
 
 # Legacy compatibility: same-name archive should still reset through the direct path.
 mkdir -p "$TMP_WORKSPACE/versions/release-1"
@@ -1152,16 +1152,16 @@ cp "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml" "$TMP_WORKSPACE/versions/relea
 yq eval '.change_id = "release-1" | .promoted_version = "release-1"' -i "$TMP_WORKSPACE/versions/release-1/meta.yaml"
 yq eval '.change_id = "release-1" | .base_version = null | .phase = "Deployment" | .status = "completed" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml
 
-"$TMP_WORKSPACE/.codespec/codespec" reset-to-proposal
+"$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
 
 legacy_base_version=$(yq eval '.base_version' meta.yaml)
-[ "$legacy_base_version" = "release-1" ] || die "reset-to-proposal should preserve direct same-name archive compatibility"
+[ "$legacy_base_version" = "release-1" ] || die "reset-to-requirement should preserve direct same-name archive compatibility"
 legacy_change_id=$(yq eval '.change_id' meta.yaml)
 [ "$legacy_change_id" = "release-1-next" ] || die "legacy same-name archive should derive release-1-next change_id"
-log "✓ reset-to-proposal preserves same-name archive compatibility"
+log "✓ reset-to-requirement preserves same-name archive compatibility"
 
 expect_fail_cmd \
   "current completed dossier has not been promoted yet" \
-  "cd '$TMP_WORKSPACE/test-project' && yq eval '.change_id = \"unpromoted\" | .base_version = null | .phase = \"Deployment\" | .status = \"completed\" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml && '$TMP_WORKSPACE/.codespec/codespec' reset-to-proposal"
+  "cd '$TMP_WORKSPACE/test-project' && yq eval '.change_id = \"unpromoted\" | .base_version = null | .phase = \"Deployment\" | .status = \"completed\" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml && '$TMP_WORKSPACE/.codespec/codespec' reset-to-requirement"
 
 log "\n=== All tests passed ==="
