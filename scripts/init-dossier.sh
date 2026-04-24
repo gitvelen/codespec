@@ -105,8 +105,8 @@ else
   log "skipped git hooks installation (not a git repository)"
 fi
 
-# 创建初始 review verdict 以支持首次 start-requirements
-cat > "$PROJECT_ROOT/reviews/requirements-review.yaml" <<EOF
+# 创建初始 review verdict 以支持首次 start-design
+cat > "$PROJECT_ROOT/reviews/design-review.yaml" <<EOF
 phase: Requirement
 verdict: approved
 reviewed_by: codespec-init
