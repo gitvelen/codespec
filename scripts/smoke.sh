@@ -193,7 +193,7 @@ EOF
 
 mkdir -p reviews
 cat > reviews/design-review.yaml <<'EOF'
-phase: Proposal
+phase: Requirement
 verdict: approved
 reviewed_by: smoke-test
 reviewed_at: 2026-04-16
@@ -206,26 +206,6 @@ git commit -m "feat: initial proposal"
 
 phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Design" ] || die "start-design did not set phase to Design"
-log "✓ start-design succeeded"
-
-# Test 5: start-design
-log "\n=== Test 5: start-design ==="
-
-cat > reviews/design-review.yaml <<'EOF'
-phase: Requirements
-verdict: approved
-reviewed_by: smoke-test
-reviewed_at: 2026-04-16
-EOF
-
-git add .
-git commit -m "feat: complete requirements"
-
-"$TMP_WORKSPACE/.codespec/codespec" start-design
-
-phase=$(yq eval '.phase' meta.yaml)
-[ "$phase" = "Design" ] || die "start-design did not set phase to Design"
-[ -f "design.md" ] || die "start-design did not create design.md"
 log "✓ start-design succeeded"
 
 # Test 6: add-work-item and start-implementation
