@@ -985,7 +985,7 @@ assert_contains "$output" "Deployment phase requires active_work_items to be non
 log "✓ active Deployment still requires active_work_items"
 
 # Test phase-capability gate
-yq eval '.phase = "Proposal"' -i meta.yaml
+yq eval '.phase = "Requirement"' -i meta.yaml
 mkdir -p src
 echo "test" > src/forbidden.txt
 git add src/forbidden.txt
@@ -1004,7 +1004,7 @@ rm -f src/forbidden.txt
 # Test 13: Readset
 log "\n=== Test 13: Readset ==="
 
-yq eval '.phase = "Requirements" | .status = "in_progress"' -i meta.yaml
+yq eval '.phase = "Requirement" | .status = "in_progress"' -i meta.yaml
 
 readset_output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" readset)
 
