@@ -105,17 +105,10 @@ else
   log "skipped git hooks installation (not a git repository)"
 fi
 
-# 创建初始 review verdict 以支持首次 start-design
-cat > "$PROJECT_ROOT/reviews/design-review.yaml" <<EOF
-phase: Requirement
-verdict: approved
-reviewed_by: codespec-init
-reviewed_at: $TODAY
-EOF
-
 log "initialized dossier in: $PROJECT_ROOT"
 log ""
 log "Next steps:"
 log "1. Edit spec.md to define requirements"
-log "2. Run: $(resolve_codespec_cmd) start-design"
-log "3. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"
+log "2. Create reviews/design-review.yaml with manual approval (see templates/phase-review-policy.md)"
+log "3. Run: $(resolve_codespec_cmd) start-design"
+log "4. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"

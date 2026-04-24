@@ -12,6 +12,8 @@ status: __STATUS__  # 当前状态：active | blocked | completed
 # - blocked: 当前阶段被阻塞（需要外部输入或依赖）
 # - completed: 整个变更已完成（只在 Deployment 阶段后使用）
 
+stable_version: null  # 稳定版本号（complete-change 时设置，用于归档和 reopen 定位）
+
 # 工作项执行上下文
 # 单分支工作流：execution_group 和 execution_branch 为 null，focus_work_item 在 Implementation 阶段必须设置
 # 多分支并行：这三个字段都有值
@@ -23,7 +25,8 @@ active_work_items: __ACTIVE_WORK_ITEMS__  # 当前活跃的 WI 列表（YAML arr
 # - Implementation 阶段：正在执行的 WI（单分支串行时累积，多分支并行时各分支独立）
 # - Testing 阶段：保留 Implementation 阶段的值，用于 verification gate 聚合所有需要验证的 work items
 # - Deployment 阶段（status=active）：保留 Testing 阶段的值，用于最终 verification / promotion gate
-# - Completed 状态（phase=Deployment, status=completed）：清空，表示当前已无活跃验证集合
+# - Completed 状态（当前项目目录中的 dossier）：清空，表示当前已无活跃验证集合
+# - Archived 状态（versions/<stable_version>/meta.yaml 快照）：保留 complete-change 时的值，用于版本追溯和 completed reopen 恢复
 # 累积规则：
 # - 单分支串行：每开始一个新 WI，添加到列表（如 [WI-001] -> [WI-001, WI-002]）
 # - 多分支并行：执行分支只包含自己的 WI，parent feature 分支包含所有并行 WI

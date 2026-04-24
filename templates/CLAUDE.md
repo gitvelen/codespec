@@ -13,7 +13,7 @@
 **按当前 phase 读取**（从 meta.yaml 的 phase 字段获取）：
 
 **Requirement**：
-- `spec.md` - 完整读取，一次性填充 Inputs、Scope、Requirements、Acceptance、Verification
+- `spec.md` - 完整读取，一次性填充 Summary、Inputs、Scope、Requirements、Acceptance、Verification
 - `spec-appendices/*` - 按需深入，但不能在 appendix 中定义正式 REQ/ACC/VO
 - **写完后必须自检**：确保没有未决策项，所有需求都明确清晰，不要带着歧义进入 Design 阶段
 
@@ -43,7 +43,9 @@
 **Deployment 交接规则**：
 - 先执行 `../.codespec/codespec deploy`，不要只手写 deployment.md 假装已经部署
 - `manual_verification_ready: pass` 只表示“可以开始人工验收”，不表示人工验收已通过
-- 如果人工验收发现需要改代码，执行 `../.codespec/codespec reopen-implementation <WI-ID>` 返回同一 change 的修复回路
+- 如果人工验收发现需要改代码，执行 `../.codespec/codespec reopen-implementation <WI-ID>` 返回同一 change 的修复回路；它不会新建 change，`change_id` 保持不变
+- `testing.md` 是持续追加的验证账本；返工后补新的测试记录，不要覆盖旧记录
+- 再次执行 `../.codespec/codespec deploy` 会用最新部署结果覆盖 `Execution Evidence` / `Verification Results`，并把 `Acceptance Conclusion` 重置为 `pending`
 - 只有用户显式确认人工验收通过后，才能把 `Acceptance Conclusion.status` 记为 `pass`，再执行 `../.codespec/codespec complete-change <stable-version>`
 
 **说明**：
@@ -69,7 +71,7 @@
 - 目标/边界/验收不清楚 → 先问用户
 - `spec.md` / `design.md` / `work-items/*.yaml` 之间描述不一致 → 先对齐
 - 需要做产品判断（非纯工程判断）→ 先问用户
-- `Open Decisions` 中有 high-impact open/deferred decision 影响当前动作 → 先澄清
+- 任何不确定的事情（目标/边界/验收/技术方案）→ 立即停下来问用户，讨论明确后直接写入正式文档
 
 **执行偏离**：
 - 连续失败或复杂度超预期 → 停下重新规划

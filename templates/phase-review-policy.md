@@ -1,6 +1,6 @@
 # Phase Review Policy
 
-阶段切换前先做走查，再通过标准 runtime 入口执行命令；不要手改 `meta.yaml` 推进 phase 或切换 `focus_work_item`。标准入口解析顺序：先尝试 `codespec <cmd>`；若当前 shell 不可调用，再尝试工作区 runtime（常见布局：`../.codespec/codespec <cmd>`）；若两者都不可用，停止并报告 runtime not found。`check-gate` 是最低硬门槛，不替代语义审查；需要严格闭环时，使用 `rfr` skill 并以本文件为准。**check-gate pass 仍不等于允许切换**，phase 推进必须同时满足本文件中的人工审查结论。注意：进入 Requirements / Design / Implementation 前，runtime 已强制检查对应 review verdict artifact（`requirements-review.yaml` / `design-review.yaml` / `implementation-review.yaml`）的存在性；但 artifact 存在不等于审查质量、组织批准或 reviewer judgment 已自动成立。
+阶段切换前先做走查，再通过标准 runtime 入口执行命令；不要手改 `meta.yaml` 推进 phase 或切换 `focus_work_item`。标准入口解析顺序：先尝试 `codespec <cmd>`；若当前 shell 不可调用，再尝试工作区 runtime（常见布局：`../.codespec/codespec <cmd>`）；若两者都不可用，停止并报告 runtime not found。`check-gate` 是最低硬门槛，不替代语义审查；需要严格闭环时，使用 `rfr` skill 并以本文件为准。**check-gate pass 仍不等于允许切换**，phase 推进必须同时满足本文件中的人工审查结论。注意：当前 runtime 只对 Design 和 Implementation 阶段强制检查 review verdict artifact（`design-review.yaml` / `implementation-review.yaml`）的存在性；但 artifact 存在不等于审查质量、组织批准或 reviewer judgment 已自动成立。
 
 本文件按三层理解：
 - `必须通过`：runtime / hooks 会执行的最低机器门槛。
@@ -27,6 +27,16 @@
 - acceptance 可观测、可判 PASS/FAIL，verification 描述了证据形状而不是"以后补"。
 - Requirement 阶段只允许 authority 文档与输入沉淀类改动；当前粗粒度 runtime/hook 只会硬拦最明显的实现产物（`src/**`、`Dockerfile`），其他越阶段实现仍需 reviewer 明确阻止。
 - 进入 Design 前，当前 Requirement 审查结论必须以 `./reviews/design-review.yaml` 落盘，并至少包含 `phase: Requirement`、`verdict: approved`、`reviewed_by`、`reviewed_at`。
+
+**首次使用说明**：
+- `init-dossier.sh` 不会自动生成 `design-review.yaml`，必须手工创建
+- 示例格式：
+  ```yaml
+  phase: Requirement
+  verdict: approved
+  reviewed_by: <your-name>
+  reviewed_at: <YYYY-MM-DD>
+  ```
 
 必须通过：
 - `./.codespec/codespec check-gate requirement-complete`
@@ -94,7 +104,8 @@
 必须确认（Completed 状态）：
 - `phase = Deployment` 且 `status = completed`。
 - `focus_work_item = null`。
-- `active_work_items = []`；completed dossier 不再表示“活跃验证集合”，但必须仍可重跑 `verification` / `promotion-criteria` 进行验真。
+- 当前项目目录中的 completed dossier 满足 `active_work_items = []`；它不再表示“活跃验证集合”，但必须仍可重跑 `verification` / `promotion-criteria` 进行验真。
+- `versions/<stable_version>/meta.yaml` 保留 complete-change 时的 `active_work_items` 快照，用于版本追溯和 completed reopen 恢复。
 
 ### Testing 字段定义
 
@@ -164,8 +175,10 @@
 - `deployed_revision = runtime_observed_revision`，证明当前运行实例已加载本次部署的新版本。
 - 若 `restart_required: yes`，`runtime_ready_evidence` 必须同时证明重启/rollout 已完成；若 `restart_required: no`，理由必须能解释为什么当前部署方式已天然完成热更新/滚动替换。
 - `manual_verification_ready: pass` 只表示“可以开始人工验收”；人工验收失败时，应使用 `reopen-implementation <WI-ID>` 返回同一 change 的修复回路，而不是 reset 成新 change。
+- `reopen-implementation <WI-ID>` 不会新建 change，`change_id` 保持不变；`testing.md` 继续作为证据账本追加记录。
 - 只有用户显式确认人工验收通过后，才能把 `Acceptance Conclusion.status` 设为 `pass`，并填写 `approved_by` / `approved_at`。
-- `complete-change <stable-version>` 会同时完成两件事：把 dossier 置为 completed，并归档到 `versions/<stable-version>/`。
+- 再次执行 `codespec deploy` 会用最新部署结果覆盖 `Execution Evidence` / `Verification Results`，并把 `Acceptance Conclusion` 重置为 `pending`。
+- `complete-change <stable-version>` 会同时完成两件事：把当前 dossier 置为 completed，并归档到 `versions/<stable-version>/`；当前 dossier 清空 `active_work_items`，归档快照保留 promotion 时的 `active_work_items`。
 - 文档中没有任何模板占位。
 - rollback plan 与 monitoring 能覆盖本次变更的主要失败模式。
 - 若要 complete-change / promotion，`versions/` 目录存在且允许归档。

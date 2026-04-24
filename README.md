@@ -18,10 +18,10 @@
 
 ### 阶段（Phase）
 
-项目生命周期分为 7 个阶段，必须按顺序推进：
+项目生命周期分为 5 个阶段，必须按顺序推进：
 
 ```
-Requirement → Design → Implementation → Testing → Deployment → Completed
+Requirement → Design → Implementation → Testing → Deployment
 ```
 
 每个阶段的职责：
@@ -30,7 +30,8 @@ Requirement → Design → Implementation → Testing → Deployment → Complet
 - **Implementation**: 编写代码实现工作项
 - **Testing**: 在 testing.md 中记录测试执行和结果
 - **Deployment**: 在 deployment.md 中记录部署步骤和验证
-- **Completed**: 项目完成
+
+完成 Deployment 阶段后，执行 `codespec complete-change <version>` 将 status 设为 completed，表示整个变更已完成并归档。
 
 ### 工作项（Work Item）
 
@@ -77,11 +78,17 @@ workspace/
 ├── lessons_learned.md      # 工作区级别的经验总结
 ├── phase-review-policy.md  # 审查规则
 └── main/                   # 项目目录（可自定义名称）
-    ├── spec.md            # 需求规格（自动创建）
-    ├── design.md          # 设计文档（自动创建）
-    ├── meta.yaml          # 项目元数据（自动创建）
-    └── .claude/           # AI 工作区配置（自动创建）
+    ├── spec.md            # 需求规格（init-dossier 时创建）
+    ├── design.md          # 设计文档（init-dossier 时创建）
+    ├── testing.md         # 测试记录（init-dossier 时创建）
+    ├── meta.yaml          # 项目元数据（init-dossier 时创建）
+    ├── CLAUDE.md          # AI 指令（init-dossier 时创建）
+    └── AGENTS.md          # Agent 指令（init-dossier 时创建）
 ```
+
+注意：
+- `.claude/` 目录由 AI 工具自动创建，不在 init-dossier 范围内
+- `deployment.md` 在执行 `codespec start-deployment` 时创建
 
 #### 命令入口约定
 
@@ -100,11 +107,11 @@ workspace/
 "我想开发一个用户登录功能"
 ```
 
-**AI 会自动**：
+**AI 会协助**：
 - 读取 `meta.yaml`（知道当前在 Requirement 阶段）
 - 读取 `CLAUDE.md`/`AGENTS.md`（知道该做什么）
 - 读取 `spec.md` 模板
-- 根据你的需求填写 `Summary`、`Inputs`、`Intent`
+- 根据你的需求填写 `Summary`、`Inputs`、`Scope`、`Requirements`、`Acceptance`、`Verification`
 - 完成后告诉你审查
 
 **你需要做什么**：
@@ -121,35 +128,21 @@ workspace/
 "继续推进到 Design 阶段"
 ```
 
-**AI 会自动**：
-- 创建 `reviews/design-review.yaml`（标记 Requirement 审查通过）
-- 执行 `codespec start-design`
-
-**你需要做什么**：
-- 审查需求是否完整
-- 确认验收标准是否合理
-- 如果有遗漏，告诉 AI 补充
-
-#### 步骤 4：推进到 Design 阶段
-
-```bash
-# 简单告诉 AI：
-
-"继续推进到 Design 阶段"
-```
-
-**AI 会自动**：
-- 创建 `reviews/design-review.yaml`（标记 Requirements 审查通过）
-- 执行 `codespec start-design`
+**AI 会协助**：
+- 根据你的反馈继续补齐 `spec.md`
+- 提醒你在确认 Requirement 后手工创建 `reviews/design-review.yaml`
+- 在你确认 review verdict 已落盘后执行 `codespec start-design`
 - 在 design.md 中完成架构设计和工作项拆解
 - 完成后告诉你审查
 
 **你需要做什么**：
+- 审查需求是否完整
+- 确认后手工创建 `reviews/design-review.yaml`
 - 审查架构设计是否合理
 - 确认工作项拆解是否合适
 - 如果有问题，告诉 AI 调整
 
-#### 步骤 5：推进到 Implementation 阶段
+#### 步骤 4：推进到 Implementation 阶段
 
 ```bash
 # 简单告诉 AI：
@@ -157,20 +150,21 @@ workspace/
 "开始实现"
 ```
 
-**AI 会自动**：
-- 创建 `reviews/implementation-review.yaml`（标记 Design 审查通过）
+**AI 会协助**：
+- 提醒你在确认 Design 后手工创建 `reviews/implementation-review.yaml`
 - 执行 `codespec add-work-item WI-001`, `WI-002`...
 - 填写每个工作项的详细信息（work-items/WI-XXX.yaml）
-- 执行 `codespec start-implementation WI-001`
+- 在你确认 review verdict 已落盘后执行 `codespec start-implementation WI-001`
 - 如需在同一 Implementation 阶段切换到下一个工作项，继续执行 `codespec start-implementation <next-WI>`
 - 编写代码实现工作项
 - 完成后告诉你测试
 
 **你需要做什么**：
+- 审查设计并手工创建 `reviews/implementation-review.yaml`
 - 测试功能是否正常
 - 如果有问题，告诉 AI 修复
 
-#### 步骤 6：推进到 Testing 和 Deployment
+#### 步骤 5：推进到 Testing 和 Deployment
 
 ```bash
 # 简单告诉 AI：
@@ -178,13 +172,13 @@ workspace/
 "继续测试和部署"
 ```
 
-**AI 会自动**：
+**AI 会协助**：
 - 执行 `codespec start-testing`
 - 运行测试，在 testing.md 中记录结果
 - 执行 `codespec start-deployment`
 - 执行 `codespec deploy`
 - 在 deployment.md 中记录部署证据并通知你开始手工验收
-- 若你确认通过，再执行 `codespec complete-change <stable-version>`
+- 若你显式确认通过，再执行 `codespec complete-change <stable-version>`
 - 完成后告诉你验收
 
 **你需要做什么**：
@@ -239,7 +233,9 @@ git rev-parse --show-toplevel
 - `../lessons_learned.md`
 - `../phase-review-policy.md`
 - `../versions/`
-- 当前项目内新增 `spec.md`、`design.md`、`testing.md`、`deployment.md`、`meta.yaml`、`work-items/` 等 dossier 文件
+- 当前项目内新增 `spec.md`、`design.md`、`testing.md`、`meta.yaml`、`CLAUDE.md`、`AGENTS.md`、`work-items/` 等 dossier 文件
+
+注意：`deployment.md` 在执行 `codespec start-deployment` 时创建，不在 init-dossier 范围内。
 
 现有项目保持原地不动，不需要 `mv`，也不需要软链。
 
@@ -375,8 +371,8 @@ codespec status  # 查看自己的项目状态
 ```bash
 # AI 完成真实部署并且你确认手工验收通过后
 codespec complete-change v1.0
-# 状态变为：phase=Deployment, status=completed
-# 同时归档到 ../versions/v1.0/
+# 当前项目目录中的 meta.yaml 变为：phase=Deployment, status=completed, active_work_items=[]
+# 同时归档到 ../versions/v1.0/，归档 meta 会保留 promotion 时的 active_work_items 快照
 ```
 
 **AI 会询问**："项目已完成验收，是否生成项目文档？（建议生成，用于后续版本参考）"
@@ -444,7 +440,7 @@ codespec reset-to-requirement
 "基于 v1.0 添加新功能：<功能描述>"
 ```
 
-**AI 会自动**：
+**AI 会协助**：
 - 读取 `../project-docs/v1.0/系统功能说明书.md` 了解现有功能
 - 读取 `../project-docs/v1.0/技术方案设计.md` 了解现有架构
 - 在此基础上设计新功能
@@ -481,8 +477,8 @@ codespec list-versions
 - **记录过程**：在 testing.md, deployment.md 中记录结果
 
 ### 你很少需要手工编辑文件
-- AI 会填写所有文档
-- 你只需要审查和确认
+- AI 会协助起草大部分文档
+- 你仍需要审查关键内容并手工创建 review verdict
 - 如果有问题，告诉 AI 修改即可
 
 ---
@@ -493,26 +489,24 @@ codespec list-versions
 你: "我想开发一个用户登录功能"
 
 AI: "好的，我已经读取了 meta.yaml，当前在 Requirement 阶段。
-     我在 spec.md 中填写了 Summary、Inputs 和 Intent。
-     请审查一下是否符合你的需求。"
+     我先在 spec.md 中补充 Summary、Inputs、Scope 和需求草稿。
+     你确认后，请手工创建 reviews/design-review.yaml。"
 
-你: "看起来不错，继续"
+你: "REQ-003 需要支持第三方登录，请补充。"
 
-AI: "我已经创建了审查文件，切换到 Requirement 阶段。
-     在 spec.md 中补充了详细需求（REQ-001 到 REQ-005）。
-     请审查需求是否完整。"
+AI: "已补充 REQ-003。
+     请再审查一遍需求；如果没问题，由你创建 reviews/design-review.yaml。"
 
-你: "REQ-003 需要支持第三方登录，请补充"
+你: "需求没问题，我已创建 reviews/design-review.yaml。"
 
-AI: "已补充 REQ-003 的第三方登录需求。
-     现在切换到 Design 阶段，完成了架构设计。
+AI: "收到，我现在执行 start-design，并完成了架构设计。
      我拆解了 3 个工作项：
      - WI-001: 实现登录表单
      - WI-002: 实现认证逻辑
      - WI-003: 实现第三方登录集成
-     请审查工作项拆解是否合理。"
+     请审查工作项拆解；确认后请创建 reviews/implementation-review.yaml。"
 
-你: "可以，开始实现"
+你: "可以，我已创建 reviews/implementation-review.yaml，开始实现。"
 
 AI: "已开始实现 WI-001，代码已提交。
      请测试登录表单功能。"
@@ -547,14 +541,17 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 
 | 命令 | 前置条件 | 作用 |
 |------|---------|------|
-| `codespec start-design` | Requirement 完整，有审查文件 | 切换到 Requirement 阶段 |
 | `codespec start-design` | Requirement 完整，有审查文件 | 切换到 Design 阶段 |
 | `codespec start-implementation <WI-ID>` | Design 完整或已在 Implementation，工作项存在，有审查文件 | 进入 Implementation 阶段或切换当前 focus WI |
-| `codespec reopen-implementation <WI-ID>` | 当前处于 Testing/Deployment 且发现需要代码修复 | 回到同一 change 的 Implementation 阶段 |
+| `codespec reopen-implementation <WI-ID>` | 当前处于 Testing/Deployment 且发现需要代码修复 | 回到同一 change 的 Implementation 阶段（`change_id` 不变） |
 | `codespec start-testing` | 所有工作项实现完成 | 切换到 Testing 阶段 |
 | `codespec start-deployment` | 测试覆盖完整且通过 | 切换到 Deployment 阶段 |
 | `codespec deploy` | 当前处于 Deployment 阶段，且项目已提供 `scripts/codespec-deploy` | 执行真实部署并回写运行态证据 |
 | `codespec complete-change <version>` | 真实部署完成、手工验收通过 | 完成项目并归档稳定版本 |
+
+`reopen-implementation` 不会新建 change。`testing.md` 继续作为验证账本追加记录；下一次
+`codespec deploy` 会用最新部署结果覆盖 `deployment.md` 中的 `Execution Evidence` /
+`Verification Results`，并把 `Acceptance Conclusion` 重置为 `pending`。
 
 ### 版本管理命令
 
@@ -586,9 +583,9 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 | Gate 名称 | 检查内容 | 触发时机 |
 |----------|---------|---------|
 | `metadata-consistency` | meta.yaml 与文档的一致性 | 所有阶段转换 |
-| `review-verdict-present` | 审查文件是否存在且通过 | Requirements/Design/Implementation 转换 |
+| `review-verdict-present` | 审查文件是否存在且通过 | Requirement/Design/Implementation 转换 |
 | `requirement-complete` | Proposal 是否成熟（无占位符） | Requirement |
-| `requirement-complete` | Requirements 是否完整 | Requirement → Design |
+| `requirement-complete` | Requirement 是否完整 | Requirement → Design |
 | `design-structure-complete` | design.md 结构是否完整 | Design → Implementation |
 | `implementation-readiness-baseline` | 工作项是否准备就绪 | Design → Implementation |
 | `implementation-start` | 工作项文件是否完整 | Design → Implementation |
@@ -621,7 +618,7 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 
 | 模板文件 | 说明 |
 |---------|------|
-| `spec.md` | 需求规格文档，包含 Summary、Inputs、Intent、Requirements、Acceptance、Verification |
+| `spec.md` | 需求规格文档，包含 Summary、Inputs、Scope、Requirements、Acceptance、Verification |
 | `design.md` | 设计文档，包含 Technical Approach、受影响边界、工作项映射与派生、验证设计 |
 | `testing.md` | 测试文档，记录 acceptance tests 和 verification tests |
 | `deployment.md` | 部署文档，记录部署步骤和验证结果 |
@@ -637,7 +634,7 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 Codespec 框架设计为**人机协作**模式：
 
 ### 人类的职责
-1. **定义需求**：在 spec.md 中确认 Summary、Inputs 和 Intent
+1. **定义需求**：在 spec.md 中确认 Summary、Inputs 和 Scope
 2. **审查设计**：检查 design.md 中的架构设计和工作项拆解
 3. **手工验收**：在 AI 完成真实部署并给出运行态证据后进行人工验收，并显式确认是否通过
 4. **创建审查文件**：在每个阶段完成后创建 reviews/*.yaml
@@ -661,10 +658,7 @@ vim spec.md
 # 2. 你：在项目目录启动 Claude/Codex
 # AI 会读取 spec.md，补充详细需求
 
-# 3. AI：切换到 Requirement 阶段
-codespec start-design
-
-# 4. 你：审查 Requirements，创建审查文件
+# 3. 你：审查 Requirements，创建审查文件
 cat > reviews/design-review.yaml <<EOF
 phase: Requirement
 verdict: approved
@@ -672,10 +666,10 @@ reviewed_by: YourName
 reviewed_at: $(date +%F)
 EOF
 
-# 5. AI：切换到 Design 阶段，完成设计
+# 4. AI：切换到 Design 阶段，完成设计
 codespec start-design
 
-# 6. 你：审查设计，创建审查文件
+# 5. 你：审查设计，创建审查文件
 cat > reviews/implementation-review.yaml <<EOF
 phase: Design
 verdict: approved
@@ -683,20 +677,20 @@ reviewed_by: YourName
 reviewed_at: $(date +%F)
 EOF
 
-# 7. AI：添加工作项，开始实现
+# 6. AI：添加工作项，开始实现
 codespec add-work-item WI-001
 codespec start-implementation WI-001
 
-# 8. AI：编写代码，提交，切换到 Testing
+# 7. AI：编写代码，提交，切换到 Testing
 codespec start-testing
 
-# 9. AI：执行测试，记录结果，切换到 Deployment
+# 8. AI：执行测试，记录结果，切换到 Deployment
 codespec start-deployment
 
-# 10. AI：执行真实部署并准备人工验收
+# 9. AI：执行真实部署并准备人工验收
 codespec deploy
 
-# 11. 你：确认手工验收通过后，AI 完成收口并归档稳定版本
+# 10. 你：确认手工验收通过后，AI 完成收口并归档稳定版本
 codespec complete-change v1.0
 ```
 

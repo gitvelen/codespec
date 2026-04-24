@@ -51,52 +51,43 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 
 执行分支在 Implementation 阶段的测试记录。
 
-### WI-001 (Branch: group/sanguoA)
+### WI-XXX-EXAMPLE (Branch: [branch-name])
 
-#### ACC-001: User can login with email and password
+**说明**：以下是 branch-local 测试记录格式示例，实际使用时请：
+1. 将 WI-XXX-EXAMPLE 替换为真实的 work item ID（如 WI-001）
+2. 将 [branch-name] 替换为真实的执行分支名
+3. 将 ACC-XXX-EXAMPLE 替换为真实的 acceptance ID
+4. 填写真实的测试命令、日期、artifact 路径
+5. 删除本说明段落
+
+#### ACC-XXX-EXAMPLE: [Example acceptance criterion]
 
 **Unit Tests**:
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: unit
   test_scope: branch-local
   verification_type: automated
-  test_command: npm test -- src/auth/login.test.ts
-  test_date: 2026-04-16
-  artifact_ref: coverage/unit/login.html
+  test_command: [TODO: actual test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to test artifact]
   result: pass
-  notes: Tested login logic with valid/invalid credentials
+  notes: [TODO: test notes]
   residual_risk: none
   reopen_required: false
 
 **Integration Tests**:
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: integration
   test_scope: branch-local
   verification_type: automated
-  test_command: npm test -- src/auth/integration.test.ts
-  test_date: 2026-04-16
-  artifact_ref: coverage/integration/auth.html
+  test_command: [TODO: actual test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to test artifact]
   result: pass
-  notes: Tested login with database and session management
+  notes: [TODO: test notes]
   residual_risk: none
   reopen_required: false
 
-### WI-002 (Branch: group/sanguoB)
-
-#### ACC-002: User can logout
-
-**Unit Tests**:
-- acceptance_ref: ACC-002
-  test_type: unit
-  test_scope: branch-local
-  verification_type: automated
-  test_command: npm test -- src/auth/logout.test.ts
-  test_date: 2026-04-16
-  artifact_ref: coverage/unit/logout.html
-  result: pass
-  notes: Tested logout logic and session cleanup
-  residual_risk: none
-  reopen_required: false
 
 ---
 
@@ -104,85 +95,62 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 
 在 parent feature 分支的完整集成测试，作为最终验收依据。
 
-### ACC-001: User can login with email and password
+### ACC-XXX-EXAMPLE: [Example acceptance criterion]
+
+**说明**：以下是测试记录格式示例，实际使用时请：
+1. 将 ACC-XXX-EXAMPLE 替换为真实的 acceptance ID（如 ACC-001）
+2. 填写真实的测试命令、日期、artifact 路径
+3. 删除本说明段落
 
 **Unit Tests** (re-run after merge):
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: unit
   test_scope: full-integration
   verification_type: automated
-  test_command: npm test -- src/auth/login.test.ts
-  test_date: 2026-04-17
-  artifact_ref: coverage/unit/login.html
+  test_command: [TODO: actual test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to test artifact]
   result: pass
-  notes: Re-run after merging all branches
+  notes: [TODO: test notes]
   residual_risk: none
   reopen_required: false
 
 **Integration Tests** (re-run after merge):
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: integration
   test_scope: full-integration
   verification_type: automated
-  test_command: npm test -- src/auth/integration.test.ts
-  test_date: 2026-04-17
-  artifact_ref: coverage/integration/auth.html
+  test_command: [TODO: actual test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to test artifact]
   result: pass
-  notes: Verified login works with all merged changes
+  notes: [TODO: test notes]
   residual_risk: none
   reopen_required: false
 
 **E2E Tests**:
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: e2e
   test_scope: full-integration
   verification_type: automated
-  test_command: npm run test:e2e -- login.spec.ts
-  test_date: 2026-04-17
-  artifact_ref: e2e-results/login.html
+  test_command: [TODO: actual test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to test artifact]
   result: pass
-  notes: Tested complete login flow in browser
+  notes: [TODO: test notes]
   residual_risk: none
   reopen_required: false
 
 **Manual Tests**:
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: manual
   test_scope: full-integration
   verification_type: manual
   test_command: N/A
-  test_date: 2026-04-17
-  artifact_ref: manual-test-checklist.md
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: manual test checklist path]
   result: pass
-  notes: Manually verified UI/UX, error messages, accessibility
-  residual_risk: none
-  reopen_required: false
-
-### ACC-002: User can logout
-
-**Unit Tests** (re-run after merge):
-- acceptance_ref: ACC-002
-  test_type: unit
-  test_scope: full-integration
-  verification_type: automated
-  test_command: npm test -- src/auth/logout.test.ts
-  test_date: 2026-04-17
-  artifact_ref: coverage/unit/logout.html
-  result: pass
-  notes: Re-run after merging all branches
-  residual_risk: none
-  reopen_required: false
-
-**E2E Tests**:
-- acceptance_ref: ACC-002
-  test_type: e2e
-  test_scope: full-integration
-  verification_type: automated
-  test_command: npm run test:e2e -- logout.spec.ts
-  test_date: 2026-04-17
-  artifact_ref: e2e-results/logout.html
-  result: pass
-  notes: Tested complete logout flow, verified session cleanup
+  notes: [TODO: manual test notes]
   residual_risk: none
   reopen_required: false
 
@@ -190,17 +158,17 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 
 ## Performance Testing (Optional)
 
-### ACC-001: User can login with email and password
+### ACC-XXX-EXAMPLE: [Example acceptance criterion]
 
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: performance
   test_scope: full-integration
   verification_type: automated
-  test_command: npm run test:perf -- login
-  test_date: 2026-04-17
-  artifact_ref: perf-results/login.html
+  test_command: [TODO: actual performance test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to performance test results]
   result: pass
-  notes: Login completes in <200ms (p95), meets performance requirement
+  notes: [TODO: performance metrics and requirements met]
   residual_risk: none
   reopen_required: false
 
@@ -208,17 +176,17 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 
 ## Security Testing (Optional)
 
-### ACC-001: User can login with email and password
+### ACC-XXX-EXAMPLE: [Example acceptance criterion]
 
-- acceptance_ref: ACC-001
+- acceptance_ref: ACC-XXX-EXAMPLE
   test_type: security
   test_scope: full-integration
   verification_type: automated
-  test_command: npm run test:security -- auth
-  test_date: 2026-04-17
-  artifact_ref: security-scan/auth.html
+  test_command: [TODO: actual security test command]
+  test_date: YYYY-MM-DD
+  artifact_ref: [TODO: path to security scan results]
   result: pass
-  notes: No SQL injection, XSS, or CSRF vulnerabilities found
+  notes: [TODO: security findings and verification]
   residual_risk: none
   reopen_required: false
 
@@ -227,12 +195,12 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 ## Summary
 
 **Final Acceptance Status**:
-- ACC-001: ✅ PASS (unit + integration + e2e + manual + performance + security)
-- ACC-002: ✅ PASS (unit + e2e)
+- ACC-XXX-EXAMPLE: [TODO: status summary]
 
 **Test Coverage**:
-- Unit tests: 95%
-- Integration tests: 90%
-- E2E tests: 100% of critical paths
+- Unit tests: [TODO: coverage %]
+- Integration tests: [TODO: coverage %]
+- E2E tests: [TODO: coverage description]
 
-**Residual Risks**: None
+**Residual Risks**: [TODO: list any residual risks or "None"]
+

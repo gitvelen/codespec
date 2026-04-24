@@ -588,6 +588,8 @@ git commit -m "docs: record manual acceptance"
 
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "completed" ] || die "complete-change did not set status to completed"
+[ "$(yq eval '.stable_version' meta.yaml)" = "smoke-v1" ] || die "complete-change did not set stable_version in workspace meta"
+[ "$(yq eval -o=json '.active_work_items' meta.yaml)" = "[]" ] || die "workspace completed dossier should clear active_work_items"
 [ -f "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" ] || die "complete-change did not archive stable version"
 log "✓ complete-change archived the accepted stable version"
 
@@ -595,6 +597,14 @@ log "✓ complete-change archived the accepted stable version"
 "$TMP_WORKSPACE/.codespec/codespec" check-gate verification
 "$TMP_WORKSPACE/.codespec/codespec" check-gate promotion-criteria
 log "✓ completed dossier remains re-verifiable"
+
+"$TMP_WORKSPACE/.codespec/codespec" start-deployment
+[ "$(yq eval '.phase' meta.yaml)" = "Deployment" ] || die "completed reopen should return to Deployment phase"
+[ "$(yq eval '.status' meta.yaml)" = "active" ] || die "completed reopen should reactivate the dossier"
+reopened_active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
+assert_json_eq "$reopened_active_wis" '. | length' '1'
+assert_json_eq "$reopened_active_wis" '.[0]' '"WI-001"'
+log "✓ start-deployment restores archived active_work_items for completed reopen"
 
 cat > deployment.md <<'EOF'
 # deployment.md
@@ -847,8 +857,9 @@ log "✓ deployment-readiness requires restart evidence when restart is required
 promoted_status=$(yq eval '.status' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
 [ "$promoted_status" = "completed" ] || die "complete-change did not preserve completed status in archived meta"
 promoted_active_wis=$(yq eval -o=json '.active_work_items' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
-assert_json_eq "$promoted_active_wis" '. | length' '0'
-log "✓ complete-change preserves completed metadata semantics in archive"
+assert_json_eq "$promoted_active_wis" '. | length' '1'
+assert_json_eq "$promoted_active_wis" '.[0]' '"WI-001"'
+log "✓ complete-change preserves active work item snapshot in archive"
 
 # Test 10: testing ledger selection semantics
 log "\n=== Test 10: testing ledger selection semantics ==="

@@ -303,172 +303,37 @@ requirements_source_refs() {
   ' "$SPEC_FILE" | grep -v '^$' | sort -u
 }
 
-open_decision_ids() {
+collect_formal_requirement_ids() {
   awk '
-    BEGIN { in_decisions = 0 }
-    /^## Open Decisions$/ {
-      in_decisions = 1
+    BEGIN { in_requirements = 0; in_functional = 0 }
+    /^## Requirements$/ {
+      in_requirements = 1
+      in_functional = 0
       next
     }
-    /^## / && in_decisions {
-      exit
-    }
-    !in_decisions {
+    /^## / {
+      if (in_requirements) {
+        in_requirements = 0
+        in_functional = 0
+      }
       next
     }
-    /^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*DEC-[0-9]{3}[[:space:]]*$/ {
+    !in_requirements { next }
+    /^### Functional Requirements$/ {
+      in_functional = 1
+      next
+    }
+    /^### / {
+      in_functional = 0
+      next
+    }
+    in_functional && /^[[:space:]]*-[[:space:]]*REQ-[0-9]{3}[[:space:]]*$/ {
       line = $0
-      sub(/^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/, "", line)
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
       sub(/[[:space:]]*$/, "", line)
       print line
     }
-  ' "$SPEC_FILE" | sort -u
-}
-
-open_decision_status_values() {
-  awk '
-    BEGIN { in_decisions = 0 }
-    /^## Open Decisions$/ {
-      in_decisions = 1
-      next
-    }
-    /^## / && in_decisions {
-      exit
-    }
-    !in_decisions {
-      next
-    }
-
-    /^[[:space:]]*status:[[:space:]]*/ {
-      line = $0
-      sub(/^[[:space:]]*status:[[:space:]]*/, "", line)
-      split(line, parts, /[[:space:]]+/)
-      if (parts[1] != "") print tolower(parts[1])
-      next
-    }
-
-  ' "$SPEC_FILE" | grep -v '^$'
-}
-
-open_decision_high_open_items() {
-  awk '
-    function flush_item() {
-      if (current != "" && status == "open" && impact == "high") {
-        print current
-      }
-    }
-
-    BEGIN {
-      in_decisions = 0
-      current = ""
-      status = ""
-      impact = ""
-    }
-
-    /^## Open Decisions$/ {
-      in_decisions = 1
-      next
-    }
-
-    /^## / && in_decisions {
-      flush_item()
-      exit
-    }
-
-    !in_decisions {
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/ {
-      flush_item()
-      current = $0
-      sub(/^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/, "", current)
-      sub(/[[:space:]]*$/, "", current)
-      status = ""
-      impact = ""
-      next
-    }
-
-    current != "" && /^[[:space:]]*status:[[:space:]]*/ {
-      status = $0
-      sub(/^[[:space:]]*status:[[:space:]]*/, "", status)
-      split(status, parts, /[[:space:]]+/)
-      status = tolower(parts[1])
-      next
-    }
-
-    current != "" && /^[[:space:]]*impact:[[:space:]]*/ {
-      impact = $0
-      sub(/^[[:space:]]*impact:[[:space:]]*/, "", impact)
-      split(impact, parts, /[[:space:]]+/)
-      impact = tolower(parts[1])
-      next
-    }
-
-    END {
-      flush_item()
-    }
-  ' "$SPEC_FILE"
-}
-
-open_decision_deferred_missing_target_phase_items() {
-  awk '
-    function flush_item() {
-      if (current != "" && status == "deferred" && target_phase == "") {
-        print current
-      }
-    }
-
-    BEGIN {
-      in_decisions = 0
-      current = ""
-      status = ""
-      target_phase = ""
-    }
-
-    /^## Open Decisions$/ {
-      in_decisions = 1
-      next
-    }
-
-    /^## / && in_decisions {
-      flush_item()
-      exit
-    }
-
-    !in_decisions {
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/ {
-      flush_item()
-      current = $0
-      sub(/^[[:space:]]*-[[:space:]]*decision_id:[[:space:]]*/, "", current)
-      sub(/[[:space:]]*$/, "", current)
-      status = ""
-      target_phase = ""
-      next
-    }
-
-    current != "" && /^[[:space:]]*status:[[:space:]]*/ {
-      status = $0
-      sub(/^[[:space:]]*status:[[:space:]]*/, "", status)
-      split(status, parts, /[[:space:]]+/)
-      status = tolower(parts[1])
-      next
-    }
-
-    current != "" && /^[[:space:]]*target_phase:[[:space:]]*/ {
-      target_phase = $0
-      sub(/^[[:space:]]*target_phase:[[:space:]]*/, "", target_phase)
-      sub(/[[:space:]]*$/, "", target_phase)
-      next
-    }
-
-    END {
-      flush_item()
-    }
-  ' "$SPEC_FILE"
+  ' "$SPEC_FILE" | sort -u || true
 }
 
 gate_metadata_consistency() {

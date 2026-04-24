@@ -64,9 +64,9 @@ codespec v2.0 一键安装脚本
 
 安装后:
   cd <workspace-dir>/<project-name>
-  # 使用标准 runtime 入口推进阶段：
-  # 优先 `codespec start-requirements`
-  # 若 codespec 不在 PATH，则使用 <workspace-dir>/.codespec/codespec start-requirements
+  # 初始化 dossier 后，手工创建 reviews/design-review.yaml 并填写审查结论
+  # 然后使用标准 runtime 入口推进阶段：codespec start-design
+  # 若 codespec 不在 PATH，则使用 <workspace-dir>/.codespec/codespec start-design
 EOF
 }
 
@@ -167,13 +167,10 @@ ${GREEN}========================================${NC}
   ${YELLOW}# 2. 编辑 spec.md 定义需求${NC}
   vim spec.md
 
-  ${YELLOW}# 3. 开始 Requirements 阶段${NC}
-  $codespec_cmd start-requirements
-
-  ${YELLOW}# 4. 创建 review verdict 并进入 Design 阶段${NC}
+  ${YELLOW}# 3. 创建 review verdict 并进入 Design 阶段${NC}
   mkdir -p reviews
   cat > reviews/design-review.yaml <<EOFR
-phase: Requirements
+phase: Requirement
 verdict: approved
 reviewed_by: $(git config user.name || echo "your-name")
 reviewed_at: \$(date +%F)

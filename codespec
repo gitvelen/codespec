@@ -409,7 +409,7 @@ archive_dossier() {
   TODAY="$(date +%F)" \
   STABLE_VERSION="$stable_version" \
   PROMOTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
-    yq eval '.status = "completed" | .focus_work_item = null | .active_work_items = [] | .updated_at = env(TODAY) | .updated_by = "codespec-complete" | .promoted_version = strenv(STABLE_VERSION) | .promoted_at = strenv(PROMOTED_AT)' -i "$target_root/meta.yaml"
+    yq eval '.status = "completed" | .stable_version = strenv(STABLE_VERSION) | .focus_work_item = null | .updated_at = env(TODAY) | .updated_by = "codespec-complete" | .promoted_version = strenv(STABLE_VERSION) | .promoted_at = strenv(PROMOTED_AT)' -i "$target_root/meta.yaml"
 }
 
 
@@ -600,8 +600,9 @@ start_testing() {
 
 start_deployment() {
   require_yq
-  local project_root
+  local project_root workspace_root
   project_root="$(find_project_root)"
+  workspace_root="$(find_workspace_root)"
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
 
@@ -609,6 +610,31 @@ start_deployment() {
   current_phase="$(yaml_scalar "$meta" phase)"
   current_status="$(yaml_scalar "$meta" status)"
   assert_phase_transition "$current_phase" 'Deployment' "$current_status"
+
+  # 如果是 reopen 场景（completed -> active），恢复 active_work_items
+  if [ "$current_status" = 'completed' ]; then
+    local stable_version change_id archived_meta
+    stable_version="$(yaml_scalar "$meta" stable_version)"
+    change_id="$(yaml_scalar "$meta" change_id)"
+
+    # 优先使用 stable_version，fallback 到 change_id（兼容旧版本）
+    if [ "$stable_version" != 'null' ] && [ -n "$stable_version" ]; then
+      archived_meta="$workspace_root/versions/$stable_version/meta.yaml"
+    else
+      archived_meta="$workspace_root/versions/$change_id/meta.yaml"
+    fi
+
+    if [ -f "$archived_meta" ]; then
+      local archived_active_items
+      archived_active_items="$(yq -o json '.active_work_items' "$archived_meta")"
+      # 恢复 active_work_items
+      meta_update "$meta" ".phase = \"Deployment\" | .status = \"active\" | .focus_work_item = null | .active_work_items = ${archived_active_items}"
+      log "reopened Deployment phase (restored active_work_items from $(basename "$(dirname "$archived_meta")")/meta.yaml)"
+      return
+    else
+      die "cannot reopen Deployment: archived meta not found at $archived_meta"
+    fi
+  fi
 
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" trace-consistency >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
@@ -766,7 +792,7 @@ complete_change() {
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" promotion-criteria >/dev/null
 
   archive_dossier "$stable_version" "$project_root" "$workspace_root"
-  meta_update "$meta" '.status = "completed" | .focus_work_item = null | .active_work_items = []'
+  meta_update "$meta" '.status = "completed" | .stable_version = "'"$stable_version"'" | .focus_work_item = null | .active_work_items = []'
   log "completed change"
   log "archived stable version: versions/$stable_version"
 }
@@ -1304,7 +1330,6 @@ usage() {
   cat <<'EOF'
 Usage:
   codespec add-work-item <WI-ID>
-  codespec start-requirements
   codespec start-design
   codespec start-implementation <WI-ID>
   codespec reopen-implementation <WI-ID>
@@ -1314,7 +1339,6 @@ Usage:
   codespec deploy
   codespec complete-change <stable-version>
   codespec generate-project-docs <version>
-  codespec reset-to-proposal [--keep-contracts]
   codespec install-hooks
   codespec check-gate <name>
   codespec status
