@@ -1100,7 +1100,7 @@ log "✓ list-versions JSON output includes promoted metadata"
 "$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
 
 reset_phase=$(yq eval '.phase' meta.yaml)
-[ "$reset_phase" = "Proposal" ] || die "reset-to-requirement did not return to Requirement phase"
+[ "$reset_phase" = "Requirement" ] || die "reset-to-requirement did not return to Requirement phase"
 reset_status=$(yq eval '.status' meta.yaml)
 [ "$reset_status" = "active" ] || die "reset-to-requirement did not reactivate dossier"
 reset_base_version=$(yq eval '.base_version' meta.yaml)
