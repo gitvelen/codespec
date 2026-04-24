@@ -121,7 +121,7 @@ log "✓ dossier initialized"
 # Test 3: Requirement phase
 log "\n=== Test 3: Requirement phase ==="
 phase=$(yq eval '.phase' meta.yaml)
-[ "$phase" = "Proposal" ] || die "initial phase should be Proposal, got: $phase"
+[ "$phase" = "Requirement" ] || die "initial phase should be Requirement, got: $phase"
 
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "active" ] || die "initial status should be active, got: $status"
