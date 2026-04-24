@@ -939,7 +939,8 @@ reset_to_requirement() {
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
 
-  local current_status current_phase change_id base_version
+  local TODAY current_status current_phase change_id base_version
+  TODAY="$(date +%F)"
   current_status="$(yaml_scalar "$meta" status)"
   current_phase="$(yaml_scalar "$meta" phase)"
   change_id="$(yaml_scalar "$meta" change_id)"
