@@ -125,7 +125,7 @@ phase=$(yq eval '.phase' meta.yaml)
 
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "active" ] || die "initial status should be active, got: $status"
-log "✓ initial phase is Proposal"
+log "✓ initial phase is Requirement"
 
 # Test 4: start-design
 log "\n=== Test 4: start-design ==="
@@ -139,7 +139,7 @@ cat > docs/test.md <<'EOF'
 Test input for smoke test.
 EOF
 
-# Create minimal spec.md for Proposal
+# Create minimal spec.md for Requirement phase
 cat > spec.md <<'EOF'
 # spec.md
 
@@ -156,36 +156,20 @@ Test summary for smoke test.
 - normalization_note: normalized into minimal smoke requirement set
 - approval_basis: test-approval
 
-## Intent
+## Scope
 
-### Problem / Background
-Test problem description.
+### In Scope
+- Basic smoke test functionality
 
-### Goals
-- test goal
-
-### Boundaries
-- do not expand beyond smoke test scope
-
-## Open Decisions
-
-- none
+### Out of Scope
+- Advanced features beyond smoke test
 
 ## Requirements
 
-### Source Coverage
-- source_ref: docs/test.md#intent
-  covered_by_reqs: [REQ-001]
-  open_clarifications: []
-  status: covered
-
-### Functional
 - REQ-001
   - summary: test requirement
   - rationale: for smoke test
-
-### Constraints
-- keep the smoke dossier minimal
+  - source_ref: docs/test.md#intent
 
 ## Acceptance
 
