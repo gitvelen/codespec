@@ -206,7 +206,7 @@ git commit -m "feat: initial proposal"
 "$TMP_WORKSPACE/.codespec/codespec" start-design
 
 phase=$(yq eval '.phase' meta.yaml)
-[ "$phase" = "Requirements" ] || die "start-design did not set phase to Design"
+[ "$phase" = "Design" ] || die "start-design did not set phase to Design"
 log "✓ start-design succeeded"
 
 # Test 5: start-design

@@ -1000,10 +1000,6 @@ gate_review_verdict_present() {
   local target_phase="${CODESPEC_TARGET_PHASE:-}"
 
   case "$target_phase" in
-    Requirements)
-      expected_file='requirements-review.yaml'
-      expected_phase='Proposal'
-      ;;
     Design)
       expected_file='design-review.yaml'
       expected_phase='Requirement'
