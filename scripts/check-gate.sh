@@ -1427,11 +1427,6 @@ gate_implementation_start() {
 gate_phase_capability() {
   local phase
   phase="$(yaml_scalar "$META_FILE" phase)"
-  if [ "$phase" != 'Requirement' ]; then
-    log "✓ phase-capability gate passed (phase ${phase})"
-    return
-  fi
-
   local changed=()
   mapfile -t changed < <(git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
   [ "${#changed[@]}" -gt 0 ] || {
@@ -1439,13 +1434,30 @@ gate_phase_capability() {
     return
   }
 
-  local file
+  local forbidden=()
+  local forbidden_label
+  case "$phase" in
+    Requirement)
+      forbidden=("src/**" "Dockerfile")
+      forbidden_label='implementation artifacts'
+      ;;
+    Testing|Deployment)
+      forbidden=("src/**" "Dockerfile" "spec.md" "design.md" "work-items/**" "contracts/**")
+      forbidden_label='phase-frozen artifacts'
+      ;;
+    *)
+      log "✓ phase-capability gate passed (phase ${phase})"
+      return
+      ;;
+  esac
+
+  local file pattern
   for file in "${changed[@]}"; do
-    case "$file" in
-      src/**|Dockerfile)
-        die "phase-capability gate failed: ${phase} forbids implementation artifacts: ${file}"
-        ;;
-    esac
+    for pattern in "${forbidden[@]}"; do
+      if match_path "$file" "$pattern"; then
+        die "phase-capability gate failed: ${phase} forbids ${forbidden_label}: ${file}"
+      fi
+    done
   done
 
   log '✓ phase-capability gate passed'

@@ -479,6 +479,21 @@ phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Testing" ] || die "start-testing did not set phase"
 log "✓ start-testing succeeded"
 
+echo "testing-phase-drift" >> src/test.txt
+git add src/test.txt
+
+set +e
+output=$(git commit -m "test: should fail in Testing phase" 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "Testing phase should block src/** modifications"
+assert_contains "$output" "Testing forbids phase-frozen artifacts: src/test.txt"
+log "✓ Testing phase blocks implementation artifact edits"
+
+git reset HEAD src/test.txt >/dev/null 2>&1 || true
+git checkout -- src/test.txt
+
 # Test 8: Deployment
 log "\n=== Test 8: Deployment ==="
 
@@ -518,6 +533,21 @@ phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Deployment" ] || die "start-deployment did not set phase"
 [ -f "deployment.md" ] || die "start-deployment did not create deployment.md"
 log "✓ start-deployment succeeded"
+
+echo "# deployment-phase-drift" >> work-items/WI-001.yaml
+git add work-items/WI-001.yaml
+
+set +e
+output=$(git commit -m "test: should fail in Deployment phase" 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "Deployment phase should block work-items/** modifications"
+assert_contains "$output" "Deployment forbids phase-frozen artifacts: work-items/WI-001.yaml"
+log "✓ Deployment phase blocks authority file edits"
+
+git reset HEAD work-items/WI-001.yaml >/dev/null 2>&1 || true
+sed -i '$d' work-items/WI-001.yaml
 
 # Test 9: Complete change
 log "\n=== Test 9: Complete change ==="
