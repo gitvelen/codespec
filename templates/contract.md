@@ -8,14 +8,24 @@
   - `draft`: 草稿状态，可以修改
   - `frozen`: 冻结状态，不能修改（只能在 parent feature 分支冻结）
 - `frozen_at`: 冻结时间戳（status=frozen 时必须填写）
+- `freeze_review_ref`: 冻结审查记录（status=frozen 时必须填写）
 - `consumers`: 引用此契约的 work-item ID 列表
   - 对应 work-items/WI-*.yaml 中的 `contract_refs` 字段
 
 **状态转移规则**：
 1. 新建契约时，status=draft，frozen_at=null
-2. 在 parent feature 分支进行显式 review 后，可以冻结：status=frozen，frozen_at=<timestamp>
+2. 在 parent feature 分支进行显式 review 后，可以冻结：status=frozen，frozen_at=<timestamp>，freeze_review_ref=<review-file>
 3. 冻结后的契约不能修改（pre-commit hook 会阻止）
 4. 执行分支不能直接新增 frozen 契约（contract-boundary gate 会拒绝）
+
+**冻结审查记录要求**：
+- `freeze_review_ref` 建议指向 `reviews/contracts/<contract-id>.freeze-review.yaml`
+- 审查文件至少包含：
+  - `contract_ref`: 对应的 `contract_id`
+  - `action: freeze`
+  - `verdict: approved`
+  - `reviewed_by`
+  - `reviewed_at`
 
 **与 work-item.yaml 的对应关系**：
 - contract.md 的 `consumers` 字段列出所有引用此契约的 WI
@@ -28,6 +38,7 @@ contract_id: [contract-id]
 status: draft
 # status flow: draft -> frozen only after explicit review
 frozen_at: null
+freeze_review_ref: null
 consumers: [WI-001]
 
 ## Interface Definition

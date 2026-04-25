@@ -88,12 +88,13 @@
 必须确认（Implementation 阶段）：
 - `focus_work_item` 非空且存在于 `active_work_items`。
 - `active_work_items` 表示按 design 建议或人工维护的 branch execution set；runtime 会把它作为进入 Testing 前 verification 的聚合集合，但不提供完整的多 WI union scope/boundary enforcement。
-- `execution_group` / `execution_branch` 仅用于文档化，不由 runtime 强制。
-- 当前 git branch 与 `execution_branch` 一致（人工确认）；若设置了 `feature_branch`，执行分支未落后于 feature branch。
+- `feature_branch`、`execution_group`、`execution_branch` 以 `meta.yaml` 为运行态真相；不要手改，统一通过 `codespec set-execution-context ...` 写入。
+- pre-commit 会校验当前 git branch 与 `execution_branch` / `feature_branch` 的对齐关系；如果当前分支是并行执行分支（`execution_group != null` 且当前分支不等于 `feature_branch`），则 `spec.md`、`design.md`、`work-items/`、`contracts/`、`deployment.md` 只能在父 feature 分支修改。
 - staged 改动全部在 `allowed_paths` 内，且未命中 `forbidden_paths`（由 scope gate 强制）。
+- `start-testing` 会基于 `implementation_base_revision` 重新检查整个 Implementation 回路的累计变更，不只是当前 staged diff。
 - staged 改动没有越过 `branch_execution.owned_paths`；命中 `shared_paths` 时已遵守 `shared_file_owner` / `conflict_policy`（人工审查，不由 runtime 强制；原因：需要跨分支信息，超出单分支 gate 的能力范围；审查方式：在 PR review 或 merge 前，手动对比当前改动与其他执行分支的 work-item.yaml，确认文件所有权和冲突策略）。
-- 没有修改 frozen contract；新增 frozen contract 走了显式 review flow：先以 `draft` 建档、review 后再冻结；直接新增 frozen contract 会被 `contract-boundary` gate 拒绝。
-- 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且已有 pass record（Implementation 阶段允许 test_scope=branch-local，Testing/Deployment 阶段要求 test_scope=full-integration）。
+- 没有修改 frozen contract；若 contract 进入 `status: frozen`，必须同时提供 `freeze_review_ref` 指向已批准的冻结审查记录。
+- 当前 active work items（按 design 建议或人工维护的 branch execution set，也是进入 Testing 前 verification 的聚合集合）的 approved acceptance 在 `testing.md` 中都有 record 且最新匹配记录为 pass（Implementation 阶段允许 test_scope=branch-local，Testing/Deployment 阶段要求 test_scope=full-integration）。
 - 当前实现仍能被 `spec.md`、`design.md`、当前 WI 合法解释，没有隐性扩 scope。
 
 必须确认（Testing 阶段）：
@@ -148,6 +149,7 @@
 - 每条 testing 记录都提供真实 `artifact_ref`，不是 placeholder。
 - `verification_type` 与 acceptance priority 匹配：`P0` 必须 automated；`P1/P2` 只能 automated/manual/equivalent。
 - `residual_risk` 与 `reopen_required` 已经被认真填写。
+- 同一 acceptance 若有多条 testing 记录，以最后一条匹配记录为权威结果；later fail 会推翻 earlier pass。
 
 必须通过：
 - `./.codespec/codespec check-gate trace-consistency`（检查追溯链完整性和测试记录存在性，不检查 test_scope）
@@ -187,7 +189,7 @@
 - `./.codespec/codespec check-gate trace-consistency`（start-deployment 时检查）
 - `./.codespec/codespec check-gate verification`（start-deployment 时检查）
 - `./.codespec/codespec check-gate deployment-readiness`（执行 `deploy` 后应通过，表示已达到人工验收就绪）
-- `./.codespec/codespec check-gate promotion-criteria`（执行 `complete-change <stable-version>` 时检查）
+- `./.codespec/codespec check-gate promotion-criteria`（执行 `complete-change <stable-version>` 时检查；内部会重新执行 `trace-consistency`）
 - `./.codespec/codespec check-gate promotion`（执行 `promote-version <stable-version>` 兼容别名时检查）
 
 禁止切换：
@@ -202,9 +204,11 @@
 ## 命令映射
 - `start-design` -> `requirement-complete` + `review-verdict-present`（要求 reviews/design-review.yaml 存在且 phase=Requirement, verdict=approved）
 - `start-implementation` -> `implementation-ready` + `review-verdict-present`（从 `Design` 进入 `Implementation`，或在 `Implementation` 内切换 `focus_work_item`；要求 reviews/implementation-review.yaml 存在且 phase=Design, verdict=approved）
+- `set-execution-context single <feature-branch>` -> 单分支模式；要求当前 git branch 与 `feature_branch` 一致
+- `set-execution-context parallel <feature-branch> <execution-group>` -> 并行模式；把当前 git branch 写入 `execution_branch`
 - `reopen-implementation` -> Testing / Deployment -> Implementation（不新建 change，用于失败验收后的返工）
-- `start-testing` -> `metadata-consistency` + `scope` + `contract-boundary` + `verification`
+- `start-testing` -> `metadata-consistency` + `scope`(Implementation span) + `contract-boundary`(Implementation span) + `verification`
 - `start-deployment` -> `trace-consistency` + `verification`，并在缺少 `deployment.md` 时自动 materialize
 - `deploy` -> 调用 `scripts/codespec-deploy` 并更新 `deployment.md`
-- `complete-change <stable-version>` -> `promotion-criteria`，并归档稳定版本
+- `complete-change <stable-version>` -> `promotion-criteria`（含 `trace-consistency`），并归档稳定版本
 - `promote-version <stable-version>` -> `promotion`（兼容别名）

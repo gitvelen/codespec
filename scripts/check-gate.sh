@@ -109,6 +109,30 @@ current_git_branch() {
   printf 'none'
 }
 
+validate_git_revision() {
+  local revision="$1"
+  [ -n "$revision" ] || return 1
+  [ "$revision" != 'null' ] || return 1
+  git -C "$PROJECT_ROOT" rev-parse --verify "${revision}^{commit}" >/dev/null 2>&1
+}
+
+collect_staged_files() {
+  git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD
+}
+
+collect_implementation_span_files() {
+  local base_revision
+  base_revision="$(yaml_scalar "$META_FILE" implementation_base_revision)"
+  validate_git_revision "$base_revision" || die "implementation_base_revision is missing or invalid: ${base_revision:-null}"
+
+  {
+    git -C "$PROJECT_ROOT" diff --name-only --diff-filter=ACMRD "${base_revision}..HEAD"
+    git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD
+    git -C "$PROJECT_ROOT" diff --name-only --diff-filter=ACMRD
+    git -C "$PROJECT_ROOT" ls-files --others --exclude-standard
+  } | grep -v '^$' | sort -u
+}
+
 collect_active_work_items() {
   local items
   items=$(yaml_list "$META_FILE" active_work_items | grep -vE '^(|null)$' || true)
@@ -337,13 +361,23 @@ collect_formal_requirement_ids() {
 }
 
 gate_metadata_consistency() {
-  local phase status focus_wi execution_group execution_branch active=() wi
+  local phase status focus_wi execution_group execution_branch implementation_base_revision active=() wi
   phase="$(yaml_scalar "$META_FILE" phase)"
   status="$(yaml_scalar "$META_FILE" status)"
   focus_wi="$(yaml_scalar "$META_FILE" focus_work_item)"
   execution_group="$(yaml_scalar "$META_FILE" execution_group)"
   execution_branch="$(yaml_scalar "$META_FILE" execution_branch)"
+  implementation_base_revision="$(yaml_scalar "$META_FILE" implementation_base_revision)"
   mapfile -t active < <(collect_active_work_items)
+
+  case "$status" in
+    active|blocked|completed) ;;
+    *) die "status must be one of active|blocked|completed (got: ${status:-missing})" ;;
+  esac
+
+  if [ "$implementation_base_revision" != 'null' ] && [ -n "$implementation_base_revision" ]; then
+    validate_git_revision "$implementation_base_revision" || die "implementation_base_revision must be a valid commit (got: $implementation_base_revision)"
+  fi
 
   for wi in "${active[@]}"; do
     [ -f "$PROJECT_ROOT/work-items/$wi.yaml" ] || die "active_work_items references missing work item: ${wi}"
@@ -358,14 +392,17 @@ gate_metadata_consistency() {
     Implementation)
       [ "$focus_wi" != 'null' ] || die 'Implementation phase requires focus_work_item'
       [ "${#active[@]}" -gt 0 ] || die 'Implementation phase requires active_work_items to be non-empty'
+      [ "$implementation_base_revision" != 'null' ] || die 'Implementation phase requires implementation_base_revision'
       ;;
     Testing)
       [ "$focus_wi" = 'null' ] || die 'Testing phase requires focus_work_item = null'
       # Testing 阶段保留 active_work_items 用于 verification gate
       [ "${#active[@]}" -gt 0 ] || die 'Testing phase requires active_work_items to be non-empty (should be preserved from Implementation)'
+      [ "$implementation_base_revision" != 'null' ] || die 'Testing phase requires implementation_base_revision'
       ;;
     Deployment)
       [ "$focus_wi" = 'null' ] || die 'Deployment phase requires focus_work_item = null'
+      [ "$implementation_base_revision" != 'null' ] || die 'Deployment phase requires implementation_base_revision'
       if [ "$status" = 'completed' ]; then
         [ "${#active[@]}" -eq 0 ] || die 'completed status requires active_work_items = []'
       else
@@ -585,17 +622,17 @@ testing_target_acceptance_ids() {
 testing_record_scalar() {
   local acc="$1"
   local key="$2"
-  testing_record_pass_scalar "$acc" "$key"
+  testing_record_latest_scalar "$acc" "$key"
 }
 
 testing_record_scalar_from_scope() {
   local acc="$1"
   local key="$2"
   local scope="$3"
-  testing_record_pass_scalar "$acc" "$key" "$scope"
+  testing_record_latest_scalar "$acc" "$key" "$scope"
 }
 
-testing_record_pass_scalar() {
+testing_record_latest_scalar() {
   local acc="$1"
   local key="$2"
   local scope="${3:-}"
@@ -616,10 +653,6 @@ testing_record_pass_scalar() {
         print "ERROR: invalid result value: " record_result " (must be pass or fail)" > "/dev/stderr"
         exit_code = 1
         should_abort = 1
-        return
-      }
-
-      if (record_result != "pass") {
         return
       }
 
@@ -857,7 +890,7 @@ review_file_matches() {
 }
 
 gate_review_verdict_present() {
-  # NOTE: This gate only supports Requirements/Design/Implementation phases.
+  # NOTE: This gate only supports Requirement/Design/Implementation transitions.
   # If future phases require review verdict checks, add corresponding cases below.
   # Extensibility limitation: target_phase mapping must be manually maintained.
   local reviews_dir="$PROJECT_ROOT/reviews"
@@ -1419,16 +1452,21 @@ gate_phase_capability() {
 }
 
 gate_scope() {
-  local phase
+  local phase mode
   phase="$(yaml_scalar "$META_FILE" phase)"
   if [ "$phase" != 'Implementation' ]; then
     log "✓ scope gate passed (phase ${phase})"
     return
   fi
 
-  require_focus_wi
+  mode="${CODESPEC_SCOPE_MODE:-staged}"
   local changed=()
-  mapfile -t changed < <(git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
+  if [ "$mode" = 'implementation-span' ]; then
+    mapfile -t changed < <(collect_implementation_span_files)
+  else
+    require_focus_wi
+    mapfile -t changed < <(collect_staged_files)
+  fi
   [ "${#changed[@]}" -gt 0 ] || {
     log '✓ scope gate passed (no staged changes)'
     return
@@ -1436,15 +1474,41 @@ gate_scope() {
 
   local allowed=()
   local forbidden=()
-  mapfile -t allowed < <(yaml_list "$WI_FILE" allowed_paths)
-  mapfile -t forbidden < <(yaml_list "$WI_FILE" forbidden_paths)
+  if [ "$mode" = 'implementation-span' ]; then
+    local active=() wi wi_file pattern
+    mapfile -t active < <(collect_active_work_items)
+    [ "${#active[@]}" -gt 0 ] || die 'Implementation scope span requires active_work_items'
+    for wi in "${active[@]}"; do
+      wi_file="$PROJECT_ROOT/work-items/$wi.yaml"
+      [ -f "$wi_file" ] || die "missing work item: $wi_file"
+      while IFS= read -r pattern; do
+        [ -n "$pattern" ] && [ "$pattern" != 'null' ] || continue
+        allowed+=("$pattern")
+      done < <(yaml_list "$wi_file" allowed_paths)
+      while IFS= read -r pattern; do
+        [ -n "$pattern" ] && [ "$pattern" != 'null' ] || continue
+        forbidden+=("$pattern")
+      done < <(yaml_list "$wi_file" forbidden_paths)
+    done
+  else
+    mapfile -t allowed < <(yaml_list "$WI_FILE" allowed_paths)
+    mapfile -t forbidden < <(yaml_list "$WI_FILE" forbidden_paths)
+  fi
 
-  [ "${#forbidden[@]}" -gt 0 ] || die "$FOCUS_WI has empty forbidden_paths (must specify at least one pattern)"
+  if [ "${#forbidden[@]}" -eq 0 ]; then
+    if [ "$mode" = 'implementation-span' ]; then
+      die 'active work items have empty forbidden_paths (must specify at least one pattern)'
+    fi
+    die "$FOCUS_WI has empty forbidden_paths (must specify at least one pattern)"
+  fi
 
   local file pattern ok
   for file in "${changed[@]}"; do
     for pattern in "${forbidden[@]}"; do
       if match_path "$file" "$pattern"; then
+        if [ "$mode" = 'implementation-span' ]; then
+          die "implementation span file $file is forbidden by active work items"
+        fi
         die "staged file $file is forbidden by $FOCUS_WI"
       fi
     done
@@ -1457,14 +1521,55 @@ gate_scope() {
           break
         fi
       done
-      [ "$ok" -eq 1 ] || die "staged file $file is outside allowed_paths of $FOCUS_WI"
+      if [ "$ok" -ne 1 ]; then
+        if [ "$mode" = 'implementation-span' ]; then
+          die "implementation span file $file is outside allowed_paths of active work items"
+        fi
+        die "staged file $file is outside allowed_paths of $FOCUS_WI"
+      fi
     fi
   done
 
   log '✓ scope gate passed'
 }
 
+contract_scalar_current() {
+  local file="$1"
+  local key="$2"
+  awk -F': ' -v key="$key" '$1 == key { print $2; exit }' "$file"
+}
+
+contract_scalar_from_revision() {
+  local revision="$1"
+  local file="$2"
+  local key="$3"
+  git -C "$PROJECT_ROOT" show "${revision}:${file}" 2>/dev/null | awk -F': ' -v key="$key" '$1 == key { print $2; exit }'
+}
+
+validate_frozen_contract_file() {
+  local file="$1"
+  local contract_id freeze_review_ref frozen_at review_file
+  contract_id="$(contract_scalar_current "$PROJECT_ROOT/$file" contract_id)"
+  freeze_review_ref="$(contract_scalar_current "$PROJECT_ROOT/$file" freeze_review_ref)"
+  frozen_at="$(contract_scalar_current "$PROJECT_ROOT/$file" frozen_at)"
+
+  [ -n "$frozen_at" ] && [ "$frozen_at" != 'null' ] || die "frozen contract $file must have frozen_at timestamp"
+  [[ "$frozen_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "frozen contract $file frozen_at must be YYYY-MM-DD format (got: $frozen_at)"
+
+  [ -n "$freeze_review_ref" ] && [ "$freeze_review_ref" != 'null' ] || die "frozen contract $file requires explicit review (missing freeze_review_ref)"
+  review_file="$PROJECT_ROOT/$freeze_review_ref"
+  [ -f "$review_file" ] || die "frozen contract $file requires explicit review artifact: $freeze_review_ref"
+  [ "$(yaml_scalar "$review_file" contract_ref)" = "$contract_id" ] || die "freeze review $freeze_review_ref does not reference contract_id $contract_id"
+  [ "$(yaml_scalar "$review_file" action)" = 'freeze' ] || die "freeze review $freeze_review_ref must have action=freeze"
+  [ "$(yaml_scalar "$review_file" verdict)" = 'approved' ] || die "freeze review $freeze_review_ref must be approved"
+  [ "$(yaml_scalar "$review_file" reviewed_by)" != 'null' ] || die "freeze review $freeze_review_ref missing reviewed_by"
+  [ "$(yaml_scalar "$review_file" reviewed_at)" != 'null' ] || die "freeze review $freeze_review_ref missing reviewed_at"
+}
+
 gate_contract_boundary() {
+  local mode
+  mode="${CODESPEC_CONTRACT_BOUNDARY_MODE:-staged}"
+
   # Check focus_work_item contract_refs (Implementation phase)
   if [ -f "$META_FILE" ] && [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
     require_focus_wi
@@ -1495,30 +1600,44 @@ gate_contract_boundary() {
   fi
 
   local rel_contract_root="contracts/"
-  local file head_status index_status diff_lines
+  local file head_status current_status base_status implementation_base_revision
+  if [ "$mode" = 'implementation-span' ]; then
+    implementation_base_revision="$(yaml_scalar "$META_FILE" implementation_base_revision)"
+    validate_git_revision "$implementation_base_revision" || die "implementation_base_revision is missing or invalid: ${implementation_base_revision:-null}"
+  fi
+
   while IFS= read -r file; do
     [[ "$file" == ${rel_contract_root}* ]] || continue
 
-    head_status="$(git -C "$PROJECT_ROOT" show "HEAD:$file" 2>/dev/null | grep '^status:' | awk '{print $2}' || true)"
-    index_status="$(git -C "$PROJECT_ROOT" show ":$file" 2>/dev/null | grep '^status:' | awk '{print $2}' || true)"
+    [ -f "$PROJECT_ROOT/$file" ] || continue
 
-    if [ "$head_status" = 'frozen' ]; then
+    if [ "$mode" = 'implementation-span' ]; then
+      head_status="$(contract_scalar_from_revision "$implementation_base_revision" "$file" status || true)"
+      current_status="$(contract_scalar_current "$PROJECT_ROOT/$file" status)"
+      base_status="$head_status"
+    else
+      head_status="$(git -C "$PROJECT_ROOT" show "HEAD:$file" 2>/dev/null | grep '^status:' | awk '{print $2}' || true)"
+      current_status="$(git -C "$PROJECT_ROOT" show ":$file" 2>/dev/null | grep '^status:' | awk '{print $2}' || true)"
+      base_status="$head_status"
+    fi
+
+    if [ "$base_status" = 'frozen' ]; then
       die "frozen contract cannot be modified: $file"
     fi
 
-    if [ "$index_status" = 'frozen' ] && ! git -C "$PROJECT_ROOT" cat-file -e "HEAD:$file" 2>/dev/null; then
-      die "new frozen contract requires explicit review flow: $file"
+    if [ "$current_status" = 'frozen' ]; then
+      validate_frozen_contract_file "$file"
+      if [ "$mode" = 'staged' ] && ! git -C "$PROJECT_ROOT" cat-file -e "HEAD:$file" 2>/dev/null; then
+        die "new frozen contract requires explicit review flow: $file"
+      fi
     fi
-
-    # Check frozen_at timestamp for frozen contracts
-    if [ "$index_status" = 'frozen' ]; then
-      local frozen_at
-      frozen_at="$(git -C "$PROJECT_ROOT" show ":$file" 2>/dev/null | grep '^frozen_at:' | awk '{print $2}' || true)"
-      [ -n "$frozen_at" ] && [ "$frozen_at" != 'null' ] || die "frozen contract $file must have frozen_at timestamp"
-      # Validate timestamp format YYYY-MM-DD
-      [[ "$frozen_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "frozen contract $file frozen_at must be YYYY-MM-DD format (got: $frozen_at)"
+  done < <(
+    if [ "$mode" = 'implementation-span' ]; then
+      collect_implementation_span_files
+    else
+      collect_staged_files
     fi
-  done < <(git -C "$PROJECT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
+  )
 
   # Check contract consumers consistency with work-item contract_refs
   local contract_file contract_id consumers wi_file wi_id contract_refs
@@ -1661,7 +1780,6 @@ gate_testing_coverage() {
   local acc priority verification_type artifact_ref residual_risk reopen_required test_type test_scope
   for acc in "${accs[@]}"; do
     grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "testing.md missing record for ${acc}"
-    has_testing_record "$acc" || die "testing.md does not have a passing record for ${acc}"
 
     # In Testing/Deployment phase, require at least one full-integration pass record
     if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
@@ -1675,6 +1793,7 @@ gate_testing_coverage() {
       test_type="$(testing_record_scalar_from_scope "$acc" test_type full-integration)"
       test_scope="$(testing_record_scalar_from_scope "$acc" test_scope full-integration)"
     else
+      has_testing_record "$acc" || die "testing.md does not have a passing record for ${acc}"
       # In other phases, extract from any pass record (first match)
       artifact_ref="$(testing_record_scalar "$acc" artifact_ref)"
       residual_risk="$(testing_record_scalar "$acc" residual_risk)"
@@ -1732,7 +1851,7 @@ gate_verification() {
   local phase
   phase="$(yaml_scalar "$META_FILE" phase)"
 
-  if [ "$phase" = 'Proposal' ] || [ "$phase" = 'Requirements' ] || [ "$phase" = 'Design' ]; then
+  if [ "$phase" = 'Requirement' ] || [ "$phase" = 'Design' ]; then
     log "✓ verification gate passed (phase ${phase})"
     return
   fi
@@ -1763,17 +1882,6 @@ gate_verification() {
         fi
       done < <(work_item_approved_acceptance_refs "$wi_file")
     done
-  elif [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
-    require_focus_wi
-    local acc
-
-    check_dependency_pass_records
-
-    while IFS= read -r acc; do
-      [ -n "$acc" ] || continue
-      grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "current work item acceptance ${acc} has no testing record"
-      has_testing_record "$acc" || die "current work item acceptance ${acc} has no pass record"
-    done < <(work_item_approved_acceptance_refs "$WI_FILE")
   fi
 
   if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
@@ -1864,6 +1972,7 @@ gate_promotion_criteria() {
   phase="$(yaml_scalar "$META_FILE" phase)"
   status="$(yaml_scalar "$META_FILE" status)"
   [ "$phase" = 'Deployment' ] || [ "$status" = 'completed' ] || die 'promotion requires Deployment phase or completed status'
+  gate_trace_consistency
   gate_testing_coverage
   gate_deployment_readiness
   local deployment_file="$PROJECT_ROOT/deployment.md"

@@ -2,6 +2,10 @@
 
 基于阶段门控（Phase-Gate）的软件开发流程管理框架。通过结构化文档和自动化检查，确保每个阶段的工作质量达标后才能进入下一阶段。
 
+说明：本仓库根目录是框架源码仓，不是一个已初始化的业务 dossier。业务项目的
+`spec.md`、`design.md`、`testing.md`、`deployment.md`、`meta.yaml` 应只出现在
+执行 `init-dossier.sh` 之后的项目目录里，模板则统一位于 `templates/`。
+
 ## 设计理念
 
 **问题**：软件开发中常见的质量问题：
@@ -193,9 +197,10 @@ workspace/
 - **首次接入**：项目里还没有 `spec.md`、`design.md`、`meta.yaml`
 - **旧版升级**：项目已经有 dossier，只是要升级 `.codespec` runtime / 模板 / hooks
 
-新版标准入口只有三类：
+新版标准入口只有四类：
 - 安装或升级 workspace runtime：`scripts/install-workspace.sh <workspace_root>`
 - 初始化项目 dossier：`<workspace_root>/.codespec/scripts/init-dossier.sh`
+- 重大版本迁移已有 dossier：`<workspace_root>/.codespec/scripts/migrate-to-requirement-phase.sh <project_root>`
 - 日常推进阶段：`codespec <cmd>`；如果 `codespec` 不在 PATH，就改用 `<workspace_root>/.codespec/codespec <cmd>`
 
 `codespec install` 已在 v2 移除，不再使用。历史上的“专用 workspace + 软链”只算兼容做法，不是默认路径。
@@ -259,23 +264,80 @@ cd /home/admin/estimate/requirement-estimation
 
 #### 场景 2B：已接入项目升级到新框架
 
-如果项目已经有 `meta.yaml`，说明 dossier 已存在。此时只升级 workspace runtime，不要重新初始化项目。
+如果项目已经有 `meta.yaml`，说明 dossier 已存在。此时要区分两层：
+- workspace 层：`/path/to/workspace/.codespec/` 下的 runtime、模板、hooks 脚本
+- project 层：`/path/to/workspace/existing-project/` 下已有的 `spec.md`、`design.md`、`meta.yaml`、`reviews/` 等 dossier 内容
+
+升级时只会自动刷新 workspace 层，不会自动重建或覆盖 project 层已有 dossier。
+也就是说，`/path/to/workspace/.codespec/` 是一份安装出来的本地副本，不会随着框架仓库自动同步；每次框架升级，都需要重新执行一次 `install-workspace.sh`。
 
 ```bash
 # 仍然假设项目在 /path/to/workspace/existing-project
 cd /path/to/workspace/existing-project
 
-# 用新版框架覆盖刷新 workspace runtime
+# 1) 用新版框架覆盖刷新 workspace runtime
 git clone <codespec-repo-url> /tmp/codespec-framework
 /tmp/codespec-framework/scripts/install-workspace.sh ..
 
-# 如有需要，补装项目 hooks
+# 2) 给已接入项目补装/刷新 hooks
 ../.codespec/scripts/install-hooks.sh .
+
+# 3) 如果项目仍处于旧阶段模型（Proposal/Requirements），执行迁移
+../.codespec/scripts/migrate-to-requirement-phase.sh .
+
+# 4) 检查当前状态
+../.codespec/codespec status
 ```
 
-关键点只有两个：
+关键点：
 - **不要**对已有 `meta.yaml` 的项目再次执行 `init-dossier.sh`，否则会报 `dossier already initialized`
 - 升级后继续使用现有 `spec.md`、`design.md`、`meta.yaml` 和 `work-items/`，不需要重建 dossier
+- `install-workspace.sh` 更新的是 `../.codespec/`、`../versions/`、`../phase-review-policy.md`、`../lessons_learned.md`
+- `install-hooks.sh` 更新的是当前 Git 项目的 hooks
+- `migrate-to-requirement-phase.sh` 只处理旧阶段模型迁移：`Proposal/Requirements -> Requirement`，并把 `reviews/requirements-review.yaml` 迁到 `reviews/design-review.yaml`
+- 但如果框架有重大升级，project 层文档仍需要人工对齐新模板，尤其是 `spec.md`、`meta.yaml`、`reviews/*.yaml`
+- 如果仓库里有全局 `*.md` 忽略规则，记得为 `spec.md`、`design.md`、`testing.md`、`AGENTS.md`、`CLAUDE.md` 加例外，否则 dossier 文档不会进入版本控制
+
+#### `/home/admin/velentrade` 对应的升级示例
+
+假设：
+- workspace root 是 `/home/admin/velentrade`
+- 已接入项目是 `/home/admin/velentrade/main`
+
+那么升级步骤应当是：
+
+```bash
+git clone <codespec-repo-url> /tmp/codespec-framework
+
+# 1) 刷新 workspace runtime 和模板
+/tmp/codespec-framework/scripts/install-workspace.sh /home/admin/velentrade
+
+# 2) 刷新 main 这个项目的 hooks
+/home/admin/velentrade/.codespec/scripts/install-hooks.sh /home/admin/velentrade/main
+
+# 3) 如 main 仍是旧阶段模型，执行迁移
+/home/admin/velentrade/.codespec/scripts/migrate-to-requirement-phase.sh /home/admin/velentrade/main
+
+# 4) 回到项目目录核对状态
+cd /home/admin/velentrade/main
+/home/admin/velentrade/.codespec/codespec status
+```
+
+对于 `main` 目录，要特别注意：
+- 不要站在 `/home/admin/velentrade/.codespec/scripts` 里直接跑 `./init-dossier.sh`
+- 不要以为 `install-workspace.sh` 会自动覆盖 `main/spec.md`、`main/design.md`、`main/testing.md`
+- 如果这次框架升级涉及 dossier schema 变化，`main` 里的 `spec.md` 和 `meta.yaml` 需要按新模板人工整理
+
+一个最小验证组合是：
+
+```bash
+cd /home/admin/velentrade/main
+/home/admin/velentrade/.codespec/codespec check-gate requirement-complete
+CODESPEC_TARGET_PHASE=Design /home/admin/velentrade/.codespec/codespec check-gate review-verdict-present
+/home/admin/velentrade/.codespec/codespec status
+```
+
+如果这三条都能正常工作，再继续执行 `start-design`。
 
 #### `/home/admin/estimate` 对应的升级示例
 
@@ -290,6 +352,7 @@ git clone <codespec-repo-url> /tmp/codespec-framework
 /tmp/codespec-framework/scripts/install-workspace.sh /home/admin/estimate
 cd /home/admin/estimate/requirement-estimation
 /home/admin/estimate/.codespec/scripts/install-hooks.sh .
+/home/admin/estimate/.codespec/scripts/migrate-to-requirement-phase.sh .
 ```
 
 升级后继续在项目目录使用标准命令入口：
@@ -306,8 +369,9 @@ codespec status
 
 至少检查这几件事：
 - workspace 下存在 `.codespec/`、`versions/`、`lessons_learned.md`、`phase-review-policy.md`
-- 首次接入的项目下存在 `spec.md`、`design.md`、`testing.md`、`deployment.md`、`meta.yaml`
+- 首次接入的项目下存在 `spec.md`、`design.md`、`testing.md`、`meta.yaml`
 - 已接入项目可以正常执行 `codespec status`，或用 workspace runtime 执行 `.../.codespec/codespec status`
+- 如果项目仍在 Requirement 阶段，可以继续通过 `requirement-complete` 和 `review-verdict-present` gate
 - 如果项目是 Git 仓库，`.git/hooks/pre-commit` 和 `.git/hooks/pre-push` 已安装
 
 验证命令示例：
@@ -315,8 +379,15 @@ codespec status
 ```bash
 cd /home/admin/estimate/requirement-estimation
 ls ../.codespec ../versions ../lessons_learned.md ../phase-review-policy.md
-ls spec.md design.md testing.md deployment.md meta.yaml
+ls spec.md design.md testing.md meta.yaml
 codespec status || /home/admin/estimate/.codespec/codespec status
+```
+
+如果项目还没升到 Design，可以再补两条：
+
+```bash
+/home/admin/estimate/.codespec/codespec check-gate requirement-complete
+CODESPEC_TARGET_PHASE=Design /home/admin/estimate/.codespec/codespec check-gate review-verdict-present
 ```
 
 #### 常见报错：`dossier already initialized in /home/admin`
@@ -380,10 +451,13 @@ codespec complete-change v1.0
 如果你确认生成：
 
 ```bash
-codespec generate-project-docs v1.0
-# 生成项目文档到 ../project-docs/v1.0/
+codespec scaffold-project-docs v1.0
+# 生成项目文档脚手架到 ../project-docs/v1.0/
 # 包含：系统功能说明书、技术方案设计、接口文档、用户手册、部署记录、测试报告
 ```
+
+`generate-project-docs v1.0` 仍可作为兼容别名使用，但现在明确表示“生成脚手架”，
+不是“直接抽取出可发布文档”。
 
 `promote-version v1.0` 仍可作为兼容别名使用，但推荐主路径统一使用
 `complete-change <stable-version>`。
@@ -557,7 +631,8 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 
 | 命令 | 前置条件 | 作用 |
 |------|---------|------|
-| `codespec generate-project-docs <version>` | status=completed, phase=Deployment | 生成项目文档到 project-docs/<version>/ |
+| `codespec scaffold-project-docs <version>` | status=completed, phase=Deployment | 生成项目文档脚手架到 project-docs/<version>/ |
+| `codespec generate-project-docs <version>` | 与 `scaffold-project-docs <version>` 相同的兼容入口 | 兼容别名，建议改用 `scaffold-project-docs` |
 | `codespec promote-version <version>` | 与 `complete-change <version>` 相同的兼容入口 | 兼容归档命令，建议改用 `complete-change` |
 | `codespec reset-to-requirement [--keep-contracts]` | status=completed, 当前 completed dossier 已至少执行一次 complete-change/promote-version | 重置 dossier 到 Requirement 阶段，开始新版本 |
 | `codespec list-versions [--json]` | - | 列出所有已归档版本 |
@@ -568,6 +643,8 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 |------|------|
 | `codespec add-work-item <WI-ID>` | 创建工作项文件（work-items/WI-XXX.yaml） |
 | `codespec set-active-work-items <WI-IDs>` | 设置活跃工作项列表（逗号分隔，如 WI-001,WI-002） |
+| `codespec set-execution-context single <feature-branch>` | 把当前 dossier 设为单分支模式；当前 git branch 必须等于 `feature_branch` |
+| `codespec set-execution-context parallel <feature-branch> <execution-group>` | 把当前 dossier 设为并行模式；当前 git branch 会写入 `execution_branch` |
 
 ### 检查和工具命令
 
@@ -578,25 +655,24 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 
 ## 门控检查列表
 
-框架内置 15 个门控检查，在阶段转换时自动执行：
+框架内置以下门控检查，在阶段转换时自动执行：
 
 | Gate 名称 | 检查内容 | 触发时机 |
 |----------|---------|---------|
 | `metadata-consistency` | meta.yaml 与文档的一致性 | 所有阶段转换 |
 | `review-verdict-present` | 审查文件是否存在且通过 | Requirement/Design/Implementation 转换 |
-| `requirement-complete` | Proposal 是否成熟（无占位符） | Requirement |
-| `requirement-complete` | Requirement 是否完整 | Requirement → Design |
+| `requirement-complete` | Requirement 阶段文档是否完整、无占位、追溯链闭合 | Requirement → Design |
 | `design-structure-complete` | design.md 结构是否完整 | Design → Implementation |
 | `implementation-readiness-baseline` | 工作项是否准备就绪 | Design → Implementation |
 | `implementation-start` | 工作项文件是否完整 | Design → Implementation |
-| `phase-capability` | 当前阶段是否允许修改实现文件 | pre-commit hook |
+| `phase-capability` | 当前阶段最低能力边界是否允许修改实现或冻结文件 | pre-commit hook |
 | `scope` | 修改的文件是否在工作项允许范围内 | pre-commit hook |
 | `contract-boundary` | 合约是否被正确使用 | pre-commit hook |
-| `trace-consistency` | 追踪关系是否一致 | Implementation → Testing |
+| `trace-consistency` | 追踪关系是否一致 | Testing → Deployment / Promotion |
 | `testing-coverage` | 测试是否覆盖所有验收标准 | Testing → Deployment |
 | `verification` | 验证测试是否通过 | Testing → Deployment |
 | `deployment-readiness` | 是否已真实部署且达到人工验收就绪 | Deployment 阶段 |
-| `promotion-criteria` | 是否已人工验收通过并可归档稳定版本 | Deployment → Completed |
+| `promotion-criteria` | 是否已人工验收通过、trace 仍一致并可归档稳定版本 | Deployment → Completed |
 
 ## Git 集成
 
@@ -605,12 +681,18 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 ```bash
 # 自动执行的检查：
 1. metadata-consistency  # 元数据一致性
-2. phase-capability      # 阶段能力检查（Proposal/Requirement 阶段禁止修改 src/**, Dockerfile）
-3. scope                 # 范围检查（Implementation 阶段检查文件是否在工作项的 allowed_paths 内）
+2. phase-capability      # 阶段最低能力检查（Requirement 禁止实现文件；Testing/Deployment 冻结实现与 authority 文件）
+3. scope                 # 范围检查（Implementation 阶段检查 staged 改动；start-testing 会再按整个 Implementation span 重查）
 4. contract-boundary     # 合约边界检查
 ```
 
-**注意**：框架**不会**按阶段全局限制文件修改。文件修改限制由工作项的 `allowed_paths` 和 `forbidden_paths` 配置决定。
+**注意**：框架有两层约束：
+- `phase-capability`：阶段级最低能力边界，例如 Requirement 阶段不能提交 `src/**`
+- `allowed_paths` / `forbidden_paths`：工作项级文件边界；Implementation 阶段按 staged 改动检查，进入 Testing 前会再按整个 Implementation span 重查
+- `testing.md` 是追加账本，但 gate 以“最后一条匹配记录”为权威结果；later fail 会推翻 earlier pass
+
+并行执行时，`feature_branch` / `execution_group` / `execution_branch` 以 `meta.yaml` 为运行态真相；
+不要手改，统一通过 `codespec set-execution-context ...` 写入。
 
 ## 文档模板
 
@@ -624,8 +706,8 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 | `deployment.md` | 部署文档，记录部署步骤和验证结果 |
 | `work-item.yaml` | 工作项模板，定义实现目标、允许路径、依赖关系 |
 | `contract.md` | 共享契约模板，用于跨工作项的接口定义 |
-| `CLAUDE.md` | AI 助手工作指南（会复制到项目的 .claude/ 目录） |
-| `AGENTS.md` | AI 助手详细指令（会复制到项目的 .claude/ 目录） |
+| `CLAUDE.md` | AI 助手工作指南（会复制到项目根目录） |
+| `AGENTS.md` | AI 助手详细指令（会复制到项目根目录） |
 | `phase-review-policy.md` | 阶段审查规则（工作区级别） |
 | `lessons_learned.md` | 经验总结模板（工作区级别） |
 

@@ -214,6 +214,7 @@ render_template() {
   content="${content//__STATUS__/${RENDER_STATUS:-}}"
   content="${content//__FOCUS_WORK_ITEM__/${RENDER_FOCUS_WORK_ITEM:-}}"
   content="${content//__ACTIVE_WORK_ITEMS__/${RENDER_ACTIVE_WORK_ITEMS:-[]}}"
+  content="${content//__IMPLEMENTATION_BASE_REVISION__/${RENDER_IMPLEMENTATION_BASE_REVISION:-null}}"
   content="${content//__WI_ID__/${RENDER_WI_ID:-}}"
   content="${content//__DERIVED_FROM__/${RENDER_DERIVED_FROM:-}}"
   printf '%s\n' "$content" > "$dest"
@@ -235,6 +236,15 @@ current_git_branch() {
     return
   fi
   printf 'none'
+}
+
+current_git_revision() {
+  local project_root="$1"
+  if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$project_root" rev-parse HEAD
+    return
+  fi
+  printf 'null'
 }
 
 resolve_promoted_base_version() {
@@ -522,23 +532,7 @@ start_design() {
       envsubst < "$workspace_root/.codespec/templates/testing.md" \
         > "$project_root/testing.md"
     else
-      cat > "$project_root/testing.md" <<'EOF'
-# Testing Strategy
-
-## Test Levels
-- Unit tests
-- Integration tests
-- E2E tests
-
-## Coverage Goals
-TBD
-
-## Test Data
-TBD
-
-## CI/CD Integration
-TBD
-EOF
+      die "missing testing.md template: $workspace_root/.codespec/templates/testing.md"
     fi
     log "created testing.md"
   fi
@@ -556,7 +550,7 @@ start_implementation() {
   [ -f "$meta" ] || die "missing meta.yaml"
   [ -f "$project_root/work-items/$wi_id.yaml" ] || die "missing work item: work-items/$wi_id.yaml"
 
-  local current_phase current_status active_count
+  local current_phase current_status active_count implementation_base_revision
   current_phase="$(yaml_scalar "$meta" phase)"
   current_status="$(yaml_scalar "$meta" status)"
   assert_phase_transition "$current_phase" 'Implementation' "$current_status"
@@ -565,13 +559,17 @@ start_implementation() {
   CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Implementation' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-verdict-present >/dev/null
 
   active_count="$(yq eval '.active_work_items | length' "$meta")"
+  implementation_base_revision="$(yaml_scalar "$meta" implementation_base_revision)"
+  if [ "$current_phase" != 'Implementation' ] || [ "$implementation_base_revision" = 'null' ] || [ -z "$implementation_base_revision" ]; then
+    implementation_base_revision="$(current_git_revision "$project_root")"
+  fi
   if [ "$active_count" = '0' ]; then
-    meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .active_work_items = [\"$wi_id\"]"
+    meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .implementation_base_revision = \"$implementation_base_revision\" | .active_work_items = [\"$wi_id\"]"
   else
     if ! yq eval '.active_work_items[]' "$meta" 2>/dev/null | grep -Fxq "$wi_id"; then
-      meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .active_work_items += [\"$wi_id\"]"
+      meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .implementation_base_revision = \"$implementation_base_revision\" | .active_work_items += [\"$wi_id\"]"
     else
-      meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\""
+      meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .implementation_base_revision = \"$implementation_base_revision\""
     fi
   fi
   log "started Implementation phase: focus=$wi_id"
@@ -590,8 +588,8 @@ start_testing() {
   assert_phase_transition "$current_phase" 'Testing' "$current_status"
 
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" metadata-consistency >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" contract-boundary >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_SCOPE_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope >/dev/null
+  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTRACT_BOUNDARY_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" contract-boundary >/dev/null
   CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
 
   meta_update "$meta" '.phase = "Testing" | .status = "active" | .focus_work_item = null | .execution_branch = null | .execution_group = null'
@@ -770,7 +768,7 @@ reopen_implementation() {
   fi
   yaml_array="$(parse_active_work_items_arg "$existing_csv")"
 
-  meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"${wi_id}\" | .execution_branch = null | .execution_group = null | .active_work_items = ${yaml_array}"
+  meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"${wi_id}\" | .execution_branch = null | .execution_group = null | .implementation_base_revision = \"$(current_git_revision "$project_root")\" | .active_work_items = ${yaml_array}"
   log "reopened Implementation phase for ${wi_id}"
 }
 
@@ -797,9 +795,9 @@ complete_change() {
   log "archived stable version: versions/$stable_version"
 }
 
-generate_project_docs() {
+scaffold_project_docs() {
   require_yq
-  local version="${1:?usage: codespec generate-project-docs <version>}"
+  local version="${1:?usage: codespec scaffold-project-docs <version>}"
   local project_root workspace_root
   project_root="$(find_project_root)"
   workspace_root="$(find_workspace_root)"
@@ -810,23 +808,23 @@ generate_project_docs() {
   current_status="$(yaml_scalar "$meta" status)"
   current_phase="$(yaml_scalar "$meta" phase)"
 
-  [ "$current_status" = 'completed' ] || die 'generate-project-docs requires completed status'
-  [ "$current_phase" = 'Deployment' ] || die 'generate-project-docs requires Deployment phase'
+  [ "$current_status" = 'completed' ] || die 'scaffold-project-docs requires completed status'
+  [ "$current_phase" = 'Deployment' ] || die 'scaffold-project-docs requires Deployment phase'
 
   [ -f "$project_root/deployment.md" ] || die 'deployment.md not found'
 
   local target_dir="$workspace_root/project-docs/$version"
   [ ! -e "$target_dir" ] || die "project docs already exist: project-docs/$version"
 
-  log "generating project documentation for version $version..."
+  log "scaffolding project document shells for version $version..."
 
   mkdir -p "$target_dir"
 
-  log "generating 系统功能说明书.md..."
+  log "scaffolding 系统功能说明书.md..."
   cat > "$target_dir/系统功能说明书.md" <<'EOF'
 # 系统功能说明书
 
-> 本文档从 spec.md 生成，描述系统当前功能全貌。
+> 本文档是从 dossier 生成的脚手架草稿，需要人工补全后再发布。
 
 ## 文档元信息
 | 项 | 值 |
@@ -837,7 +835,7 @@ generate_project_docs() {
 
 ## 功能概述
 
-（从 spec.md 提取功能列表）
+- [待补充] 根据 spec.md 总结当前版本的功能列表与边界。
 
 ---
 
@@ -850,11 +848,11 @@ generate_project_docs() {
 
 EOF
 
-  log "generating 技术方案设计.md..."
+  log "scaffolding 技术方案设计.md..."
   cat > "$target_dir/技术方案设计.md" <<'EOF'
 # 技术方案设计
 
-> 本文档从 design.md 生成，描述系统架构和技术决策。
+> 本文档是从 dossier 生成的脚手架草稿，需要人工补全后再发布。
 
 ## 文档元信息
 | 项 | 值 |
@@ -865,7 +863,7 @@ EOF
 
 ## 架构概述
 
-（从 design.md 提取架构设计）
+- [待补充] 根据 design.md 总结当前版本的架构、关键决策与边界。
 
 ---
 
@@ -877,11 +875,11 @@ EOF
 
 EOF
 
-  log "generating 接口文档.md..."
+  log "scaffolding 接口文档.md..."
   cat > "$target_dir/接口文档.md" <<'EOF'
 # 接口文档
 
-> 本文档从 contracts/ 生成，描述系统接口定义。
+> 本文档是从 dossier 生成的脚手架草稿，需要人工补全后再发布。
 
 ## 文档元信息
 | 项 | 值 |
@@ -892,7 +890,7 @@ EOF
 
 ## 接口列表
 
-（从 contracts/ 提取接口定义）
+- [待补充] 根据 contracts/ 整理接口列表、调用方与兼容性约束。
 
 ---
 
@@ -903,11 +901,11 @@ EOF
 
 EOF
 
-  log "generating 用户手册.md..."
+  log "scaffolding 用户手册.md..."
   cat > "$target_dir/用户手册.md" <<'EOF'
 # 用户手册
 
-> 本文档从 spec.md 和 design.md 综合生成，描述系统使用方式。
+> 本文档是从 dossier 生成的脚手架草稿，需要人工补全后再发布。
 
 ## 文档元信息
 | 项 | 值 |
@@ -918,7 +916,7 @@ EOF
 
 ## 快速开始
 
-（从 spec.md 和 design.md 提取使用说明）
+- [待补充] 根据 spec.md 和 design.md 补齐安装、配置、使用流程。
 
 ---
 
@@ -930,12 +928,12 @@ EOF
 
 EOF
 
-  log "generating 部署记录.md..."
+  log "scaffolding 部署记录.md..."
   if [ -f "$project_root/deployment.md" ]; then
     cp "$project_root/deployment.md" "$target_dir/部署记录.md"
   fi
 
-  log "generating 测试报告.md..."
+  log "scaffolding 测试报告.md..."
   if [ -f "$project_root/testing.md" ]; then
     cp "$project_root/testing.md" "$target_dir/测试报告.md"
   fi
@@ -947,7 +945,7 @@ EOF
     sed -i "s/__DATE__/$TODAY/g" "$doc"
   done
 
-  log "project documentation generated: project-docs/$version"
+  log "project document shells scaffolded: project-docs/$version"
   log "documents:"
   log "  - 系统功能说明书.md"
   log "  - 技术方案设计.md"
@@ -955,6 +953,11 @@ EOF
   log "  - 用户手册.md"
   log "  - 部署记录.md"
   log "  - 测试报告.md"
+}
+
+generate_project_docs() {
+  log "WARNING: generate-project-docs is deprecated; use scaffold-project-docs instead."
+  scaffold_project_docs "$@"
 }
 
 reset_to_requirement() {
@@ -1008,6 +1011,7 @@ reset_to_requirement() {
   RENDER_STATUS="active" \
   RENDER_FOCUS_WORK_ITEM="null" \
   RENDER_ACTIVE_WORK_ITEMS="[]" \
+  RENDER_IMPLEMENTATION_BASE_REVISION="null" \
   RENDER_UPDATED_BY="codespec-reset" \
   render_template "$workspace_root/.codespec/templates/meta.yaml" "$project_root/meta.yaml"
 
@@ -1040,6 +1044,40 @@ set_active_work_items() {
 
   meta_update "$meta" ".active_work_items = ${yaml_array}"
   log "updated active work items"
+}
+
+set_execution_context() {
+  require_yq
+  local mode="${1:?usage: codespec set-execution-context <single|parallel> <feature-branch> [execution-group]}"
+  local feature_branch="${2:?usage: codespec set-execution-context <single|parallel> <feature-branch> [execution-group]}"
+  local project_root
+  project_root="$(find_project_root)"
+  local meta="$project_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml"
+
+  local git_branch
+  git_branch="$(current_git_branch "$project_root")"
+  [ "$git_branch" != 'none' ] || die 'set-execution-context requires a git repository'
+  [ "$git_branch" != 'detached' ] || die 'set-execution-context requires a named git branch'
+
+  case "$mode" in
+    single)
+      [ "$#" -eq 2 ] || die 'usage: codespec set-execution-context single <feature-branch>'
+      [ "$git_branch" = "$feature_branch" ] || die "single execution context requires current git branch (${git_branch}) to match feature_branch (${feature_branch})"
+      meta_update "$meta" ".feature_branch = \"$feature_branch\" | .execution_group = null | .execution_branch = null"
+      log "set execution context: single feature=${feature_branch}"
+      ;;
+    parallel)
+      local execution_group="${3:?usage: codespec set-execution-context parallel <feature-branch> <execution-group>}"
+      [ "$#" -eq 3 ] || die 'usage: codespec set-execution-context parallel <feature-branch> <execution-group>'
+      [ "$execution_group" != 'null' ] || die 'execution-group must be non-null'
+      meta_update "$meta" ".feature_branch = \"$feature_branch\" | .execution_group = \"$execution_group\" | .execution_branch = \"$git_branch\""
+      log "set execution context: parallel feature=${feature_branch} group=${execution_group} branch=${git_branch}"
+      ;;
+    *)
+      die 'usage: codespec set-execution-context <single|parallel> <feature-branch> [execution-group]'
+      ;;
+  esac
 }
 
 promote_version() {
@@ -1183,21 +1221,7 @@ build_readset_model() {
   READSET_MODEL_APPENDIX_DESIGN=("design-appendices/*" "only when current slice requires drill-down" "")
 
   case "$READSET_MODEL_PHASE" in
-    Proposal)
-      READSET_MODEL_MINIMAL_READSET=(
-        "../lessons_learned.md" "" ""
-        "../phase-review-policy.md" "" ""
-        "meta.yaml" "" ""
-        "spec.md" "" "read Summary and Inputs first"
-      )
-      READSET_MODEL_PHASE_CAP_ALLOWED=(
-        "authoritative dossier edits"
-      )
-      READSET_MODEL_PHASE_CAP_FORBIDDEN=(
-        "src/** and Dockerfile only"
-      )
-      ;;
-    Requirements)
+    Requirement)
       READSET_MODEL_PHASE_CAP_ALLOWED=(
         "authoritative dossier edits"
       )
@@ -1334,11 +1358,14 @@ Usage:
   codespec start-implementation <WI-ID>
   codespec reopen-implementation <WI-ID>
   codespec set-active-work-items <WI-001,WI-002|[]>
+  codespec set-execution-context <single|parallel> <feature-branch> [execution-group]
   codespec start-testing
   codespec start-deployment
   codespec deploy
   codespec complete-change <stable-version>
+  codespec scaffold-project-docs <version>
   codespec generate-project-docs <version>
+  codespec reset-to-requirement [--keep-contracts]
   codespec install-hooks
   codespec check-gate <name>
   codespec status
@@ -1354,29 +1381,31 @@ Installation:
 Version lifecycle:
   deploy -> execute the project deploy hook and refresh deployment evidence
   complete-change -> archive accepted stable version and mark the Deployment change completed
-  generate-project-docs -> generate project documentation from dossier
+  scaffold-project-docs -> scaffold project document shells from dossier artifacts
+  generate-project-docs -> deprecated compatibility alias for scaffold-project-docs
   promote-version -> compatibility alias for complete-change <stable-version>
   reset-to-requirement -> reset dossier to Requirement phase for next version
   list-versions -> list all archived versions
 
 Gate views:
-  requirement-complete -> merged proposal-maturity + requirements-approval
+  requirement-complete -> Requirement dossier is structurally complete and fully traceable
   design-structure-complete -> design artifacts are structurally complete and aligned with work item derivation
   design-readiness -> alias of design-structure-complete
   implementation-ready -> design-structure-complete + implementation-start
-  scope -> staged changes stay within allowed_paths / outside forbidden_paths
-  contract-boundary -> contract refs resolve and frozen contracts stay unchanged
+  scope -> staged changes stay within allowed_paths / outside forbidden_paths; start-testing rechecks the full Implementation span
+  contract-boundary -> contract refs resolve, frozen contracts stay unchanged, and frozen contracts require freeze review evidence
   trace-consistency -> REQ->ACC->VO, ACC->WI, approved ACC testing records in Testing/Deployment
-  verification -> dependency/current WI pass checks; adds testing-coverage in Testing/Deployment
-  promotion -> deployment-readiness + promotion-criteria
+  verification -> dependency/current WI pass checks; testing/deployment use the latest matching testing record
+  promotion -> trace-consistency + deployment-readiness + promotion-criteria
 
 Lifecycle commands:
   start-design -> Requirement -> Design
   start-implementation -> Design -> Implementation or Implementation -> Implementation, and set/switch focus_work_item
   reopen-implementation -> Testing/Deployment -> Implementation for failed verification follow-up
   set-active-work-items -> update active_work_items explicitly (design/manual branch execution set; runtime does not provide complete multi-WI union enforcement)
-  start-testing -> Implementation -> Testing (preserves active_work_items for verification gate)
-  start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment in_progress reopen; auto-materializes deployment.md if missing)
+  set-execution-context -> write the runtime branch-execution context into meta.yaml without hand-editing it
+  start-testing -> Implementation -> Testing (preserves active_work_items and rechecks the full Implementation span)
+  start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment active reopen; auto-materializes deployment.md if missing)
   deploy -> run scripts/codespec-deploy and refresh deployment.md evidence
   complete-change -> archive an accepted stable version and mark Deployment completed
 
@@ -1385,9 +1414,12 @@ Review rule:
 
 Internal gates:
   metadata-consistency
+  review-verdict-present
   requirement-complete | design-structure-complete (alias: design-readiness)
   implementation-ready | implementation-start
-  testing-coverage | deployment-readiness | promotion-criteria
+  phase-capability | scope | contract-boundary
+  trace-consistency | verification | testing-coverage
+  deployment-readiness | promotion-criteria
 EOF
 }
 
@@ -1414,6 +1446,9 @@ main() {
     set-active-work-items)
       set_active_work_items "$@"
       ;;
+    set-execution-context)
+      set_execution_context "$@"
+      ;;
     start-testing)
       start_testing "$@"
       ;;
@@ -1425,6 +1460,9 @@ main() {
       ;;
     complete-change)
       complete_change "$@"
+      ;;
+    scaffold-project-docs)
+      scaffold_project_docs "$@"
       ;;
     generate-project-docs)
       generate_project_docs "$@"

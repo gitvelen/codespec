@@ -93,6 +93,7 @@ RENDER_PHASE="Requirement" \
 RENDER_STATUS="active" \
 RENDER_FOCUS_WORK_ITEM="null" \
 RENDER_ACTIVE_WORK_ITEMS="[]" \
+RENDER_IMPLEMENTATION_BASE_REVISION="null" \
 RENDER_UPDATED_BY="codespec-init" \
 "$WORKSPACE_ROOT/.codespec/codespec" render-template \
   "$WORKSPACE_ROOT/.codespec/templates/meta.yaml" \

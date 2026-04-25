@@ -31,7 +31,8 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 - `false`: 不需要重新开启
 
 **最终验收**：
-- 每个 acceptance 至少需要一条 test_scope=full-integration 且 result=pass 的记录
+- 每个 acceptance 的权威结果取该 acceptance 最后一条匹配记录；Testing/Deployment 阶段按最后一条 `test_scope=full-integration` 记录判定
+- 最终验收要求：最后一条 `test_scope=full-integration` 记录必须是 `result=pass`
 - branch-local 测试供参考，不作为最终验收依据
 
 ## Acceptance 到 Testing 的映射
@@ -39,7 +40,7 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 每个 spec.md 中的 acceptance（ACC-ID）可以在 testing.md 中有多条测试记录：
 - 同一个 ACC-ID 可以有多个 test_type（unit, integration, e2e, performance, security, manual）
 - 同一个 ACC-ID 可以有多个 test_scope（branch-local, full-integration）
-- 最终验收要求：每个 ACC-ID 至少有一条 test_scope=full-integration 且 result=pass 的记录
+- 后写入的记录会覆盖同一 acceptance 在同一判定范围内更早的结果；later fail 会推翻 earlier pass
 
 **示例**：
 - ACC-001 可以有：unit (branch-local) + integration (branch-local) + unit (full-integration) + e2e (full-integration)
@@ -203,4 +204,3 @@ testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 
 - E2E tests: [TODO: coverage description]
 
 **Residual Risks**: [TODO: list any residual risks or "None"]
-

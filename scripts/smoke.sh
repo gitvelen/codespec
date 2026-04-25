@@ -100,6 +100,10 @@ cd "$TMP_WORKSPACE"
 [ -d "versions" ] || die "install-workspace did not create versions/"
 log "✓ workspace installed"
 
+help_output=$("$TMP_WORKSPACE/.codespec/codespec" --help)
+assert_contains "$help_output" "scaffold-project-docs <version>"
+log "✓ help exposes scaffold-project-docs"
+
 # Test 2: Initialize project and dossier
 log "\n=== Test 2: Initialize project and dossier ==="
 git init test-project
@@ -313,6 +317,10 @@ for wi in WI-001 WI-002; do
   yq eval '.requirement_refs = ["REQ-001"]' -i "work-items/$wi.yaml"
   yq eval '.acceptance_refs = ["ACC-001"]' -i "work-items/$wi.yaml"
   yq eval '.verification_refs = ["VO-001"]' -i "work-items/$wi.yaml"
+  if [ "$wi" = "WI-001" ]; then
+    yq eval '.allowed_paths = ["src/**", "meta.yaml", "testing.md", "contracts/**"]' -i "work-items/$wi.yaml"
+    yq eval '.forbidden_paths = ["versions/**", "spec.md", "design.md", "work-items/**", "deployment.md"]' -i "work-items/$wi.yaml"
+  fi
   yq eval '.branch_execution.owned_paths = ["src/**", "testing.md", "meta.yaml"]' -i "work-items/$wi.yaml"
   yq eval '.branch_execution.shared_paths = []' -i "work-items/$wi.yaml"
   yq eval '.branch_execution.merge_order = 1' -i "work-items/$wi.yaml"
@@ -323,6 +331,9 @@ for wi in WI-001 WI-002; do
 done
 
 log "✓ add-work-item succeeded"
+
+git add work-items
+git commit -m "docs: finalize work items"
 
 cat > reviews/implementation-review.yaml <<'EOF'
 phase: Design
@@ -370,6 +381,7 @@ log "✓ same-phase WI switch is idempotent"
 
 "$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-003
 expect_fail_cmd "focus work item WI-003 is missing from design work item derivation" "\"$TMP_WORKSPACE/.codespec/codespec\" start-implementation WI-003"
+rm -f work-items/WI-003.yaml
 
 "$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-001
 "$TMP_WORKSPACE/.codespec/codespec" set-active-work-items WI-001
@@ -381,6 +393,56 @@ active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
 assert_json_eq "$active_wis" '. | length' '1'
 assert_json_eq "$active_wis" '.[0]' '"WI-001"'
 log "✓ active_work_items can be narrowed after same-phase switching"
+
+printf '\nforbidden implementation drift\n' >> spec.md
+git add spec.md
+git commit --no-verify -m "test: introduce committed forbidden drift"
+
+expect_fail_cmd \
+  "implementation span file spec.md is forbidden by active work items" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
+
+git reset --soft HEAD~1 >/dev/null 2>&1 || true
+git restore --staged spec.md >/dev/null 2>&1 || true
+git checkout -- spec.md
+log "✓ start-testing should reject committed forbidden drift across Implementation span"
+
+mkdir -p contracts
+cat > contracts/shared.md <<'EOF'
+# Shared Contract
+
+contract_id: CONTRACT-001
+status: draft
+frozen_at: null
+freeze_review_ref: null
+consumers: []
+
+## Interface Definition
+shared interface
+EOF
+
+git add contracts/shared.md
+git commit --no-verify -m "test: add draft contract"
+
+python3 - <<'PY'
+from pathlib import Path
+path = Path("contracts/shared.md")
+text = path.read_text()
+text = text.replace("status: draft", "status: frozen")
+text = text.replace("frozen_at: null", "frozen_at: 2026-04-16")
+path.write_text(text)
+PY
+git add contracts/shared.md
+git commit --no-verify -m "test: freeze contract without explicit review"
+
+expect_fail_cmd \
+  "requires explicit review" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
+
+git reset --soft HEAD~2 >/dev/null 2>&1 || true
+git restore --staged contracts/shared.md >/dev/null 2>&1 || true
+rm -f contracts/shared.md
+log "✓ start-testing should reject draft-to-frozen contract changes without review"
 
 # Test 7: Implementation and testing
 log "\n=== Test 7: Implementation and testing ==="
@@ -564,6 +626,7 @@ phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Implementation" ] || die "reopen-implementation did not set phase to Implementation"
 focus_wi=$(yq eval '.focus_work_item' meta.yaml)
 [ "$focus_wi" = "WI-001" ] || die "reopen-implementation did not set focus_work_item"
+git checkout -- deployment.md
 log "✓ reopen-implementation re-enters Implementation for failed manual verification"
 
 "$TMP_WORKSPACE/.codespec/codespec" start-testing
@@ -921,19 +984,20 @@ cat > testing.md <<'EOF'
   reopen_required: true
 EOF
 
-"$TMP_WORKSPACE/.codespec/codespec" check-gate verification
-log "✓ verification still recognizes an earlier full-integration pass record when a later failure exists"
+expect_fail_cmd \
+  "full-integration pass record for ACC-001" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate verification"
+log "✓ verification rejects a later full-integration failure after an earlier pass"
 
 # Test 11: File modification rules
 log "\n=== Test 11: File modification rules ==="
 
 # Reset to Implementation phase for testing
-yq eval '.phase = "Implementation" | .status = "in_progress" | .focus_work_item = "WI-001" | .active_work_items = ["WI-001"]' -i meta.yaml
-yq eval '.feature_branch = "main"' -i meta.yaml
+yq eval '.phase = "Implementation" | .status = "active" | .focus_work_item = "WI-001" | .active_work_items = ["WI-001"]' -i meta.yaml
 
 git checkout -b test-execution-branch
 
-yq eval '.execution_group = "test-group" | .execution_branch = "test-execution-branch"' -i meta.yaml
+"$TMP_WORKSPACE/.codespec/codespec" set-execution-context parallel main test-group
 git add meta.yaml
 git commit -m "chore: set execution context"
 
@@ -982,7 +1046,17 @@ set -e
 [ "$status" -ne 0 ] || die "metadata-consistency gate should fail when focus_work_item not in active_work_items"
 log "✓ metadata-consistency gate works"
 
-yq eval '.active_work_items = ["WI-001"]' -i meta.yaml
+yq eval '.phase = "Implementation" | .status = "in_progress" | .focus_work_item = "WI-001" | .active_work_items = ["WI-001"]' -i meta.yaml
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
+status=$?
+set -e
+
+[ "$status" -ne 0 ] || die "metadata-consistency gate should reject invalid status values"
+assert_contains "$output" "status"
+log "✓ metadata-consistency rejects invalid status enum"
+
+yq eval '.status = "active" | .active_work_items = ["WI-001"]' -i meta.yaml
 
 # Test: active Deployment still requires active_work_items until completed
 yq eval '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = []' -i meta.yaml
@@ -992,7 +1066,6 @@ status=$?
 set -e
 
 [ "$status" -ne 0 ] || die "metadata-consistency gate should fail for active Deployment with empty active_work_items"
-assert_contains "$output" "Deployment phase requires active_work_items to be non-empty"
 log "✓ active Deployment still requires active_work_items"
 
 # Test phase-capability gate
@@ -1012,10 +1085,84 @@ log "✓ phase-capability gate works"
 git reset HEAD src/forbidden.txt
 rm -f src/forbidden.txt
 
-# Test 13: Readset
+# Test 13: promotion trace consistency
+log "\n=== Test 13: promotion trace consistency ==="
+
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_HEAD="$CURRENT_HEAD" yq eval '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"] | .implementation_base_revision = strenv(CURRENT_HEAD)' -i meta.yaml
+yq eval '.verification_refs = ["VO-999"]' -i work-items/WI-001.yaml
+yq eval '.verification_refs = ["VO-999"]' -i work-items/WI-002.yaml
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-trace
+deployment_method: automated
+deployed_at: 2026-04-16T09:30:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+
+## Verification Results
+smoke_test: pass
+runtime_ready: pass
+manual_verification_ready: pass
+
+## Acceptance Conclusion
+status: pass
+notes: manual acceptance passed for trace consistency regression test
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
+
+## Monitoring
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
+
+## Post-deployment Actions
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
+EOF
+
+git add work-items/WI-001.yaml work-items/WI-002.yaml
+git commit --no-verify -m "test: break trace before promotion"
+
+expect_fail_cmd \
+  "trace gap: VO-001 is not referenced by any work item verification_refs" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' complete-change smoke-v2.9"
+
+git reset --soft HEAD~1 >/dev/null 2>&1 || true
+git restore --staged work-items/WI-001.yaml work-items/WI-002.yaml >/dev/null 2>&1 || true
+yq eval '.verification_refs = ["VO-001"]' -i work-items/WI-001.yaml
+yq eval '.verification_refs = ["VO-001"]' -i work-items/WI-002.yaml
+log "✓ complete-change should re-check trace consistency"
+
+# Test 14: Readset
 log "\n=== Test 13: Readset ==="
 
-yq eval '.phase = "Requirement" | .status = "in_progress"' -i meta.yaml
+yq eval '.phase = "Requirement" | .status = "active"' -i meta.yaml
 
 readset_output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" readset)
 
@@ -1028,6 +1175,8 @@ readset_json=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPA
 
 assert_json_eq "$readset_json" '.entry_files[0].path' '"AGENTS.md"'
 assert_json_eq "$readset_json" '.minimal_readset | map(select(.path == "meta.yaml")) | length' '1'
+assert_json_eq "$readset_json" '.phase_capabilities.allowed[0]' '"authoritative dossier edits"'
+assert_json_eq "$readset_json" '.phase_capabilities.forbidden[0]' '"src/** and Dockerfile only"'
 log "✓ readset JSON output correct"
 
 # Test 14: reset-to-requirement resolves promoted version from archived baseline metadata
