@@ -49,6 +49,12 @@ expect_fail_cmd() {
   log "✓ expected failure: $expected"
 }
 
+assert_eq() {
+  local actual="$1"
+  local expected="$2"
+  [ "$actual" = "$expected" ] || die "expected '$expected', got '$actual'"
+}
+
 replace_markdown_section() {
   local file="$1"
   local header="$2"
@@ -1316,5 +1322,151 @@ log "✓ reset-to-requirement preserves same-name archive compatibility"
 expect_fail_cmd \
   "current completed dossier has not been promoted yet" \
   "cd '$TMP_WORKSPACE/test-project' && yq eval '.change_id = \"unpromoted\" | .base_version = null | .phase = \"Deployment\" | .status = \"completed\" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml && '$TMP_WORKSPACE/.codespec/codespec' reset-to-requirement"
+
+# Test 15: submit-pr
+log "\n=== Test 15: submit-pr ==="
+
+current_branch="$(git branch --show-current)"
+[ -n "$current_branch" ] || die "expected a current branch before submit-pr test"
+
+mkdir -p "$TMP_WORKSPACE/bin"
+cat > "$TMP_WORKSPACE/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="${TMP_GH_LOG:?}"
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf 'auth ok\n' >>"$log_file"
+  exit 0
+fi
+
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
+  shift 2
+  printf 'pr create' >>"$log_file"
+  for arg in "$@"; do
+    printf ' %s' "$arg" >>"$log_file"
+  done
+  printf '\n' >>"$log_file"
+  printf 'https://example.test/pr/123\n'
+  exit 0
+fi
+
+printf 'unexpected gh invocation: %s\n' "$*" >&2
+exit 1
+EOF
+chmod +x "$TMP_WORKSPACE/bin/gh"
+
+git init --bare "$TMP_WORKSPACE/test-remote.git" >/dev/null
+git remote add origin "$TMP_WORKSPACE/test-remote.git"
+git push --no-verify -u origin "$current_branch" >/dev/null
+git -C "$TMP_WORKSPACE/test-remote.git" symbolic-ref HEAD "refs/heads/$current_branch"
+git fetch origin >/dev/null
+git remote set-head origin -a >/dev/null
+
+git checkout -b feature/submit-pr >/dev/null
+
+cp "$TMP_WORKSPACE/versions/smoke-v2.8/spec.md" spec.md
+cp "$TMP_WORKSPACE/versions/smoke-v2.8/design.md" design.md
+cp "$TMP_WORKSPACE/versions/smoke-v2.8/testing.md" testing.md
+cp "$TMP_WORKSPACE/versions/smoke-v2.8/deployment.md" deployment.md
+rm -rf work-items
+cp -R "$TMP_WORKSPACE/versions/smoke-v2.8/work-items" work-items
+
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_HEAD="$CURRENT_HEAD" yq eval '.change_id = "submit-pr-change" | .base_version = "smoke-v2.8" | .phase = "Deployment" | .status = "active" | .stable_version = null | .focus_work_item = null | .active_work_items = ["WI-001"] | .feature_branch = "feature/submit-pr" | .execution_group = null | .execution_branch = null | .implementation_base_revision = strenv(CURRENT_HEAD)' -i meta.yaml
+
+cat > deployment.md <<'EOF'
+# deployment.md
+
+## Deployment Plan
+target_env: test
+deployment_date: 2026-04-16
+
+## Pre-deployment Checklist
+- [x] Tests pass
+- [x] Code reviewed
+
+## Deployment Steps
+1. Deploy test
+2. Restart service
+
+## Execution Evidence
+status: pass
+execution_ref: smoke-run-submit-pr
+deployment_method: automated
+deployed_at: 2026-04-16T10:00:00Z
+deployed_revision: build=test-2026-04-16
+restart_required: yes
+restart_reason: application code changed and running process must reload new code
+runtime_observed_revision: build=test-2026-04-16
+runtime_ready_evidence: build=test-2026-04-16 pid=12345 /health revision=test-2026-04-16; service restarted and new revision observed in process health output
+
+## Verification Results
+smoke_test: pass
+runtime_ready: pass
+manual_verification_ready: pass
+
+## Acceptance Conclusion
+status: pass
+notes: manual acceptance passed for submit-pr flow
+approved_by: smoke-test
+approved_at: 2026-04-16
+
+## Rollback Plan
+trigger_conditions:
+  - smoke checks fail
+rollback_steps:
+  1. rollback to previous revision
+
+## Monitoring
+metrics:
+  - error_rate
+alerts:
+  - deployment smoke failure
+
+## Post-deployment Actions
+- [ ] update related docs
+- [ ] archive stable version after manual acceptance
+EOF
+
+git add meta.yaml testing.md deployment.md
+git commit -m "docs: prepare submit-pr flow" >/dev/null
+
+echo "# dirty" >> deployment.md
+expect_fail_cmd \
+  "submit-pr requires a clean git working tree" \
+  "cd '$TMP_WORKSPACE/test-project' && PATH='$TMP_WORKSPACE/bin:$PATH' TMP_GH_LOG='$TMP_WORKSPACE/gh.log' '$TMP_WORKSPACE/.codespec/codespec' submit-pr smoke-v3"
+git reset --hard HEAD >/dev/null
+
+rm -f "$TMP_WORKSPACE/gh.log"
+submit_output="$(PATH="$TMP_WORKSPACE/bin:$PATH" TMP_GH_LOG="$TMP_WORKSPACE/gh.log" "$TMP_WORKSPACE/.codespec/codespec" submit-pr smoke-v3)"
+assert_contains "$submit_output" "https://example.test/pr/123"
+[ -f "$TMP_WORKSPACE/versions/smoke-v3/meta.yaml" ] || die "submit-pr did not archive the submitted version"
+assert_eq "$(yq eval '.status' meta.yaml)" "completed"
+assert_eq "$(yq eval '.stable_version' meta.yaml)" "smoke-v3"
+assert_eq "$(git log -1 --pretty=%s)" "chore: complete change smoke-v3"
+assert_contains "$(<"$TMP_WORKSPACE/gh.log")" "pr create --base $current_branch --head feature/submit-pr"
+log "✓ submit-pr completes change, pushes branch, and creates PR"
+
+submit_retry_output="$(PATH="$TMP_WORKSPACE/bin:$PATH" TMP_GH_LOG="$TMP_WORKSPACE/gh.log" "$TMP_WORKSPACE/.codespec/codespec" submit-pr smoke-v3)"
+assert_contains "$submit_retry_output" "https://example.test/pr/123"
+gh_pr_calls="$(grep -c '^pr create' "$TMP_WORKSPACE/gh.log")"
+assert_eq "$gh_pr_calls" "2"
+log "✓ submit-pr can retry PR creation from a completed dossier"
+
+yq eval '.execution_group = "parallel-group" | .execution_branch = "feature/submit-pr" | .feature_branch = "'"$current_branch"'"' -i meta.yaml
+expect_fail_cmd \
+  "submit-pr must run from feature_branch" \
+  "cd '$TMP_WORKSPACE/test-project' && PATH='$TMP_WORKSPACE/bin:$PATH' TMP_GH_LOG='$TMP_WORKSPACE/gh.log' '$TMP_WORKSPACE/.codespec/codespec' submit-pr smoke-v3"
+log "✓ submit-pr rejects execution branches"
+
+git reset --hard HEAD >/dev/null
+git checkout "$current_branch" >/dev/null
+yq eval '.phase = "Deployment" | .status = "completed" | .stable_version = "smoke-v3" | .focus_work_item = null | .active_work_items = [] | .feature_branch = "'"$current_branch"'" | .execution_group = null | .execution_branch = null' -i meta.yaml
+expect_fail_cmd \
+  "submit-pr must not run on the default branch" \
+  "cd '$TMP_WORKSPACE/test-project' && PATH='$TMP_WORKSPACE/bin:$PATH' TMP_GH_LOG='$TMP_WORKSPACE/gh.log' '$TMP_WORKSPACE/.codespec/codespec' submit-pr smoke-v3"
+log "✓ submit-pr rejects default branch execution"
 
 log "\n=== All tests passed ==="

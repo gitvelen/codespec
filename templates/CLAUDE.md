@@ -4,58 +4,10 @@
 
 ---
 
-## 一、当前阶段要读什么
+## 一、每次启动必读
 
-**每次启动必读**：
-1. `../lessons_learned.md` - 只读取硬规则部分
-2. `./meta.yaml` - 获取当前 phase、focus_work_item、active_work_items
-
-**按当前 phase 读取**（从 meta.yaml 的 phase 字段获取）：
-
-**Requirement**：
-- `spec.md` - 完整读取，一次性填充 Summary、Inputs、Scope、Requirements、Acceptance、Verification
-- `spec-appendices/*` - 按需深入，但不能在 appendix 中定义正式 REQ/ACC/VO
-- **写完后必须自检**：确保没有未决策项，所有需求都明确清晰，不要带着歧义进入 Design 阶段
-
-**Design**：
-- `spec.md` - 读取 approved requirements、acceptance、verification
-- `design.md` - 读取 `Summary`、`Technical Approach`、`Boundaries & Impacted Surfaces`、`Work Item Mapping`、`Work Item Derivation`、`Verification Design`
-- `design-appendices/*` - 按需深入；appendix 只能补充细节，不能替代主文档中的正式派生关系
-
-**Implementation**：
-- `work-items/<focus_work_item>.yaml` - 读取当前 WI 的 goal、allowed_paths、requirement_refs、acceptance_refs、verification_refs
-- `design.md` - 读取当前 WI 在 `Work Item Mapping` 和 `Work Item Derivation` 中的条目
-- `spec.md` - 验证 REQ/ACC/VO 引用是否存在
-- `contracts/*.md` - 如果当前 WI 的 contract_refs 非空，读取对应合约
-- `testing.md` - 添加 branch-local 测试记录
-
-**Testing**：
-- `testing.md` - 添加 full-integration 测试记录
-- `work-items/*.yaml` - 读取所有 work-items（Testing 阶段 verification gate 会检查 active_work_items 中所有 WI 的 approved acceptance）
-- `spec.md` - 读取 approved acceptance 和 verification obligations
-- `design.md` - 参考 Verification Design
-
-**Deployment**：
-- `deployment.md` - 维护 Deployment Plan / Deployment Steps / Rollback Plan / Monitoring，并读取 `codespec deploy` 回写的 Execution Evidence / Verification Results / Acceptance Conclusion
-- `testing.md` - 验证所有 approved acceptance 都有 test_scope=full-integration 且 result=pass 的记录
-- `scripts/codespec-deploy` - 项目内真实部署入口；`codespec deploy` 会调用它并读取 YAML 结果
-
-**Deployment 交接规则**：
-- 先执行 `../.codespec/codespec deploy`，不要只手写 deployment.md 假装已经部署
-- `manual_verification_ready: pass` 只表示“可以开始人工验收”，不表示人工验收已通过
-- 如果人工验收发现需要改代码，执行 `../.codespec/codespec reopen-implementation <WI-ID>` 返回同一 change 的修复回路；它不会新建 change，`change_id` 保持不变
-- `testing.md` 是持续追加的验证账本；返工后补新的测试记录，不要覆盖旧记录
-- 再次执行 `../.codespec/codespec deploy` 会用最新部署结果覆盖 `Execution Evidence` / `Verification Results`，并把 `Acceptance Conclusion` 重置为 `pending`
-- 只有用户显式确认人工验收通过后，才能把 `Acceptance Conclusion.status` 记为 `pass`，再执行 `../.codespec/codespec complete-change <stable-version>`
-
-**说明**：
-- 文档可能是模板内容（阶段刚开始）或已填充内容（阶段进行中），都要读取
-- 同一事实只应存在一个权威位置；不要把 `spec` 中已有事实再搬运到 `design` 或 appendix 中
-- `focus_work_item` 为 null 时跳过 work-items 读取
-- `contract_refs` 为空时跳过 contracts 读取
-- appendices 按需深入，不是每次必读
-- 项目文档（`../project-docs/<base_version>/`）不在 readset 中，只在用户明确要求时读取
-- 第一个版本（v1.0）的 base_version 为 null，无项目文档可读
+- `../lessons_learned.md` - 只读取硬规则部分
+- `./meta.yaml`
 
 ---
 
@@ -147,27 +99,26 @@
 
 ## 四、阶段切换前检查
 
-**必须人工审核的阶段**：
-- `requirement→design`、`design→implementation`，这两个阶段切换必须经过人工显式确认
-
-**命令与 gate 映射**（runtime 会自动检查）：
-- `../.codespec/codespec start-design` → 检查 `requirement-complete`
-- `../.codespec/codespec start-implementation <WI-ID>` → 检查 `implementation-ready`
-- `../.codespec/codespec reopen-implementation <WI-ID>` → 从 Testing / Deployment 返回 Implementation
-- `../.codespec/codespec start-testing` → 检查 `metadata-consistency` + `scope` + `contract-boundary` + `verification`
-- `../.codespec/codespec start-deployment` → 检查 `trace-consistency` + `verification`
-- `../.codespec/codespec deploy` → 调用 `scripts/codespec-deploy` 并回写 deployment evidence
-- `../.codespec/codespec complete-change <stable-version>` → 检查 `promotion-criteria`，并归档稳定版本
-- `../.codespec/codespec promote-version <stable-version>` → `complete-change <stable-version>` 的兼容别名
-
-**说明**：
-- gate 检查由 runtime 自动执行，失败会阻止阶段切换
-- 手动检查：`../.codespec/codespec check-gate <gate-name>`
-- 详细检查项：`../.codespec/codespec check-gate <gate-name> --verbose`
+- Requirement->Design、Design->Implementation，这两种阶段切换必须获得人类的显式确认
+- 不要凭记忆推进，统一以 `../phase-review-policy.md` 为准
+- 先确认人工审查是否满足；`check-gate` 只是最低机器门槛，不替代语义审查
+- 命令入口优先使用 `codespec <cmd>`；如果当前 shell 不可调用，再使用工作区runtime（默认布局下常见为 `../.codespec/codespec <cmd>`）
+- 需要查看机器门槛时，执行 `codespec check-gate <gate-name>`；支持的 gate 名称与命令列表以 `codespec --help` 为准
+- 若只是确认当前任务的最小必读上下文，执行 `codespec readset`
 
 ---
 
-## 五、Compact Instructions 保留优先级
+## 五、提交与 PR 节奏
+
+- 一个 commit 只承载一个可独立审查的事实边界，不要把实现、测试证据、人工验收、最终收口混在一起
+- `testing.md` 的验证证据单独提交；`deployment.md` 的人工验收结论也单独提交
+- 若人工验收已通过且当前分支不是默认分支，优先使用 `codespec submit-pr <stable-version>` 做最终交接
+- `submit-pr` 之前必须保证工作树干净；不要一边保留未提交改动，一边创建最终 PR
+- 不要在 execution branch 上直接提 PR；并行模式下只允许在 `feature_branch` 上执行 `submit-pr`
+
+---
+
+## 六、Compact Instructions 保留优先级
 
 1. 架构决策，不得摘要
 2. 已修改文件和关键变更

@@ -247,6 +247,88 @@ current_git_revision() {
   printf 'null'
 }
 
+require_git_repo() {
+  local project_root="$1"
+  git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "git repository not found at $project_root"
+}
+
+ensure_clean_git_worktree() {
+  local project_root="$1"
+  git -C "$project_root" diff --quiet --ignore-submodules -- || die 'submit-pr requires a clean git working tree'
+  git -C "$project_root" diff --cached --quiet --ignore-submodules -- || die 'submit-pr requires a clean git working tree'
+}
+
+resolve_default_branch() {
+  local project_root="$1"
+  local remote_head
+  remote_head="$(git -C "$project_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [ -n "$remote_head" ]; then
+    printf '%s\n' "${remote_head#origin/}"
+    return
+  fi
+
+  if git -C "$project_root" show-ref --verify --quiet refs/heads/main; then
+    printf 'main\n'
+    return
+  fi
+
+  if git -C "$project_root" show-ref --verify --quiet refs/heads/master; then
+    printf 'master\n'
+    return
+  fi
+
+  die 'could not resolve default branch; pass --base <branch>'
+}
+
+extract_markdown_section_text() {
+  local file="$1"
+  local header="$2"
+  awk -v header="$header" '
+    $0 == header {
+      in_section = 1
+      next
+    }
+    in_section && /^## / {
+      exit
+    }
+    in_section {
+      print
+    }
+  ' "$file"
+}
+
+submit_pr_body_file() {
+  local project_root="$1"
+  local stable_version="$2"
+  local meta="$project_root/meta.yaml"
+  local deployment="$project_root/deployment.md"
+  local spec="$project_root/spec.md"
+  local tmp summary acceptance_notes execution_ref deployed_revision
+  tmp="$(mktemp)"
+  summary="$(extract_markdown_section_text "$spec" '## Summary' | sed '/^[[:space:]]*$/d' | head -n 3)"
+  acceptance_notes="$(markdown_section_scalar "$deployment" '## Acceptance Conclusion' 'notes')"
+  execution_ref="$(markdown_section_scalar "$deployment" '## Execution Evidence' 'execution_ref')"
+  deployed_revision="$(markdown_section_scalar "$deployment" '## Execution Evidence' 'deployed_revision')"
+  cat > "$tmp" <<EOF
+## Summary
+
+change_id: $(yaml_scalar "$meta" change_id)
+stable_version: $stable_version
+
+${summary:-No summary captured.}
+
+## Acceptance
+
+$acceptance_notes
+
+## Deployment Evidence
+
+- execution_ref: $execution_ref
+- deployed_revision: $deployed_revision
+EOF
+  printf '%s\n' "$tmp"
+}
+
 resolve_promoted_base_version() {
   local workspace_root="$1"
   local current_change_id="$2"
@@ -793,6 +875,83 @@ complete_change() {
   meta_update "$meta" '.status = "completed" | .stable_version = "'"$stable_version"'" | .focus_work_item = null | .active_work_items = []'
   log "completed change"
   log "archived stable version: versions/$stable_version"
+}
+
+submit_pr() {
+  require_yq
+  local stable_version="${1:?usage: codespec submit-pr <stable-version> [--base <branch>] [--draft]}"
+  shift || true
+
+  local base_branch="" draft=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --base)
+        shift || die 'submit-pr requires a value after --base'
+        [ "$#" -gt 0 ] || die 'submit-pr requires a value after --base'
+        base_branch="$1"
+        ;;
+      --draft)
+        draft=true
+        ;;
+      *)
+        die "unknown submit-pr option: $1"
+        ;;
+    esac
+    shift || true
+  done
+
+  local project_root meta phase status current_branch feature_branch execution_group recorded_stable_version
+  project_root="$(find_project_root)"
+  meta="$project_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml"
+  require_git_repo "$project_root"
+  command -v gh >/dev/null 2>&1 || die 'submit-pr requires gh'
+  gh auth status >/dev/null 2>&1 || die 'submit-pr requires authenticated gh'
+  git -C "$project_root" remote get-url origin >/dev/null 2>&1 || die 'submit-pr requires origin remote'
+
+  phase="$(yaml_scalar "$meta" phase)"
+  status="$(yaml_scalar "$meta" status)"
+  [ "$phase" = 'Deployment' ] || die 'submit-pr requires Deployment phase'
+
+  current_branch="$(current_git_branch "$project_root")"
+  [ "$current_branch" != 'detached' ] || die 'submit-pr requires a branch checkout'
+  [ "$current_branch" != 'none' ] || die 'submit-pr requires a git branch'
+
+  feature_branch="$(yaml_scalar "$meta" feature_branch)"
+  execution_group="$(yaml_scalar "$meta" execution_group)"
+  if [ "$execution_group" != 'null' ] && [ "$current_branch" != "$feature_branch" ]; then
+    die 'submit-pr must run from feature_branch, not an execution branch'
+  fi
+
+  if [ -z "$base_branch" ]; then
+    base_branch="$(resolve_default_branch "$project_root")"
+  fi
+  [ "$current_branch" != "$base_branch" ] || die 'submit-pr must not run on the default branch'
+
+  if [ "$status" = 'active' ]; then
+    ensure_clean_git_worktree "$project_root"
+    complete_change "$stable_version"
+    git -C "$project_root" add meta.yaml
+    git -C "$project_root" commit --no-verify -m "chore: complete change $stable_version" >/dev/null
+  elif [ "$status" = 'completed' ]; then
+    ensure_clean_git_worktree "$project_root"
+    recorded_stable_version="$(yaml_scalar "$meta" stable_version)"
+    [ "$recorded_stable_version" = "$stable_version" ] || die "submit-pr stable_version mismatch: expected $recorded_stable_version"
+  else
+    die 'submit-pr requires active or completed Deployment status'
+  fi
+
+  local body_file title gh_args=()
+  body_file="$(submit_pr_body_file "$project_root" "$stable_version")"
+  title="complete: $stable_version ($(yaml_scalar "$meta" change_id))"
+  gh_args=(pr create --base "$base_branch" --head "$current_branch" --title "$title" --body-file "$body_file")
+  if [ "$draft" = true ]; then
+    gh_args+=(--draft)
+  fi
+
+  git -C "$project_root" push -u origin "$current_branch"
+  gh "${gh_args[@]}"
+  rm -f "$body_file"
 }
 
 scaffold_project_docs() {
@@ -1363,6 +1522,7 @@ Usage:
   codespec start-deployment
   codespec deploy
   codespec complete-change <stable-version>
+  codespec submit-pr <stable-version> [--base <branch>] [--draft]
   codespec scaffold-project-docs <version>
   codespec generate-project-docs <version>
   codespec reset-to-requirement [--keep-contracts]
@@ -1381,6 +1541,7 @@ Installation:
 Version lifecycle:
   deploy -> execute the project deploy hook and refresh deployment evidence
   complete-change -> archive accepted stable version and mark the Deployment change completed
+  submit-pr -> complete an accepted Deployment change, push the current branch, and open a GitHub PR
   scaffold-project-docs -> scaffold project document shells from dossier artifacts
   generate-project-docs -> deprecated compatibility alias for scaffold-project-docs
   promote-version -> compatibility alias for complete-change <stable-version>
@@ -1408,6 +1569,7 @@ Lifecycle commands:
   start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment active reopen; auto-materializes deployment.md if missing)
   deploy -> run scripts/codespec-deploy and refresh deployment.md evidence
   complete-change -> archive an accepted stable version and mark Deployment completed
+  submit-pr -> complete/push/create PR for an accepted Deployment change
 
 Review rule:
   check-gate pass != semantic review pass; phase advancement still requires phase-review-policy/rfr approval
@@ -1460,6 +1622,9 @@ main() {
       ;;
     complete-change)
       complete_change "$@"
+      ;;
+    submit-pr)
+      submit_pr "$@"
       ;;
     scaffold-project-docs)
       scaffold_project_docs "$@"

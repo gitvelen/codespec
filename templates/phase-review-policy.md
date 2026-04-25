@@ -181,6 +181,7 @@
 - 只有用户显式确认人工验收通过后，才能把 `Acceptance Conclusion.status` 设为 `pass`，并填写 `approved_by` / `approved_at`。
 - 再次执行 `codespec deploy` 会用最新部署结果覆盖 `Execution Evidence` / `Verification Results`，并把 `Acceptance Conclusion` 重置为 `pending`。
 - `complete-change <stable-version>` 会同时完成两件事：把当前 dossier 置为 completed，并归档到 `versions/<stable-version>/`；当前 dossier 清空 `active_work_items`，归档快照保留 promotion 时的 `active_work_items`。
+- 若当前不在默认分支，且人工验收结论已经单独提交，推荐使用 `submit-pr <stable-version>` 作为交接入口；它会确保 dossier 已 completed，然后 push 当前分支并创建 PR。
 - 文档中没有任何模板占位。
 - rollback plan 与 monitoring 能覆盖本次变更的主要失败模式。
 - 若要 complete-change / promotion，`versions/` 目录存在且允许归档。
@@ -211,4 +212,5 @@
 - `start-deployment` -> `trace-consistency` + `verification`，并在缺少 `deployment.md` 时自动 materialize
 - `deploy` -> 调用 `scripts/codespec-deploy` 并更新 `deployment.md`
 - `complete-change <stable-version>` -> `promotion-criteria`（含 `trace-consistency`），并归档稳定版本
+- `submit-pr <stable-version>` -> 若尚未 completed，先执行 `complete-change <stable-version>`；随后 push 当前分支并创建 PR
 - `promote-version <stable-version>` -> `promotion`（兼容别名）

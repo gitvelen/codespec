@@ -38,7 +38,7 @@ runtime_ready_evidence: pending
 - `status`: 最终验收状态
   - `pending`: 已完成真实部署并达到人工验收就绪，但人工验收尚未给出最终结论
   - `fail`: 人工验收发现问题，需要返工并重新进入 Implementation/Testing/Deployment 闭环
-  - `pass`: 人工验收通过，可执行 `codespec complete-change <stable-version>` 完成收口并归档稳定版本
+  - `pass`: 人工验收通过；若当前在非默认分支，推荐执行 `codespec submit-pr <stable-version>` 完成交接，也可直接执行 `codespec complete-change <stable-version>` 完成收口并归档稳定版本
 - `notes`: 人工验收结论和风险说明
 - `approved_by`: 人工验收通过确认人
 - `approved_at`: 人工验收通过确认日期
@@ -77,4 +77,4 @@ alerts:
 ## Post-deployment Actions
 - [ ] update related docs
 - [ ] record lessons learned if needed
-- [ ] archive stable version after manual acceptance
+- [ ] submit PR or archive stable version after manual acceptance

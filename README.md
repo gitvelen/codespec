@@ -35,7 +35,7 @@ Requirement → Design → Implementation → Testing → Deployment
 - **Testing**: 在 testing.md 中记录测试执行和结果
 - **Deployment**: 在 deployment.md 中记录部署步骤和验证
 
-完成 Deployment 阶段后，执行 `codespec complete-change <version>` 将 status 设为 completed，表示整个变更已完成并归档。
+完成 Deployment 阶段后，可执行 `codespec complete-change <version>` 将 status 设为 completed，表示整个变更已完成并归档；如果当前在非默认分支且要直接进入交付评审，推荐使用 `codespec submit-pr <version>` 作为一键交接入口。
 
 ### 工作项（Work Item）
 
@@ -182,7 +182,7 @@ workspace/
 - 执行 `codespec start-deployment`
 - 执行 `codespec deploy`
 - 在 deployment.md 中记录部署证据并通知你开始手工验收
-- 若你显式确认通过，再执行 `codespec complete-change <stable-version>`
+- 若你显式确认通过，先单独提交人工验收结论；随后可执行 `codespec submit-pr <stable-version>` 一次性完成 `complete-change`、push 和建 PR
 - 完成后告诉你验收
 
 **你需要做什么**：
@@ -441,8 +441,10 @@ codespec status  # 查看自己的项目状态
 
 ```bash
 # AI 完成真实部署并且你确认手工验收通过后
-codespec complete-change v1.0
-# 当前项目目录中的 meta.yaml 变为：phase=Deployment, status=completed, active_work_items=[]
+# 若当前在业务分支，推荐直接走一键交接：
+codespec submit-pr v1.0
+# 它会在需要时先执行 complete-change，再 push 当前分支并创建 PR
+# 当前项目目录中的 meta.yaml 最终会变为：phase=Deployment, status=completed, active_work_items=[]
 # 同时归档到 ../versions/v1.0/，归档 meta 会保留 promotion 时的 active_work_items 快照
 ```
 
@@ -459,8 +461,9 @@ codespec scaffold-project-docs v1.0
 `generate-project-docs v1.0` 仍可作为兼容别名使用，但现在明确表示“生成脚手架”，
 不是“直接抽取出可发布文档”。
 
-`promote-version v1.0` 仍可作为兼容别名使用，但推荐主路径统一使用
-`complete-change <stable-version>`。
+`promote-version v1.0` 仍可作为兼容别名使用。推荐主路径是：
+- 需要一键 push + 建 PR：`submit-pr <stable-version>`
+- 只做本地收口归档：`complete-change <stable-version>`
 
 #### 步骤 2：开始新版本
 
@@ -484,7 +487,7 @@ codespec reset-to-requirement
 
 ```bash
 # 假设当前 live dossier 的 change_id 仍然是 baseline
-codespec complete-change v1.0
+codespec submit-pr v1.0
 codespec reset-to-requirement
 
 # reset 后：
@@ -622,6 +625,7 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 | `codespec start-deployment` | 测试覆盖完整且通过 | 切换到 Deployment 阶段 |
 | `codespec deploy` | 当前处于 Deployment 阶段，且项目已提供 `scripts/codespec-deploy` | 执行真实部署并回写运行态证据 |
 | `codespec complete-change <version>` | 真实部署完成、手工验收通过 | 完成项目并归档稳定版本 |
+| `codespec submit-pr <version> [--base <branch>] [--draft]` | Deployment 阶段已人工验收通过，当前在非默认分支，git 工作树干净 | 自动执行 complete-change（若尚未 completed）、push 当前分支并创建 GitHub PR |
 
 `reopen-implementation` 不会新建 change。`testing.md` 继续作为验证账本追加记录；下一次
 `codespec deploy` 会用最新部署结果覆盖 `deployment.md` 中的 `Execution Evidence` /
@@ -689,6 +693,14 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 **注意**：框架有两层约束：
 - `phase-capability`：阶段级最低能力边界，例如 Requirement 阶段不能提交 `src/**`
 - `allowed_paths` / `forbidden_paths`：工作项级文件边界；Implementation 阶段按 staged 改动检查，进入 Testing 前会再按整个 Implementation span 重查
+
+### Commit / PR 节奏
+
+- 一个 commit 只承载一个可独立审查的事实边界；不要把实现、测试证据、人工验收、最终收口揉成一个大提交。
+- Requirement / Design 达到一次可审查状态就提交；Implementation 按 work item 的可运行切片提交。
+- `testing.md` 的新增验证证据应单独提交；人工验收通过后，对 `deployment.md` 的结论也应单独提交。
+- `codespec submit-pr <stable-version>` 适合放在“人工验收结论已落盘并已提交”之后使用；它会要求当前分支不是默认分支，且工作树干净。
+- `submit-pr` 生成的是交付收口 commit；不要把它当作普通开发中的随手 commit 命令。
 - `testing.md` 是追加账本，但 gate 以“最后一条匹配记录”为权威结果；later fail 会推翻 earlier pass
 
 并行执行时，`feature_branch` / `execution_group` / `execution_branch` 以 `meta.yaml` 为运行态真相；
@@ -772,8 +784,8 @@ codespec start-deployment
 # 9. AI：执行真实部署并准备人工验收
 codespec deploy
 
-# 10. 你：确认手工验收通过后，AI 完成收口并归档稳定版本
-codespec complete-change v1.0
+# 10. 你：确认手工验收通过后，AI 在业务分支执行一键交接
+codespec submit-pr v1.0
 ```
 
 ## 依赖要求
