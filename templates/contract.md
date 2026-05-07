@@ -1,50 +1,51 @@
-# Contract Template
+# contract.md
 
-## 使用说明
+<!-- CODESPEC:CONTRACT:READING -->
+## 0. AI 阅读契约
 
-**字段定义**：
-- `contract_id`: 契约唯一标识
-- `status`: 契约状态
-  - `draft`: 草稿状态，可以修改
-  - `frozen`: 冻结状态，不能修改（只能在 parent feature 分支冻结）
-- `frozen_at`: 冻结时间戳（status=frozen 时必须填写）
-- `freeze_review_ref`: 冻结审查记录（status=frozen 时必须填写）
-- `consumers`: 引用此契约的 work-item ID 列表
-  - 对应 work-items/WI-*.yaml 中的 `contract_refs` 字段
+- 只有共享边界需要冻结时才创建契约；普通单 WI 内部实现不要创建本文件。
+- `status: frozen` 后执行分支不得修改本契约；需要修改时必须回到 parent feature 分支并重新审查。
+- 所有消费者必须在 `consumers` 中列出，并在对应 `work-items/*.yaml` 的 `contract_refs` 中反向引用。
 
-**状态转移规则**：
-1. 新建契约时，status=draft，frozen_at=null
-2. 在 parent feature 分支进行显式 review 后，可以冻结：status=frozen，frozen_at=<timestamp>，freeze_review_ref=<review-file>
-3. 冻结后的契约不能修改（pre-commit hook 会阻止）
-4. 执行分支不能直接新增 frozen 契约（contract-boundary gate 会拒绝）
+<!-- CODESPEC:CONTRACT:IDENTITY -->
+## 1. 契约身份与状态
 
-**冻结审查记录要求**：
-- `freeze_review_ref` 建议指向 `reviews/contracts/<contract-id>.freeze-review.yaml`
-- 审查文件至少包含：
-  - `contract_ref`: 对应的 `contract_id`
-  - `action: freeze`
-  - `verdict: approved`
-  - `reviewed_by`
-  - `reviewed_at`
-
-**与 work-item.yaml 的对应关系**：
-- contract.md 的 `consumers` 字段列出所有引用此契约的 WI
-- work-item.yaml 的 `contract_refs` 字段列出该 WI 依赖的所有契约
-- 两者必须保持一致（contract-boundary gate 会自动检查双向引用一致性）
-
----
-
-contract_id: [contract-id]
+contract_id: CONTRACT-001
 status: draft
-# status flow: draft -> frozen only after explicit review
 frozen_at: null
 freeze_review_ref: null
-consumers: [WI-001]
+consumers:
+  - WI-001
+requirement_refs:
+  - REQ-001
 
-## Interface Definition
-[Define the shared boundary exactly.]
+<!-- CODESPEC:CONTRACT:SHAPE -->
+## 2. 接口/数据形状
 
-## Notes
-- preconditions: [if any]
-- postconditions: [if any]
-- invariants: [if any]
+- surface: [API、事件、数据结构、文件格式或共享模块]
+- definition: [字段、参数、返回、错误码、权限或调用约定]
+
+<!-- CODESPEC:CONTRACT:BEHAVIOR -->
+## 3. 行为约束
+
+- preconditions:
+  - [调用或读写前置条件；没有则写 none]
+- postconditions:
+  - [完成后的状态保证；没有则写 none]
+- invariants:
+  - [必须始终成立的约束；没有则写 none]
+
+<!-- CODESPEC:CONTRACT:CHANGE_POLICY -->
+## 4. 兼容与变更规则
+
+- compatibility_policy:
+  - [向后兼容、迁移、回滚或废弃规则]
+- change_policy:
+  - [什么情况下允许修改、需要谁审查]
+
+<!-- CODESPEC:CONTRACT:TRACE -->
+## 5. 消费方与追溯
+
+- consumer: WI-001
+  requirement_refs: [REQ-001]
+  usage: [该 WI 如何依赖本契约]

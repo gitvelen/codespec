@@ -167,13 +167,31 @@ ${GREEN}========================================${NC}
   ${YELLOW}# 2. 编辑 spec.md 定义需求${NC}
   vim spec.md
 
-  ${YELLOW}# 3. 创建 review verdict 并进入 Design 阶段${NC}
+  ${YELLOW}# 3. 运行 gate，创建 review verdict，并进入 Design 阶段${NC}
+  $codespec_cmd check-gate requirement-complete
+  $codespec_cmd check-gate spec-quality
+  $codespec_cmd check-gate test-plan-complete
   mkdir -p reviews
   cat > reviews/design-review.yaml <<EOFR
 phase: Requirement
 verdict: approved
 reviewed_by: $(git config user.name || echo "your-name")
 reviewed_at: \$(date +%F)
+scope:
+  - spec.md
+  - testing.md
+gate_evidence:
+  - command: $codespec_cmd check-gate requirement-complete
+    result: pass
+  - command: $codespec_cmd check-gate spec-quality
+    result: pass
+  - command: $codespec_cmd check-gate test-plan-complete
+    result: pass
+findings:
+  - severity: none
+    summary: no blocking findings
+residual_risk: no residual risk identified by review
+decision_notes: approved for Design phase entry
 EOFR
   $codespec_cmd start-design
 

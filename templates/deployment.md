@@ -1,80 +1,78 @@
 # deployment.md
 
-## Deployment Plan
-target_env: staging
-deployment_date: YYYY-MM-DD
+<!-- CODESPEC:DEPLOYMENT:READING -->
+## 0. AI 阅读契约
 
-## Pre-deployment Checklist
-- [ ] all acceptance items passed
+- 本文件记录本次变更的真实交付、运行验证、回滚准备和人工验收结论。
+- `release_mode=runtime` 表示需要运行部署；`artifact` 表示交付构建产物、文档或配置；`manual` 表示由人工执行交付步骤。
+- 本文件不重复设计中的环境与安全要求，只引用并证明本次交付是否满足。
+- `manual_verification_ready: pass` 只表示可以开始人工验收，不表示人工验收通过。
+
+<!-- CODESPEC:DEPLOYMENT:TARGET -->
+## 1. 发布对象与环境
+
+release_mode: runtime
+target_env: pending
+deployment_date: YYYY-MM-DD
+design_environment_ref: design.md#6-横切设计
+release_artifact: pending
+
+<!-- CODESPEC:DEPLOYMENT:PRECONDITIONS -->
+## 2. 发布前条件
+
+- [ ] all required TC full-integration records passed
+- [ ] deployment-only/manual TC evidence plan prepared
 - [ ] required migrations verified
 - [ ] rollback plan prepared
 - [ ] smoke checks prepared
 
-## Deployment Steps
-1. [replace with real step]
-2. [replace with real step]
+<!-- CODESPEC:DEPLOYMENT:EXECUTION -->
+## 3. 执行证据
 
-## Execution Evidence
 status: pending
 execution_ref: pending
 deployment_method: pending
 deployed_at: pending
 deployed_revision: pending
+source_revision: pending
 restart_required: pending
 restart_reason: pending
 runtime_observed_revision: pending
 runtime_ready_evidence: pending
 
-## Verification Results
-- smoke_test: pending
-- runtime_ready: pending
-- manual_verification_ready: pending
+<!-- CODESPEC:DEPLOYMENT:VERIFY -->
+## 4. 运行验证
 
-## Acceptance Conclusion
+smoke_test: pending
+runtime_ready: pending
+manual_verification_ready: pending
 
-此部分记录人工验收的最终结论：
+说明：`release_mode=artifact|manual` 时，`runtime_ready` 可填写 `not-applicable`，但必须提供 `release_artifact` 与可复核执行证据。
 
-**字段定义**：
-- `status`: 最终验收状态
-  - `pending`: 已完成真实部署并达到人工验收就绪，但人工验收尚未给出最终结论
-  - `fail`: 人工验收发现问题，需要返工并重新进入 Implementation/Testing/Deployment 闭环
-  - `pass`: 人工验收通过；若当前在非默认分支，推荐执行 `codespec submit-pr <stable-version>` 完成交接，也可直接执行 `codespec complete-change <stable-version>` 完成收口并归档稳定版本
-- `notes`: 人工验收结论和风险说明
-- `approved_by`: 人工验收通过确认人
-- `approved_at`: 人工验收通过确认日期
+<!-- CODESPEC:DEPLOYMENT:ROLLBACK -->
+## 5. 回滚与监控
 
-**前置条件**：
-- testing.md 中每个 approved acceptance 都必须有至少一条 test_scope=full-integration 且 result=pass 的记录
-- 所有 residual_risk 都已被评估和记录
-- 没有 reopen_required=true 的测试记录（如果有，必须先重新开启 spec/design）
-- `codespec deploy` 已把真实部署结果回写到 `Execution Evidence` 和 `Verification Results`
-- `manual_verification_ready: pass` 只表示“可以开始人工验收”，不表示人工验收已通过
-- 重新执行 `codespec deploy` 会重置本节为 `pending`，因为新的部署会使旧的人工验收结论失效
+rollback_trigger_conditions:
+  - [replace with real condition]
+rollback_steps:
+  1. [replace with real step]
+monitoring_metrics:
+  - [replace with real metric]
+monitoring_alerts:
+  - [replace with real alert]
 
-**与 testing.md 的对应关系**：
-- deployment.md 的 `status=pass` 建立在 testing.md 已满足最终自动化/全量验证前提的基础上
-- 若人工验收失败，应使用 `codespec reopen-implementation <WI-ID>` 返回同一 change 的修复回路，而不是 reset 成新 change
-
----
+<!-- CODESPEC:DEPLOYMENT:ACCEPTANCE -->
+## 6. 人工验收与收口
 
 status: pending
 notes: pending manual acceptance
 approved_by: pending
 approved_at: pending
 
-## Rollback Plan
-trigger_conditions:
-  - [replace with real condition]
-rollback_steps:
-  1. [replace with real step]
+<!-- CODESPEC:DEPLOYMENT:POST_ACTIONS -->
+## 7. 收口动作
 
-## Monitoring
-metrics:
-  - [replace with real metric]
-alerts:
-  - [replace with real alert]
-
-## Post-deployment Actions
-- [ ] update related docs
-- [ ] record lessons learned if needed
-- [ ] submit PR or archive stable version after manual acceptance
+post_deployment_actions:
+  - [ ] update related docs
+  - [ ] record lessons learned if needed
+  - [ ] submit PR or archive stable version after manual acceptance

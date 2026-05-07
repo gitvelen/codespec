@@ -42,10 +42,21 @@ find_workspace_root() {
 
 # 查找项目根目录
 find_project_root() {
-  if git rev-parse --show-toplevel >/dev/null 2>&1; then
-    git rev-parse --show-toplevel
+  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ]; then
+    (cd "$CODESPEC_PROJECT_ROOT" && pwd)
     return
   fi
+
+  local dir
+  dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/meta.yaml" ]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+
   printf '%s\n' "$PWD"
 }
 
@@ -110,6 +121,7 @@ log "initialized dossier in: $PROJECT_ROOT"
 log ""
 log "Next steps:"
 log "1. Edit spec.md to define requirements"
-log "2. Create reviews/design-review.yaml with manual approval (see templates/phase-review-policy.md)"
-log "3. Run: $(resolve_codespec_cmd) start-design"
-log "4. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"
+log "2. Run requirement gates, then create reviews/design-review.yaml with scope/gate_evidence/findings"
+log "3. See templates/phase-review-policy.md for the required review schema"
+log "4. Run: $(resolve_codespec_cmd) start-design"
+log "5. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"

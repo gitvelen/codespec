@@ -1,206 +1,99 @@
-# Testing Records
+# testing.md
 
-## How to Use This File
+<!-- CODESPEC:TESTING:READING -->
+## 0. AI 阅读契约
 
-testing.md 是测试证据账本，记录所有测试活动。每个 acceptance 可以有多条测试记录，覆盖不同的测试类型。
+- 本文件不是测试说明书模板，而是“测试用例计划 + 测试执行证据”的权威账本。
+- `TC-*` 在需求确认后生成，用于说明每条验收如何被证明；`RUN-*` 在实际执行后追加，用于记录证据。
+- `HANDOFF-*` 在 Implementation / Testing / Deployment 阶段性收口前追加，用于主动披露语义未完成项、最高完成等级、阻塞原因和下一步；测试绿灯不能替代 handoff。
+- `spec.md` 的 `VO-*` 定义必须验证什么和证据类型；本文件的 `TC-*` 定义如何用场景、fixture、命令、步骤和 `RUN-*` 证据执行验证。
+- 复杂流程的 `TC-*` 应引用或复现 `spec.md` 中的流程叙事，覆盖 happy path、失败/降级路径和关键产物链；不能只扫描字段或禁用入口。
+- 若页面或 API 用 fallback/fixture 替代真实失败态，handoff 必须列为未完成，直到加载、空、错、stale、trace/retry、冲突和真实 API 数据路径都有证据。
+- Testing 阶段不得临时发明覆盖口径；若发现缺少必要测试用例，应回到 Requirement/Design 补齐。
+- 人工测试不是豁免测试，必须写明人工原因、步骤、预期结果和证据形状。
 
-**测试类型（test_type）**：
-- `unit`: 单元测试，测试单个函数/类的逻辑
-- `integration`: 集成测试，测试多个模块的交互
-- `e2e`: 端到端测试，测试完整的用户流程
-- `performance`: 性能测试，测试响应时间/吞吐量
-- `security`: 安全测试，测试安全漏洞
-- `manual`: 手工测试，人工验证
+<!-- CODESPEC:TESTING:LEVELS -->
+## 0.1 测试层级定义
 
-**测试范围（test_scope）**：
-- `branch-local`: 执行分支的局部测试（Implementation 阶段）
-- `full-integration`: 完整集成测试（Testing Phase，parent feature 分支）
+- `branch-local`: 在当前分支本地运行，验证 WI 级别的功能正确性。允许使用 fixture / mock。
+- `full-integration`: 必须在集成环境中运行，覆盖完整链路。最低要求：
+  - 真实外部依赖已连接（非 fixture / mock）
+  - 数据已持久化（非仅内存）
+  - 端到端流程可复现（command_or_steps 可重复执行）
+  - artifact_ref 指向可复核的持久化证据
+  - RUN 记录的 completion_level 必须 >= integrated_runtime
+- `deployment`: 在目标环境部署后执行，验证运行时行为。
+- completion_level 枚举（由浅到深）：fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
 
-**测试结果（result）**：
-- `pass`: 测试通过，acceptance 得到验证
-- `fail`: 测试失败，需要修复实现或重新开启 spec/design
+<!-- CODESPEC:TESTING:CASES -->
+## 1. 验收覆盖与测试用例
 
-**残留风险（residual_risk）**：
-- `none`: 无残留风险
-- `low`: 低风险，可接受的小问题
-- `medium`: 中等风险，需要监控
-- `high`: 高风险，需要立即处理或重新开启 spec/design
+- tc_id: TC-ACC-001-01
+  requirement_refs: [REQ-001]
+  acceptance_ref: ACC-001
+  verification_ref: VO-001
+  work_item_refs: [WI-001]
+  test_type: integration
+  verification_mode: automated
+  required_stage: testing
+  required_completion_level: integrated_runtime  # fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
+  scenario: [要验证的用户场景或系统行为]
+  given: [前置条件]
+  when: [触发动作]
+  then: [可观察结果]
+  evidence_expectation: [命令输出、日志、截图、报告或人工确认]
+  automation_exception_reason: none
+  manual_steps:
+    - none
+  status: planned
 
-**重新开启标记（reopen_required）**：
-- `true`: 需要重新开启 spec/design 进行调整
-- `false`: 不需要重新开启
+<!-- CODESPEC:TESTING:RUNS -->
+## 2. 测试执行记录
 
-**最终验收**：
-- 每个 acceptance 的权威结果取该 acceptance 最后一条匹配记录；Testing/Deployment 阶段按最后一条 `test_scope=full-integration` 记录判定
-- 最终验收要求：最后一条 `test_scope=full-integration` 记录必须是 `result=pass`
-- branch-local 测试供参考，不作为最终验收依据
-
-## Acceptance 到 Testing 的映射
-
-每个 spec.md 中的 acceptance（ACC-ID）可以在 testing.md 中有多条测试记录：
-- 同一个 ACC-ID 可以有多个 test_type（unit, integration, e2e, performance, security, manual）
-- 同一个 ACC-ID 可以有多个 test_scope（branch-local, full-integration）
-- 后写入的记录会覆盖同一 acceptance 在同一判定范围内更早的结果；later fail 会推翻 earlier pass
-
-**示例**：
-- ACC-001 可以有：unit (branch-local) + integration (branch-local) + unit (full-integration) + e2e (full-integration)
-- 只有 full-integration 的测试记录才作为最终验收依据
-
----
-
-## Branch-Local Testing (Implementation Phase)
-
-执行分支在 Implementation 阶段的测试记录。
-
-### WI-XXX-EXAMPLE (Branch: [branch-name])
-
-**说明**：以下是 branch-local 测试记录格式示例，实际使用时请：
-1. 将 WI-XXX-EXAMPLE 替换为真实的 work item ID（如 WI-001）
-2. 将 [branch-name] 替换为真实的执行分支名
-3. 将 ACC-XXX-EXAMPLE 替换为真实的 acceptance ID
-4. 填写真实的测试命令、日期、artifact 路径
-5. 删除本说明段落
-
-#### ACC-XXX-EXAMPLE: [Example acceptance criterion]
-
-**Unit Tests**:
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: unit
-  test_scope: branch-local
-  verification_type: automated
-  test_command: [TODO: actual test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to test artifact]
-  result: pass
-  notes: [TODO: test notes]
-  residual_risk: none
-  reopen_required: false
-
-**Integration Tests**:
-- acceptance_ref: ACC-XXX-EXAMPLE
+- run_id: RUN-001
+  test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  work_item_ref: WI-001
   test_type: integration
   test_scope: branch-local
   verification_type: automated
-  test_command: [TODO: actual test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to test artifact]
-  result: pass
-  notes: [TODO: test notes]
-  residual_risk: none
+  completion_level: fixture_contract  # fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
+  command_or_steps: [真实命令或人工步骤]  # 必填：记录实际执行的命令或人工步骤，不得留空或使用占位符
+  artifact_ref: [可复核证据路径或链接]
+  result: pass/fail
+  tested_at: YYYY-MM-DD
+  tested_by: [执行者]
+  residual_risk: none/low/medium/high
   reopen_required: false
 
+<!-- CODESPEC:TESTING:RISKS -->
+## 3. 残留风险与返工判断
 
----
+- residual_risk: [none/low/medium/high]
+- reopen_required: false
+- notes:
+  - [仍需关注的风险；没有则写 none]
 
-## Full Integration Testing (Testing Phase)
+<!-- CODESPEC:TESTING:HANDOFFS -->
+## 4. 主动未完成清单与语义验收
 
-在 parent feature 分支的完整集成测试，作为最终验收依据。
-
-### ACC-XXX-EXAMPLE: [Example acceptance criterion]
-
-**说明**：以下是测试记录格式示例，实际使用时请：
-1. 将 ACC-XXX-EXAMPLE 替换为真实的 acceptance ID（如 ACC-001）
-2. 填写真实的测试命令、日期、artifact 路径
-3. 删除本说明段落
-
-**Unit Tests** (re-run after merge):
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: unit
-  test_scope: full-integration
-  verification_type: automated
-  test_command: [TODO: actual test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to test artifact]
-  result: pass
-  notes: [TODO: test notes]
-  residual_risk: none
-  reopen_required: false
-
-**Integration Tests** (re-run after merge):
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: integration
-  test_scope: full-integration
-  verification_type: automated
-  test_command: [TODO: actual test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to test artifact]
-  result: pass
-  notes: [TODO: test notes]
-  residual_risk: none
-  reopen_required: false
-
-**E2E Tests**:
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: e2e
-  test_scope: full-integration
-  verification_type: automated
-  test_command: [TODO: actual test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to test artifact]
-  result: pass
-  notes: [TODO: test notes]
-  residual_risk: none
-  reopen_required: false
-
-**Manual Tests**:
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: manual
-  test_scope: full-integration
-  verification_type: manual
-  test_command: N/A
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: manual test checklist path]
-  result: pass
-  notes: [TODO: manual test notes]
-  residual_risk: none
-  reopen_required: false
-
----
-
-## Performance Testing (Optional)
-
-### ACC-XXX-EXAMPLE: [Example acceptance criterion]
-
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: performance
-  test_scope: full-integration
-  verification_type: automated
-  test_command: [TODO: actual performance test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to performance test results]
-  result: pass
-  notes: [TODO: performance metrics and requirements met]
-  residual_risk: none
-  reopen_required: false
-
----
-
-## Security Testing (Optional)
-
-### ACC-XXX-EXAMPLE: [Example acceptance criterion]
-
-- acceptance_ref: ACC-XXX-EXAMPLE
-  test_type: security
-  test_scope: full-integration
-  verification_type: automated
-  test_command: [TODO: actual security test command]
-  test_date: YYYY-MM-DD
-  artifact_ref: [TODO: path to security scan results]
-  result: pass
-  notes: [TODO: security findings and verification]
-  residual_risk: none
-  reopen_required: false
-
----
-
-## Summary
-
-**Final Acceptance Status**:
-- ACC-XXX-EXAMPLE: [TODO: status summary]
-
-**Test Coverage**:
-- Unit tests: [TODO: coverage %]
-- Integration tests: [TODO: coverage %]
-- E2E tests: [TODO: coverage description]
-
-**Residual Risks**: [TODO: list any residual risks or "None"]
+- handoff_id: HANDOFF-001
+  phase: Implementation  # Implementation / Testing / Deployment
+  work_item_refs: [WI-001]
+  highest_completion_level: fixture_contract  # fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
+  evidence_refs:
+    - testing.md#RUN-001
+  unfinished_items:
+    - source_ref: testing.md#TC-ACC-001-01
+      priority: P0
+      current_completion_level: fixture_contract
+      target_completion_level: integrated_runtime
+      blocker: [为什么还不能称为完成]
+      next_step: [下一步修复或验证动作]
+  fixture_or_fallback_paths:
+    - surface: [页面/API/流程]
+      completion_level: fixture_contract
+      real_api_verified: false
+      visible_failure_state: false
+      trace_retry_verified: false
+  wording_guard: "只能报告当前完成等级；不得把 fixture/api_connected/branch-local 说成 integrated_runtime 或 owner_verified"

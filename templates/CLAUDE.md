@@ -4,10 +4,27 @@
 
 ---
 
+## 快速通道
+
+用户在会话开始或首次任务中明确要求“本次走快速通道”时，先确认：“是否本会话跳过 Codespec 框架约束，只保留核心原则？”
+
+用户确认后：
+- 不主动读取 `meta.yaml`、`codespec readset`、阶段文档、Work Item、review、gate
+- 不执行 Codespec 阶段流程、阶段切换检查、提交/PR 节奏
+- 只保留“核心原则”、更高优先级指令和用户当前明确要求
+
+快速通道只在当前会话有效，不写入 `meta.yaml`。明显高风险任务先说明风险。
+
+---
+
 ## 一、每次启动必读
 
-- `../lessons_learned.md` - 只读取硬规则部分
+- `../lessons_learned.md` - 读取快速索引中的全部硬规则
 - `./meta.yaml`
+- 根据当前阶段执行 `codespec readset --json`，按 `layered_readset.default -> work_item/phase -> on_demand` 分层读取；不要凭记忆决定该读哪些文档
+- 读取权威文档时先读 `0. AI 阅读契约`；权威文档为空、冲突或不足以支撑当前任务时，停止并补文档或询问用户。
+- 如果项目进入了Implementation阶段，就默认是自动模式，不该停下来向我展示进展或作其他提示（除非有重大安全隐患）
+- Implementation / Testing / Deployment 的每轮开发、修复、阶段切换或汇报收口前，先执行 `codespec completion-report`，并确保 `testing.md` 追加对应 `HANDOFF-*`；回复必须主动列未完成项、最高完成等级、证据、阻塞原因和下一步。
 
 ---
 
@@ -28,9 +45,14 @@
 **执行偏离**：
 - 连续失败或复杂度超预期 → 停下重新规划
 - 发现需要先回写权威文件（spec/design/testing/deployment）→ 停止当前任务，先更新文档
+- Implementation/Testing/Deployment 阶段的 gate 发现上游 authority 缺口 → 不要手改 forbidden 文件；先用 `codespec authority-repair begin <gate> --paths <最小路径> --reason "<原因>"` 进入修复态，修完后 `codespec authority-repair close --evidence "<证据>"`
+- Implementation/Testing/Deployment 阶段缺少主动未完成清单或语义 handoff → 停止阶段推进；先补 `testing.md` 的 `HANDOFF-*`，并运行 `codespec check-gate semantic-handoff`
 - 依赖 Work Item 尚未完成，但当前任务需要其结果 → 停止，等待依赖
 - 测试失败且无法在当前 scope 内修复 → 回看 work-item.yaml，可能需要扩大 allowed_paths
 - Requirement 阶段在 appendix 中定义正式 REQ/ACC/VO → 停止，只能在主文档中定义
+- Requirement 阶段缺少 `TC-*` 测试用例计划 → 停止，先补 `testing.md`
+- Implementation 阶段发现当前 WI 没有引用 `TC-*` → 停止，先回写 `design.md` / `work-items/*.yaml`
+- P0 验收不能自动化且没有 `automation_exception_reason` → 停止，必须由 review 明确接受
 
 ---
 
@@ -95,16 +117,21 @@
 
 **这些规则生效的表现**：diff 中无关改动更少、因过度设计导致的返工更少、澄清问题发生在实现之前而不是出错之后。
 
+### 5. 主动披露未完成项
+
+Implementation / Testing / Deployment 阶段不能只汇报“测试通过”或“本轮完成”。每次阶段性回复必须包含：已完成证据、未完成清单、当前最高 completion_level、阻塞原因、下一步。`fixture_contract` 只能说 fixture/契约通过，`api_connected` 只能说 API 连接级通过，`integrated_runtime` 才能说运行时集成完成，`owner_verified` 才能说用户验收完成。存在 fallback/fixture、dirty gate、缺 report artifact 或缺 owner_verified 时，禁止使用“全部完成”“收口完成”“可进入下一阶段”等措辞。
+
 ---
 
 ## 四、阶段切换前检查
 
-- Requirement->Design、Design->Implementation，这两种阶段切换必须获得人类的显式确认
+- Requirement->Design、Design->Implementation，这两种阶段切换必须向人类显示确认
 - 不要凭记忆推进，统一以 `../phase-review-policy.md` 为准
 - 先确认人工审查是否满足；`check-gate` 只是最低机器门槛，不替代语义审查
 - 命令入口优先使用 `codespec <cmd>`；如果当前 shell 不可调用，再使用工作区runtime（默认布局下常见为 `../.codespec/codespec <cmd>`）
 - 需要查看机器门槛时，执行 `codespec check-gate <gate-name>`；支持的 gate 名称与命令列表以 `codespec --help` 为准
 - 若只是确认当前任务的最小必读上下文，执行 `codespec readset`
+- 若处于 authority repair mode，提交前确认 `authority-repairs/*.yaml`、`meta.yaml` 和修复的最小 authority 文件同批暂存；未关闭 repair 不得推进阶段
 
 ---
 

@@ -33,7 +33,7 @@ Requirement → Design → Implementation → Testing → Deployment
 - **Design**: 在 design.md 中完成架构设计，拆解工作项（WI-001, WI-002...）
 - **Implementation**: 编写代码实现工作项
 - **Testing**: 在 testing.md 中记录测试执行和结果
-- **Deployment**: 在 deployment.md 中记录部署步骤和验证
+- **Deployment**: 在 deployment.md 中记录发布对象、部署步骤、运行验证和人工验收
 
 完成 Deployment 阶段后，可执行 `codespec complete-change <version>` 将 status 设为 completed，表示整个变更已完成并归档；如果当前在非默认分支且要直接进入交付评审，推荐使用 `codespec submit-pr <version>` 作为一键交接入口。
 
@@ -41,7 +41,7 @@ Requirement → Design → Implementation → Testing → Deployment
 
 设计阶段将需求拆解为独立的工作项（WI-001, WI-002...），每个工作项：
 - 有明确的实现目标和验收标准
-- 声明依赖关系（depends_on）
+- 声明依赖关系（`dependency_refs` + `dependency_type`；当前只接受 `none` 或 `strong`）
 - 定义允许修改的文件范围（allowed_paths, forbidden_paths）
 - 关联测试（acceptance tests → verification tests）
 
@@ -177,10 +177,10 @@ workspace/
 ```
 
 **AI 会协助**：
-- 执行 `codespec start-testing`
+- 执行 `codespec start-testing`，该命令会要求 `active_work_items` 覆盖 design 中派生出的全部 WI，并按整个 Implementation span 重查 scope / contract / verification
 - 运行测试，在 testing.md 中记录结果
 - 执行 `codespec start-deployment`
-- 执行 `codespec deploy`
+- 补齐 deployment.md 中的发布计划、日期、发布前条件、回滚与监控后，执行 `codespec deploy`
 - 在 deployment.md 中记录部署证据并通知你开始手工验收
 - 若你显式确认通过，先单独提交人工验收结论；随后可执行 `codespec submit-pr <stable-version>` 一次性完成 `complete-change`、push 和建 PR
 - 完成后告诉你验收
@@ -293,6 +293,7 @@ git clone <codespec-repo-url> /tmp/codespec-framework
 - **不要**对已有 `meta.yaml` 的项目再次执行 `init-dossier.sh`，否则会报 `dossier already initialized`
 - 升级后继续使用现有 `spec.md`、`design.md`、`meta.yaml` 和 `work-items/`，不需要重建 dossier
 - `install-workspace.sh` 更新的是 `../.codespec/`、`../versions/`、`../phase-review-policy.md`、`../lessons_learned.md`
+- 如果既有 `phase-review-policy.md` 与新模板不同，`install-workspace.sh` 会先备份为 `phase-review-policy.md.bak.<timestamp>`，再刷新为新版策略
 - `install-hooks.sh` 更新的是当前 Git 项目的 hooks
 - `migrate-to-requirement-phase.sh` 只处理旧阶段模型迁移：`Proposal/Requirements -> Requirement`，并把 `reviews/requirements-review.yaml` 迁到 `reviews/design-review.yaml`
 - 但如果框架有重大升级，project 层文档仍需要人工对齐新模板，尤其是 `spec.md`、`meta.yaml`、`reviews/*.yaml`
@@ -447,6 +448,8 @@ codespec submit-pr v1.0
 # 当前项目目录中的 meta.yaml 最终会变为：phase=Deployment, status=completed, active_work_items=[]
 # 同时归档到 ../versions/v1.0/，归档 meta 会保留 promotion 时的 active_work_items 快照
 ```
+
+`versions/<version>/` 是 dossier 和交付证据快照，不等同于完整源码发布包；它会保留权威文档、工作项、合约、reviews，以及存在时的 `scripts/codespec-deploy`，用于追溯本次变更如何被验收。
 
 **AI 会询问**："项目已完成验收，是否生成项目文档？（建议生成，用于后续版本参考）"
 
@@ -612,6 +615,7 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 | 命令 | 说明 |
 |------|------|
 | `codespec status` | 查看项目当前状态（阶段、工作项、分支等） |
+| `codespec completion-report` | 输出当前阶段的最高完成等级、是否必须披露未完成项，以及阶段性回复必须包含的栏目 |
 | `codespec readset [--json]` | 查看推荐阅读的文件列表 |
 
 ### 阶段转换命令
@@ -621,10 +625,12 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 | `codespec start-design` | Requirement 完整，有审查文件 | 切换到 Design 阶段 |
 | `codespec start-implementation <WI-ID>` | Design 完整或已在 Implementation，工作项存在，有审查文件 | 进入 Implementation 阶段或切换当前 focus WI |
 | `codespec reopen-implementation <WI-ID>` | 当前处于 Testing/Deployment 且发现需要代码修复 | 回到同一 change 的 Implementation 阶段（`change_id` 不变） |
-| `codespec start-testing` | 所有工作项实现完成 | 切换到 Testing 阶段 |
-| `codespec start-deployment` | 测试覆盖完整且通过 | 切换到 Deployment 阶段 |
-| `codespec deploy` | 当前处于 Deployment 阶段，且项目已提供 `scripts/codespec-deploy` | 执行真实部署并回写运行态证据 |
-| `codespec complete-change <version>` | 真实部署完成、手工验收通过 | 完成项目并归档稳定版本 |
+| `codespec authority-repair begin <gate> --paths <csv> --reason "<reason>"` | Implementation/Testing/Deployment 阶段的 gate 发现必须先修的上游 authority 缺口 | 打开受控 authority 修复态，临时放开最小 authority 文件 |
+| `codespec authority-repair close --evidence "<summary>"` | 修复已完成，且准备重跑对应 gate 与 smoke | 记录 gate/smoke 证据并关闭修复态 |
+| `codespec start-testing` | `active_work_items` 覆盖所有 design 派生 WI，整个 Implementation span 通过 scope / contract / verification，且 Implementation `HANDOFF-*` 已主动披露未完成项 | 切换到 Testing 阶段 |
+| `codespec start-deployment` | 测试覆盖完整且通过，且 Testing `HANDOFF-*` 已记录最高完成等级和剩余缺口 | 切换到 Deployment 阶段 |
+| `codespec deploy` | 当前处于 Deployment 阶段，`deployment.md` 发布计划已补齐，且项目已提供 `scripts/codespec-deploy` | 执行真实部署并回写运行态证据 |
+| `codespec complete-change <version>` | 真实部署完成、手工验收通过，且 Deployment `HANDOFF-*` 已记录 owner_verified / 未完成项披露 | 完成项目并归档稳定版本 |
 | `codespec submit-pr <version> [--base <branch>] [--draft]` | Deployment 阶段已人工验收通过，当前在非默认分支，git 工作树干净 | 自动执行 complete-change（若尚未 completed）、push 当前分支并创建 GitHub PR |
 
 `reopen-implementation` 不会新建 change。`testing.md` 继续作为验证账本追加记录；下一次
@@ -646,7 +652,7 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 | 命令 | 说明 |
 |------|------|
 | `codespec add-work-item <WI-ID>` | 创建工作项文件（work-items/WI-XXX.yaml） |
-| `codespec set-active-work-items <WI-IDs>` | 设置活跃工作项列表（逗号分隔，如 WI-001,WI-002） |
+| `codespec set-active-work-items <WI-IDs>` | 设置活跃工作项列表（逗号分隔，如 WI-001,WI-002；进入 Testing 前必须覆盖 design 派生出的全部 WI） |
 | `codespec set-execution-context single <feature-branch>` | 把当前 dossier 设为单分支模式；当前 git branch 必须等于 `feature_branch` |
 | `codespec set-execution-context parallel <feature-branch> <execution-group>` | 把当前 dossier 设为并行模式；当前 git branch 会写入 `execution_branch` |
 
@@ -665,16 +671,24 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 |----------|---------|---------|
 | `metadata-consistency` | meta.yaml 与文档的一致性 | 所有阶段转换 |
 | `review-verdict-present` | 审查文件是否存在且通过 | Requirement/Design/Implementation 转换 |
+| `review-quality` | 审查文件是否 approved，且包含 scope、gate evidence、findings、残留风险和决策说明 | Requirement/Design/Implementation 转换 |
 | `requirement-complete` | Requirement 阶段文档是否完整、无占位、追溯链闭合 | Requirement → Design |
+| `spec-quality` | spec.md 是否自足、无模板占位、需求语义可独立读取 | Requirement → Design |
+| `test-plan-complete` | 每个 ACC 是否在进入 Design 前已有 TC-* 计划 | Requirement → Design |
 | `design-structure-complete` | design.md 结构是否完整 | Design → Implementation |
+| `design-quality` | design.md 是否覆盖架构、契约、数据、安全、环境、验证和追溯 | Design → Implementation |
 | `implementation-readiness-baseline` | 工作项是否准备就绪 | Design → Implementation |
 | `implementation-start` | 工作项文件是否完整 | Design → Implementation |
+| `implementation-ready` | design-quality + implementation-start + baseline readiness | Design → Implementation |
+| `active-work-items-complete` | Implementation 阶段的 `active_work_items` 是否覆盖所有 design 派生 WI | Implementation → Testing |
 | `phase-capability` | 当前阶段最低能力边界是否允许修改实现或冻结文件 | pre-commit hook |
 | `scope` | 修改的文件是否在工作项允许范围内 | pre-commit hook |
 | `contract-boundary` | 合约是否被正确使用 | pre-commit hook |
 | `trace-consistency` | 追踪关系是否一致 | Testing → Deployment / Promotion |
 | `testing-coverage` | 测试是否覆盖所有验收标准 | Testing → Deployment |
 | `verification` | 验证测试是否通过 | Testing → Deployment |
+| `semantic-handoff` | 是否已主动披露当前阶段最高完成等级、未完成项、阻塞原因、下一步和 fallback/fixture 边界 | Implementation / Testing / Deployment 阶段收口 |
+| `deployment-plan-ready` | deployment.md 发布计划、日期、发布前 checklist、回滚与监控是否已补齐 | `codespec deploy` |
 | `deployment-readiness` | 是否已真实部署且达到人工验收就绪 | Deployment 阶段 |
 | `promotion-criteria` | 是否已人工验收通过、trace 仍一致并可归档稳定版本 | Deployment → Completed |
 
@@ -690,9 +704,13 @@ AI: "所有工作项实现完成，测试通过，部署完成。
 4. contract-boundary     # 合约边界检查
 ```
 
+pre-commit 读取的是 Git staged snapshot，而不是工作区当前文件。也就是说，如果本次提交要切换阶段，`meta.yaml` 必须和该阶段 gate 依赖的权威文件一起 `git add`；未暂存的本地修正不会被 hook 当作通过依据。
+
 **注意**：框架有两层约束：
 - `phase-capability`：阶段级最低能力边界，例如 Requirement 阶段不能提交 `src/**`
-- `allowed_paths` / `forbidden_paths`：工作项级文件边界；Implementation 阶段按 staged 改动检查，进入 Testing 前会再按整个 Implementation span 重查
+- `allowed_paths` / `forbidden_paths`：工作项级文件边界；Implementation 阶段按 staged 改动检查当前 focus WI，进入 Testing 前会再按整个 Implementation span 重查每个实现文件是否能被某个 active WI 合法解释。`meta.yaml` 和 `testing.md` 属于 lifecycle / evidence 文件，不要求每个 WI 重复列入 `allowed_paths`。
+
+如果 Implementation / Testing / Deployment 阶段的 gate 发现上游 authority 文档必须先修，使用 `codespec authority-repair begin ...` 进入修复态。修复态只允许修改 `meta.yaml`、`authority-repairs/*.yaml` 和声明的最小 authority 路径；`close` 会重跑记录的 gate 与 smoke。未进入修复态时，`design.md`、未授权 `work-items/*.yaml`、`spec.md` 等越权修改仍会被阻断。
 
 ### Commit / PR 节奏
 
@@ -752,27 +770,60 @@ vim spec.md
 # 2. 你：在项目目录启动 Claude/Codex
 # AI 会读取 spec.md，补充详细需求
 
-# 3. 你：审查 Requirements，创建审查文件
+# 3. 你：运行 gate，审查 Requirements，创建审查文件
+codespec check-gate requirement-complete
+codespec check-gate spec-quality
+codespec check-gate test-plan-complete
 cat > reviews/design-review.yaml <<EOF
 phase: Requirement
 verdict: approved
 reviewed_by: YourName
 reviewed_at: $(date +%F)
+scope:
+  - spec.md
+  - testing.md
+gate_evidence:
+  - command: codespec check-gate requirement-complete
+    result: pass
+  - command: codespec check-gate spec-quality
+    result: pass
+  - command: codespec check-gate test-plan-complete
+    result: pass
+findings:
+  - severity: none
+    summary: no blocking findings
+residual_risk: no residual risk identified by review
+decision_notes: approved for Design phase entry
 EOF
 
-# 4. AI：切换到 Design 阶段，完成设计
+# 4. AI：切换到 Design 阶段，完成设计与工作项拆分
 codespec start-design
+codespec add-work-item WI-001
 
-# 5. 你：审查设计，创建审查文件
+# 5. 你：运行 gate，审查设计，创建审查文件
+codespec check-gate design-quality
+codespec check-gate implementation-ready
 cat > reviews/implementation-review.yaml <<EOF
 phase: Design
 verdict: approved
 reviewed_by: YourName
 reviewed_at: $(date +%F)
+scope:
+  - design.md
+  - work-items/WI-001.yaml
+gate_evidence:
+  - command: codespec check-gate design-quality
+    result: pass
+  - command: codespec check-gate implementation-ready
+    result: pass
+findings:
+  - severity: none
+    summary: no blocking findings
+residual_risk: no residual risk identified by review
+decision_notes: approved for Implementation phase entry
 EOF
 
-# 6. AI：添加工作项，开始实现
-codespec add-work-item WI-001
+# 6. AI：开始实现
 codespec start-implementation WI-001
 
 # 7. AI：编写代码，提交，切换到 Testing
@@ -832,7 +883,9 @@ A: 使用 `set-active-work-items` 命令：
 codespec set-active-work-items WI-001,WI-002,WI-003
 ```
 
-确保每个工作项的 `allowed_paths` 不重叠，避免冲突。
+确保每个工作项的 `allowed_paths` 不重叠，避免冲突。进入 Testing 前，`active_work_items` 必须覆盖 design 中派生出的全部工作项；如果只实现了其中一部分，`codespec start-testing` 会拒绝推进。
+
+`start-testing` 的 Implementation span scope 使用“文件归属”语义：一个实现文件只要匹配某个 active WI 的 `allowed_paths`，且不命中该 WI 自己的 `forbidden_paths`，就视为被该 WI 合法解释；其他 WI 的局部 `forbidden_paths` 不会否决它。`spec.md`、`design.md`、`work-items/**`、`deployment.md`、`versions/**` 仍是 Implementation span 的 phase-level 禁止文件。
 
 ### Q: 审查文件（reviews/*.yaml）必须手动创建吗？
 A: 是的。审查文件代表人类的审查决策，框架不会自动创建。这是有意的设计，确保每个阶段都经过人类审查。

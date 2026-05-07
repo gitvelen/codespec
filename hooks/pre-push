@@ -19,15 +19,67 @@ find_workspace_root() {
 
 # Find project root
 find_project_root() {
-  if git rev-parse --show-toplevel >/dev/null 2>&1; then
-    git rev-parse --show-toplevel
+  if [ -n "${CODESPEC_PROJECT_ROOT:-}" ]; then
+    (cd "$CODESPEC_PROJECT_ROOT" && pwd)
     return
   fi
+
+  local dir
+  dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/meta.yaml" ]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  local git_root metas meta_dir
+  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    if [ -f "$git_root/meta.yaml" ]; then
+      printf '%s\n' "$git_root"
+      return
+    fi
+
+    mapfile -t metas < <(
+      git -C "$git_root" ls-files -co --exclude-standard -- 'meta.yaml' '*/meta.yaml' 2>/dev/null |
+        grep -vE '(^|/)(\.codespec|versions|project-docs)/' |
+        sort -u
+    )
+    if [ "${#metas[@]}" -eq 1 ]; then
+      meta_dir="$(dirname "${metas[0]}")"
+      if [ "$meta_dir" = "." ]; then
+        printf '%s\n' "$git_root"
+      else
+        (cd "$git_root/$meta_dir" && pwd)
+      fi
+      return
+    fi
+
+    printf '%s\n' "$git_root"
+    return
+  fi
+
   printf '%s\n' "$PWD"
+}
+
+project_git_prefix() {
+  local project_root="$1"
+  if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$project_root" rev-parse --show-prefix | sed 's:/$::'
+  fi
 }
 
 WORKSPACE_ROOT="$(find_workspace_root || echo "")"
 PROJECT_ROOT="$(find_project_root)"
+GIT_ROOT="$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PROJECT_ROOT")"
+PROJECT_PREFIX="$(project_git_prefix "$PROJECT_ROOT")"
+CHANGED_FILES_FILE="$(mktemp /tmp/codespec-pre-push-files-XXXXXX)"
+
+cleanup() {
+  rm -f "$CHANGED_FILES_FILE"
+}
+trap cleanup EXIT
 
 if [ -n "$WORKSPACE_ROOT" ] && [ -x "$WORKSPACE_ROOT/.codespec/scripts/check-gate.sh" ]; then
   CHECK_SCRIPT="$WORKSPACE_ROOT/.codespec/scripts/check-gate.sh"
@@ -42,15 +94,46 @@ fi
   exit 1
 }
 
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" metadata-consistency
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" contract-boundary
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" verification
+empty_tree() {
+  git -C "$GIT_ROOT" hash-object -t tree /dev/null
+}
+
+collect_push_files() {
+  local local_ref local_sha remote_ref remote_sha zero_sha base
+  zero_sha="0000000000000000000000000000000000000000"
+
+  {
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$local_sha" ] || continue
+    [ "$local_sha" != "$zero_sha" ] || continue
+
+    if [ "$remote_sha" = "$zero_sha" ]; then
+      base="$(git -C "$GIT_ROOT" merge-base "$local_sha" refs/remotes/origin/HEAD 2>/dev/null || true)"
+      if [ -n "$base" ]; then
+        git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD "$base..$local_sha"
+      else
+        git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD "$(empty_tree)" "$local_sha"
+      fi
+    else
+      git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD "$remote_sha..$local_sha"
+    fi
+  done
+  } | grep -v '^$' | sort -u > "$CHANGED_FILES_FILE" || true
+}
+
+collect_push_files
+
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" metadata-consistency
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_PHASE_CAPABILITY_MODE=changed-files "$CHECK_SCRIPT" phase-capability
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_SCOPE_MODE=changed-files "$CHECK_SCRIPT" scope
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" contract-boundary
+CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" verification
 
 # Run trace-consistency gate for Testing/Deployment phases
 if [ -f "$PROJECT_ROOT/meta.yaml" ]; then
   phase="$(yq eval '.phase' "$PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "")"
   if [ "$phase" = "Testing" ] || [ "$phase" = "Deployment" ]; then
-    CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" "$CHECK_SCRIPT" trace-consistency
+    CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" trace-consistency
   fi
 fi
 

@@ -22,6 +22,9 @@ execution_group: __EXECUTION_GROUP__  # 并行执行组名（如 "parallel-impl"
 execution_branch: __EXECUTION_BRANCH__  # 当前 dossier 所在 git 分支名（如 "group/sanguoA"），由 `codespec set-execution-context` 写入
 active_work_items: __ACTIVE_WORK_ITEMS__  # 当前活跃的 WI 列表（YAML array，如 [WI-001, WI-002]）
 implementation_base_revision: __IMPLEMENTATION_BASE_REVISION__  # 当前 Implementation 回路的 git 基线；进入 Testing 前按此基线检查累计变更
+active_authority_repair: null  # 当前打开的 authority repair 记录 ID；正常状态必须为 null
+gate_evidence:
+  implementation_entry: null  # start-implementation 写入 fresh design-quality 证据
 # active_work_items 语义：
 # - Implementation 阶段：正在执行的 WI（单分支串行时累积，多分支并行时各分支独立）
 # - Testing 阶段：保留 Implementation 阶段的值，用于 verification gate 聚合所有需要验证的 work items

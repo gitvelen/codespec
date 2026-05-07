@@ -1,90 +1,57 @@
 wi_id: __WI_ID__
-goal: "TODO: describe one execution goal"
-scope:
-  # 本 WI 的功能范围描述（自然语言），与 allowed_paths 互补：
-  # - scope 描述"做什么功能"
-  # - allowed_paths 描述"可以修改哪些文件"
-  - "TODO: what this work item may change"
-out_of_scope:
-  # 本 WI 明确不做的功能（自然语言），与 forbidden_paths 互补：
-  # - out_of_scope 描述"不做什么功能"
-  # - forbidden_paths 描述"不能修改哪些文件"
-  - "TODO: what must not be added"
-
-# 文件修改范围约束（File Modification Constraints）
-# 执行分支修改文件时需要同时满足两个约束：
-# 1. 全局约束（allowed_paths / forbidden_paths）：定义哪些文件可以/不可以修改，由 runtime 强制检查
-# 2. 分支约束（branch_execution.owned_paths / shared_paths）：定义当前执行分支的修改范围，仅用于人工审查，不由 runtime 强制
-# 两个约束必须同时满足（AND 关系）
-
-allowed_paths:
-  # 全局约束：执行分支可以修改的文件范围
-  - src/**
-  - meta.yaml
-  - testing.md
-forbidden_paths:
-  # 全局约束：执行分支禁止修改的文件（只能在 parent feature 分支修改）
-  - versions/**
-  - spec.md
-  - design.md
-  - work-items/**
-  - contracts/**
-  - deployment.md
-  # Note: testing.md can be modified in execution branches to record branch-local tests
-
-branch_execution:
-  execution_group: null  # 并行执行组名（如 "parallel-impl"），仅用于文档化，不由 runtime 强制；非 null 表示多分支并行模式
-  execution_branch: null  # 当前执行分支名（如 "group/sanguoA"），仅用于文档化，不由 runtime 强制
-  owned_paths:
-    # 当前执行分支独占的文件范围（仅用于人工审查，不由 runtime 强制）
-    # 单分支工作流：留空 []
-    # 多分支并行（execution_group 非 null）：必须填写（gate 会检查非空）
-    # 建议是 allowed_paths 的子集
-    # 示例：- "src/auth/**"（当前分支独占 auth 模块）
-    []
-  shared_paths:
-    # 多个执行分支共享修改的文件（仅用于人工审查，需要 shared_file_owner 协调）
-    # 建议是 allowed_paths 的子集
-    # 示例：- "src/types/**"（多个分支共享 types 模块）
-    - "TODO: src/[shared-surface]"
-  shared_file_owner: parent-feature  # 共享文件的协调者（通常是 parent-feature 分支）
-  merge_order: "TODO: relative merge order"  # 合并顺序（用于解决合并冲突）
-  conflict_policy: stop and update design before expanding shared scope  # 冲突策略
-
-# 字段映射说明（Field Mapping）
-# design.md 中的 Work Item Derivation 与本文件的对应关系：
-# - design.md: covered_acceptance_refs  <->  work-item.yaml: acceptance_refs
-# - design.md: contract_needed          <->  work-item.yaml: contract_refs (非空表示需要)
-# - design.md: notes_on_boundary        <->  work-item.yaml: scope / out_of_scope / hard_constraints
-
 phase_scope: Implementation
 
-input_refs:
-  - docs/inputs/example.md#intent
+goal: "[为满足 REQ-xxx / ACC-xxx，交付什么可验证行为]"
+derived_from: __DERIVED_FROM__
+
 requirement_refs:
   - REQ-001
 acceptance_refs:
   - ACC-001
 verification_refs:
   - VO-001
-# keep acceptance_refs aligned with design.md Work Item Derivation.covered_acceptance_refs
-# keep requirement_refs / verification_refs aligned with design.md Work Item Mapping and Work Item Derivation
-derived_from: __DERIVED_FROM__
+test_case_refs:
+  - TC-ACC-001-01
+
+scope:
+  - "[本 WI 具体做什么]"
+out_of_scope:
+  - "[本 WI 明确不做什么]"
+
+required_surfaces:
+  - "[goal/scope 暗示需要触碰的文件/目录表面，例如 alembic.ini, migrations/**, src/**/db/**]"
+
+# allowed_paths must cover all required_surfaces (checked at implementation-start gate)
+allowed_paths:
+  - "[替换为本 WI 可修改的最小路径，例如 src/module/**]"
+forbidden_paths:
+  - versions/**
+  - spec.md
+  - design.md
+  - work-items/**
+  - contracts/**
+  - deployment.md
+
 dependency_refs: []
-dependency_type: none  # 依赖类型：strong（强依赖，必须等待依赖 WI 完成）| weak（弱依赖，可以并行但需要协调）| none（无依赖）
-# 注意：当前 runtime 将所有依赖都按 strong 处理（检查 pass record），weak 类型仅用于文档化协调需求
-# dependency_refs 为空时，dependency_type 必须是 none
+dependency_type: none
 contract_refs: []
 
-evidence_refs: []
-
-verification_profile: focused
 required_verification:
-  - "TODO: test or verification required before this WI is considered complete"
+  - "[写明当前 WI 完成前必须执行的 branch-local 验证]"
+
+completion_level: fixture_contract
+# 允许值（由浅到深，必须声明当前 WI 的实际完成深度）：
+# - fixture_contract: fixture / mock / 空壳接口通过，核心逻辑未实现
+# - in_memory_domain: 内存中领域逻辑可运行，未连接外部依赖
+# - api_connected: 已连接真实外部依赖，但未持久化
+# - db_persistent: 数据已持久化，但未在真实运行时集成
+# - integrated_runtime: 在真实运行时环境中集成运行通过
+# - owner_verified: 产品/需求方已验证确认
 
 stop_conditions:
-  - "TODO: when the session must stop and ask"
+  - "目标、边界、验收或测试用例不清楚"
+  - "需要修改 forbidden_paths 或超出 allowed_paths"
+  - "实现需要改变 spec.md / design.md 的产品或架构口径"
+  - "阶段性收口前无法在 testing.md 写清 HANDOFF-* 的未完成项、最高完成等级、阻塞原因和下一步"
 reopen_triggers:
-  - "TODO: when spec/design must be reopened"
-hard_constraints:
-  - "TODO: non-negotiable constraint"
+  - "验收标准、公共契约、外部交互或安全/环境约束发生变化"

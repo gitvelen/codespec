@@ -46,6 +46,7 @@ cp "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$WORKSPACE_ROOT/.codespec/scripts/ch
 cp "$FRAMEWORK_ROOT/scripts/install-hooks.sh" "$WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh"
 cp "$FRAMEWORK_ROOT/scripts/install-workspace.sh" "$WORKSPACE_ROOT/.codespec/scripts/install-workspace.sh"
 cp "$FRAMEWORK_ROOT/scripts/init-dossier.sh" "$WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh"
+cp "$FRAMEWORK_ROOT/scripts/migrate-to-requirement-phase.sh" "$WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh"
 cp "$FRAMEWORK_ROOT/scripts/smoke.sh" "$WORKSPACE_ROOT/.codespec/scripts/smoke.sh"
 
 # 复制模板文件
@@ -71,6 +72,7 @@ chmod +x "$WORKSPACE_ROOT/.codespec/codespec" \
   "$WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/install-workspace.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh" \
+  "$WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/smoke.sh"
 
 # 创建共享资源
@@ -81,20 +83,37 @@ if [ ! -f "$WORKSPACE_ROOT/lessons_learned.md" ]; then
     "$WORKSPACE_ROOT/.codespec/codespec" render-template \
     "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md" \
     "$WORKSPACE_ROOT/lessons_learned.md"
+else
+  # Append missing hard rules from template to existing lessons_learned.md
+  existing_rules="$(grep -oE '\*\*R[0-9]+\*\*' "$WORKSPACE_ROOT/lessons_learned.md" | sort -u || true)"
+  template_rules="$(grep -oE '\*\*R[0-9]+\*\*' "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md" | sort -u || true)"
+  missing_rules=""
+  for rule in $template_rules; do
+    if ! printf '%s\n' "$existing_rules" | grep -qF "$rule"; then
+      rule_line="$(grep "$rule" "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md" | head -1)"
+      missing_rules="${missing_rules}
+${rule_line}"
+    fi
+  done
+  if [ -n "$missing_rules" ]; then
+    # Insert missing rules after the last existing R-* rule in the hard rules section
+    sed -i "/^\*\*R[0-9]\+\*\*/:a;n;/^$/!ba;i\\${missing_rules#?
+}" "$WORKSPACE_ROOT/lessons_learned.md" 2>/dev/null || true
+  fi
 fi
 
-if [ ! -f "$WORKSPACE_ROOT/phase-review-policy.md" ]; then
-  "$WORKSPACE_ROOT/.codespec/codespec" render-template \
-    "$WORKSPACE_ROOT/.codespec/templates/phase-review-policy.md" \
-    "$WORKSPACE_ROOT/phase-review-policy.md"
+if [ -f "$WORKSPACE_ROOT/phase-review-policy.md" ] && ! cmp -s "$WORKSPACE_ROOT/.codespec/templates/phase-review-policy.md" "$WORKSPACE_ROOT/phase-review-policy.md"; then
+  cp "$WORKSPACE_ROOT/phase-review-policy.md" "$WORKSPACE_ROOT/phase-review-policy.md.bak.$(date +%Y%m%d%H%M%S)"
 fi
+"$WORKSPACE_ROOT/.codespec/codespec" render-template \
+  "$WORKSPACE_ROOT/.codespec/templates/phase-review-policy.md" \
+  "$WORKSPACE_ROOT/phase-review-policy.md"
 
 log "installed workspace runtime"
 log "workspace_root: $WORKSPACE_ROOT"
 log ""
 log "Next steps:"
-log "1. Create or clone a Git repository in this workspace"
-log "2. cd into the repository directory"
-log "3. Initialize a dossier from the project directory: $WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh"
-log "4. Fill spec.md with requirements, then create reviews/design-review.yaml with approval"
-log "5. Advance phases via: $(resolve_codespec_cmd) start-design"
+log "1. For a new project: cd into the repository and run $WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh"
+log "2. For an existing initialized project: run $WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh <project_root>"
+log "3. If the project still uses Proposal/Requirements, run $WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh <project_root>"
+log "4. Continue phase transitions via: $(resolve_codespec_cmd) start-design"
