@@ -641,6 +641,29 @@ EOF
   }
 }
 
+test_install_hooks_uses_target_git_hooks_dir() {
+  local project outside
+  project="$(new_project install-hooks-target)"
+  outside="$TMP_ROOT/outside-install-hooks"
+  mkdir -p "$outside"
+  rm -f "$project/.git/hooks/pre-commit" "$project/.git/hooks/pre-push"
+
+  (cd "$outside" && "$WORKSPACE/.codespec/scripts/install-hooks.sh" "$project" >/dev/null)
+
+  cmp -s "$WORKSPACE/.codespec/hooks/pre-commit" "$project/.git/hooks/pre-commit" || {
+    printf 'install-hooks did not write target pre-commit hook\n' >&2
+    return 1
+  }
+  cmp -s "$WORKSPACE/.codespec/hooks/pre-push" "$project/.git/hooks/pre-push" || {
+    printf 'install-hooks did not write target pre-push hook\n' >&2
+    return 1
+  }
+  [ ! -e "$outside/.git/hooks/pre-commit" ] || {
+    printf 'install-hooks wrote hooks relative to caller cwd\n' >&2
+    return 1
+  }
+}
+
 test_review_quality_rejects_unverifiable_gate_evidence() {
   local project output status
   project="$(new_project legacy-review-evidence)"
@@ -791,6 +814,7 @@ main() {
   run_case 'readset includes design contract refs' test_readset_includes_design_contract_refs
   run_case 'reset-to-requirement requires clean worktree by default' test_reset_requires_clean_worktree_by_default
   run_case 'install-workspace appends missing lessons rules' test_install_workspace_appends_missing_lessons_rules
+  run_case 'install-hooks uses target git hooks directory' test_install_hooks_uses_target_git_hooks_dir
   run_case 'review-quality rejects unverifiable gate evidence' test_review_quality_rejects_unverifiable_gate_evidence
   run_case 'review-quality requires P0 manual exception acceptance' test_review_quality_requires_p0_manual_exception_acceptance
   run_case 'review-gates --write records structured evidence' test_review_gates_write_records_structured_evidence

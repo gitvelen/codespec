@@ -34,6 +34,9 @@ git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "g
 hooks_path="$(git -C "$PROJECT_ROOT" config --get core.hooksPath || true)"
 if [ -z "$hooks_path" ]; then
   hooks_dir="$(git -C "$PROJECT_ROOT" rev-parse --git-path hooks)"
+  if [[ "$hooks_dir" != /* ]]; then
+    hooks_dir="$PROJECT_ROOT/$hooks_dir"
+  fi
 elif [[ "$hooks_path" = /* ]]; then
   hooks_dir="$hooks_path"
 else
