@@ -17,6 +17,50 @@ find_workspace_root() {
   return 1
 }
 
+repo_meta_paths() {
+  git -C "$GIT_ROOT" ls-files -co --exclude-standard -- 'meta.yaml' '*/meta.yaml' 2>/dev/null |
+    grep -vE '(^|/)(\.codespec|versions|project-docs)/' |
+    sort -u
+}
+
+project_root_for_meta_path() {
+  local meta_path="$1"
+  local meta_dir
+  meta_dir="$(dirname "$meta_path")"
+  if [ "$meta_dir" = "." ]; then
+    printf '%s\n' "$GIT_ROOT"
+  else
+    (cd "$GIT_ROOT/$meta_dir" && pwd)
+  fi
+}
+
+best_meta_for_file() {
+  local file="$1"
+  local best="" best_len=-1 meta_path meta_dir len
+  while IFS= read -r meta_path; do
+    [ -n "$meta_path" ] || continue
+    meta_dir="$(dirname "$meta_path")"
+    if [ "$meta_dir" = "." ]; then
+      len=0
+      if [ "$len" -gt "$best_len" ]; then
+        best="$meta_path"
+        best_len="$len"
+      fi
+      continue
+    fi
+    case "$file" in
+      "$meta_dir"|"$meta_dir"/*)
+        len="${#meta_dir}"
+        if [ "$len" -gt "$best_len" ]; then
+          best="$meta_path"
+          best_len="$len"
+        fi
+        ;;
+    esac
+  done < <(repo_meta_paths)
+  [ -n "$best" ] && printf '%s\n' "$best"
+}
+
 # Find project root
 find_project_root() {
   if [ -n "${CODESPEC_PROJECT_ROOT:-}" ]; then
@@ -34,33 +78,34 @@ find_project_root() {
     dir="$(dirname "$dir")"
   done
 
-  local git_root metas meta_dir
-  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    if [ -f "$git_root/meta.yaml" ]; then
-      printf '%s\n' "$git_root"
-      return
-    fi
-
-    mapfile -t metas < <(
-      git -C "$git_root" ls-files -co --exclude-standard -- 'meta.yaml' '*/meta.yaml' 2>/dev/null |
-        grep -vE '(^|/)(\.codespec|versions|project-docs)/' |
-        sort -u
-    )
-    if [ "${#metas[@]}" -eq 1 ]; then
-      meta_dir="$(dirname "${metas[0]}")"
-      if [ "$meta_dir" = "." ]; then
-        printf '%s\n' "$git_root"
-      else
-        (cd "$git_root/$meta_dir" && pwd)
-      fi
-      return
-    fi
-
-    printf '%s\n' "$git_root"
+  local metas=() changed=() candidates=() file meta_path
+  mapfile -t metas < <(repo_meta_paths)
+  if [ "${#metas[@]}" -eq 0 ]; then
+    return 1
+  fi
+  if [ "${#metas[@]}" -eq 1 ]; then
+    project_root_for_meta_path "${metas[0]}"
     return
   fi
 
-  printf '%s\n' "$PWD"
+  mapfile -t changed < <(git -C "$GIT_ROOT" diff --cached --name-only --diff-filter=ACMRD)
+  for file in "${changed[@]}"; do
+    meta_path="$(best_meta_for_file "$file" || true)"
+    [ -n "$meta_path" ] || continue
+    candidates+=("$meta_path")
+  done
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  mapfile -t candidates < <(printf '%s\n' "${candidates[@]}" | sort -u)
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    printf 'ERROR: multiple codespec dossiers changed in one commit; split the commit or set CODESPEC_PROJECT_ROOT\n' >&2
+    exit 1
+  fi
+
+  project_root_for_meta_path "${candidates[0]}"
 }
 
 project_git_prefix() {
@@ -71,9 +116,18 @@ project_git_prefix() {
 }
 
 WORKSPACE_ROOT="$(find_workspace_root || echo "")"
-PROJECT_ROOT="$(find_project_root)"
-GIT_ROOT="$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PROJECT_ROOT")"
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+PROJECT_ROOT="$(find_project_root || true)"
+[ -n "$PROJECT_ROOT" ] || {
+  printf 'WARNING: no codespec dossier touched, skipping codespec checks\n' >&2
+  exit 0
+}
 PROJECT_PREFIX="$(project_git_prefix "$PROJECT_ROOT")"
+if [ -n "$PROJECT_PREFIX" ]; then
+  META_GIT_PATH="$PROJECT_PREFIX/meta.yaml"
+else
+  META_GIT_PATH="meta.yaml"
+fi
 STAGED_REPO_ROOT=""
 STAGED_PROJECT_ROOT=""
 
@@ -97,6 +151,37 @@ fi
   exit 1
 }
 
+gate_map_file() {
+  local candidate
+  if [ -n "$WORKSPACE_ROOT" ]; then
+    candidate="$WORKSPACE_ROOT/.codespec/templates/gate-map.yaml"
+    [ -f "$candidate" ] && {
+      printf '%s\n' "$candidate"
+      return
+    }
+  fi
+  candidate="$(cd "$(dirname "$CHECK_SCRIPT")/.." && pwd)/templates/gate-map.yaml"
+  [ -f "$candidate" ] || {
+    printf 'ERROR: missing gate map: templates/gate-map.yaml\n' >&2
+    exit 1
+  }
+  printf '%s\n' "$candidate"
+}
+
+transition_for_target_phase() {
+  local target_phase="$1"
+  TARGET_PHASE="$target_phase" yq eval -r '.transitions | to_entries[] | select(.value.target_phase == strenv(TARGET_PHASE)) | .key' "$(gate_map_file)" | head -1
+}
+
+transition_gate_rows() {
+  local transition="$1"
+  TRANSITION="$transition" yq eval -r '
+    .transitions[strenv(TRANSITION)].gates[]
+    | [.gate, ((.env // {}) | to_entries | map(.key + "=" + .value) | join(" "))]
+    | @tsv
+  ' "$(gate_map_file)"
+}
+
 STAGED_REPO_ROOT="$(mktemp -d /tmp/codespec-staged-XXXXXX)"
 if [ -n "$PROJECT_PREFIX" ]; then
   STAGED_PROJECT_ROOT="$STAGED_REPO_ROOT/$PROJECT_PREFIX"
@@ -112,7 +197,7 @@ print_recovery_hint() {
   local gate="$1"
   local staged_phase head_phase changed_files
   staged_phase="$(yq eval '.phase' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || true)"
-  head_phase="$(git show HEAD:meta.yaml 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
+  head_phase="$(git show "HEAD:$META_GIT_PATH" 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
   changed_files="$(git -C "$GIT_ROOT" diff --cached --name-only --diff-filter=ACMRD | paste -sd ', ' -)"
 
   printf '\nCodespec recovery hint:\n' >&2
@@ -125,7 +210,7 @@ print_recovery_hint() {
       printf '%s\n' "- if this gate found an upstream authority gap after Implementation/Testing/Deployment has begun, use \`codespec authority-repair begin ${gate} --paths <minimal-authority-paths> --reason \"<why>\"\`, then close it after the gate and smoke pass." >&2
       ;;
     phase-capability|scope)
-      printf '%s\n' '- if the file is a legitimate upstream authority repair, enter authority repair mode first; otherwise switch phase or keep the change inside the current WI allowed_paths.' >&2
+      printf '%s\n' '- if the file is a legitimate upstream authority repair, enter authority repair mode first; otherwise switch phase or keep the change inside the implementation boundary defined in design.md §4.' >&2
       ;;
     *)
       printf '%s\n' '- fix the reported gate failure, then re-stage the affected files and retry commit.' >&2
@@ -137,7 +222,7 @@ run_gate() {
   local output status gate
   gate="$1"
   set +e
-  output="$(CODESPEC_PROJECT_ROOT="$STAGED_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_DIRTY_WORKTREE_IGNORE='*' "$CHECK_SCRIPT" "$@" 2>&1)"
+  output="$(CODESPEC_PROJECT_ROOT="$STAGED_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=staged-snapshot "$CHECK_SCRIPT" "$@" 2>&1)"
   status=$?
   set -e
   if [ -n "$output" ]; then
@@ -149,28 +234,39 @@ run_gate() {
   fi
 }
 
+run_gate_with_env() {
+  local gate="$1"
+  local envs="${2:-}"
+  (
+    local pair
+    for pair in $envs; do
+      [ -n "$pair" ] || continue
+      export "$pair"
+    done
+    run_gate "$gate"
+  )
+}
+
 run_transition_gate_as_head_phase() {
   local gate="$1"
-  local transition_root head_phase head_focus first_active status yq_expr
+  local envs="${2:-}"
+  local transition_root head_phase status yq_expr env_args=()
+  local pair
   transition_root="$(mktemp -d /tmp/codespec-transition-XXXXXX)"
   cp -R "$STAGED_PROJECT_ROOT/." "$transition_root/"
-  head_phase="$(git show HEAD:meta.yaml 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
+  head_phase="$(git show "HEAD:$META_GIT_PATH" 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
   if [ -z "$head_phase" ] || [ "$head_phase" = "null" ]; then
     head_phase="$(yq eval '.phase' "$transition_root/meta.yaml" 2>/dev/null || true)"
   fi
 
   yq_expr=".phase = \"$head_phase\""
-  head_focus="$(git show HEAD:meta.yaml 2>/dev/null | yq eval '.focus_work_item' - 2>/dev/null || true)"
-  if [ "$head_phase" = "Implementation" ]; then
-    if [ -z "$head_focus" ] || [ "$head_focus" = "null" ]; then
-      first_active="$(yq eval '.active_work_items[0]' "$transition_root/meta.yaml" 2>/dev/null || true)"
-      head_focus="$first_active"
-    fi
-    yq_expr="$yq_expr | .focus_work_item = \"$head_focus\""
-  fi
   yq eval "$yq_expr" -i "$transition_root/meta.yaml"
+  for pair in $envs; do
+    [ -n "$pair" ] || continue
+    env_args+=("$pair")
+  done
   set +e
-  CODESPEC_PROJECT_ROOT="$transition_root" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_DIRTY_WORKTREE_IGNORE='*' "$CHECK_SCRIPT" "$gate"
+  env CODESPEC_PROJECT_ROOT="$transition_root" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=staged-snapshot "${env_args[@]}" "$CHECK_SCRIPT" "$gate"
   status=$?
   set -e
   rm -rf "$transition_root"
@@ -187,188 +283,60 @@ if [ ! -f "$STAGED_PROJECT_ROOT/meta.yaml" ]; then
   exit 0
 fi
 
-# Check restricted files (files that should only be modified in parent feature branch)
-current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
-if [ -n "$current_branch" ] && command -v yq >/dev/null 2>&1; then
-  feature_branch=$(yq eval '.feature_branch' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "")
-  execution_group=$(yq eval '.execution_group' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "null")
-  execution_branch=$(yq eval '.execution_branch' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "null")
-
-  if [ "$execution_group" != "null" ] && [ "$execution_branch" != "null" ] && [ "$current_branch" != "$execution_branch" ]; then
-    printf 'ERROR: meta.yaml execution_branch (%s) does not match current git branch (%s).\n' "$execution_branch" "$current_branch" >&2
-    printf 'Run `codespec set-execution-context parallel %s <execution-group>` on this branch to refresh runtime context.\n' "$feature_branch" >&2
-    exit 1
-  fi
-
-  if [ "$execution_group" = "null" ] && [ -n "$feature_branch" ] && [ "$feature_branch" != "null" ] && [ "$current_branch" != "$feature_branch" ]; then
-    printf 'ERROR: current git branch (%s) does not match feature_branch (%s) in single-branch mode.\n' "$current_branch" "$feature_branch" >&2
-    printf 'Run `codespec set-execution-context parallel %s <execution-group>` if this branch is an execution branch.\n' "$feature_branch" >&2
-    exit 1
-  fi
-
-  if [ "$execution_group" != "null" ] && [ -n "$feature_branch" ] && [ "$feature_branch" != "null" ] && [ "$current_branch" != "$feature_branch" ]; then
-    # Current branch is an execution branch, not parent feature branch
-    restricted_files=(
-      "spec.md"
-      "design.md"
-      "work-items/"
-      "contracts/"
-      "deployment.md"
-    )
-
-    for pattern in "${restricted_files[@]}"; do
-      if git diff --cached --name-only | grep -q "^${pattern}"; then
-        printf 'ERROR: Cannot modify %s in execution branch.\n' "$pattern" >&2
-        printf 'This file should only be modified in parent feature branch: %s\n' "$feature_branch" >&2
-        printf '\n' >&2
-        printf 'If you need to update this file:\n' >&2
-        printf '1. Switch to parent feature branch (in main/ directory)\n' >&2
-        printf '2. Make changes there\n' >&2
-        printf '3. Push to remote\n' >&2
-        printf '4. Pull into execution branches\n' >&2
-        exit 1
-      fi
-    done
-  fi
-fi
-
-# Check work item dependencies
-if command -v yq >/dev/null 2>&1; then
-  focus_wi=$(yq eval '.focus_work_item' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "null")
-
-  if [ "$focus_wi" != "null" ] && [ -n "$focus_wi" ]; then
-    wi_file="$STAGED_PROJECT_ROOT/work-items/$focus_wi.yaml"
-
-    if [ -f "$wi_file" ]; then
-      # Read dependency_refs
-      mapfile -t dep_refs < <(yq eval '.dependency_refs[]' "$wi_file" 2>/dev/null || true)
-
-      if [ "${#dep_refs[@]}" -gt 0 ]; then
-        for dep_wi in "${dep_refs[@]}"; do
-          [ -n "$dep_wi" ] || continue
-          [ "$dep_wi" != "null" ] || continue
-
-          # Check if dependency WI exists
-          dep_wi_file="$STAGED_PROJECT_ROOT/work-items/$dep_wi.yaml"
-          if [ ! -f "$dep_wi_file" ]; then
-            printf 'WARNING: %s depends on %s, but %s does not exist\n' "$focus_wi" "$dep_wi" "$dep_wi" >&2
-            continue
-          fi
-
-          # Check if dependency WI has been implemented (has test records)
-          if [ -f "$STAGED_PROJECT_ROOT/testing.md" ]; then
-            # Get acceptance_refs from dependency WI
-            mapfile -t dep_accs < <(yq eval '.acceptance_refs[]' "$dep_wi_file" 2>/dev/null || true)
-
-            if [ "${#dep_accs[@]}" -gt 0 ]; then
-              missing_pass_records=()
-              for acc in "${dep_accs[@]}"; do
-                [ -n "$acc" ] || continue
-                [ "$acc" != "null" ] || continue
-
-                # Check if testing.md has a pass record for this acceptance using proper awk parsing
-                if ! awk -v acc="$acc" '
-                  BEGIN { in_record = 0; found = 0 }
-                  $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*" acc "[[:space:]]*$" {
-                    in_record = 1
-                    result = ""
-                    next
-                  }
-                  in_record && $0 ~ "^[[:space:]]*-[[:space:]]*acceptance_ref:[[:space:]]*ACC-[0-9]{3}[[:space:]]*$" {
-                    if (result == "pass") {
-                      found = 1
-                      exit
-                    }
-                    in_record = 0
-                    result = ""
-                    next
-                  }
-                  in_record && $0 ~ "^[[:space:]]*result:[[:space:]]*" {
-                    line = $0
-                    sub("^[[:space:]]*result:[[:space:]]*", "", line)
-                    sub(/[[:space:]]*$/, "", line)
-                    result = line
-                  }
-                  END {
-                    if (in_record && result == "pass") {
-                      found = 1
-                    }
-                    exit (found ? 0 : 1)
-                  }
-                ' "$STAGED_PROJECT_ROOT/testing.md" 2>/dev/null; then
-                  missing_pass_records+=("$acc")
-                fi
-              done
-
-              if [ "${#missing_pass_records[@]}" -gt 0 ]; then
-                printf 'WARNING: %s depends on %s, but the following acceptances have no PASS test records: %s\n' "$focus_wi" "$dep_wi" "${missing_pass_records[*]}" >&2
-                printf 'Consider implementing %s first, or verify the dependency is correct\n' "$dep_wi" >&2
-              fi
-            fi
-          fi
-        done
-      fi
-    fi
-  fi
-fi
-
 run_transition_gates_if_phase_changes() {
   command -v yq >/dev/null 2>&1 || return 0
-  git diff --cached --name-only -- meta.yaml | grep -Fxq 'meta.yaml' || return 0
+  git diff --cached --name-only -- "$META_GIT_PATH" | grep -Fxq "$META_GIT_PATH" || return 0
 
-  local staged_phase head_phase staged_focus
+  local staged_phase head_phase transition rows=()
+  local row gate envs
   staged_phase="$(yq eval '.phase' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || true)"
-  head_phase="$(git show HEAD:meta.yaml 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
-  staged_focus="$(yq eval '.focus_work_item' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || true)"
+  head_phase="$(git show "HEAD:$META_GIT_PATH" 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
 
   [ -n "$head_phase" ] || return 0
   [ -n "$staged_phase" ] || return 0
   [ "$staged_phase" != "$head_phase" ] || return 0
 
-  case "$staged_phase" in
-    Design)
-      CODESPEC_TARGET_PHASE=Design run_gate spec-quality
-      CODESPEC_TARGET_PHASE=Design run_gate test-plan-complete
-      CODESPEC_TARGET_PHASE=Design run_gate review-quality
-      ;;
-    Implementation)
-      CODESPEC_TARGET_PHASE=Implementation run_gate design-quality
-      CODESPEC_TARGET_PHASE=Implementation CODESPEC_FOCUS_WI="$staged_focus" run_gate implementation-ready
-      CODESPEC_TARGET_PHASE=Implementation run_gate review-quality
-      ;;
-    Testing)
-      run_gate metadata-consistency
-      run_transition_gate_as_head_phase active-work-items-complete
-      CODESPEC_SCOPE_MODE=implementation-span run_gate scope
-      CODESPEC_CONTRACT_BOUNDARY_MODE=implementation-span run_gate contract-boundary
-      run_testing_transition_verification
-      run_transition_gate_as_head_phase semantic-handoff
-      ;;
-    Deployment)
-      run_transition_gate_as_head_phase trace-consistency
-      run_transition_gate_as_head_phase verification
-      run_transition_gate_as_head_phase semantic-handoff
-      ;;
-  esac
+  transition="$(transition_for_target_phase "$staged_phase")"
+  [ -n "$transition" ] || return 0
+  mapfile -t rows < <(transition_gate_rows "$transition")
+
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r gate envs <<< "$row"
+    [ -n "$gate" ] || continue
+    case "$staged_phase:$gate" in
+      Testing:verification|Testing:semantic-handoff|Deployment:trace-consistency|Deployment:verification|Deployment:semantic-handoff)
+        run_transition_gate_as_head_phase "$gate" "$envs"
+        ;;
+      *)
+        run_gate_with_env "$gate" "$envs"
+        ;;
+    esac
+  done
 }
 
 run_completion_gates_if_status_completes() {
   command -v yq >/dev/null 2>&1 || return 0
-  git diff --cached --name-only -- meta.yaml | grep -Fxq 'meta.yaml' || return 0
+  git diff --cached --name-only -- "$META_GIT_PATH" | grep -Fxq "$META_GIT_PATH" || return 0
 
   local staged_phase head_phase staged_status head_status
   staged_phase="$(yq eval '.phase' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || true)"
-  head_phase="$(git show HEAD:meta.yaml 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
+  head_phase="$(git show "HEAD:$META_GIT_PATH" 2>/dev/null | yq eval '.phase' - 2>/dev/null || true)"
   staged_status="$(yq eval '.status' "$STAGED_PROJECT_ROOT/meta.yaml" 2>/dev/null || true)"
-  head_status="$(git show HEAD:meta.yaml 2>/dev/null | yq eval '.status' - 2>/dev/null || true)"
+  head_status="$(git show "HEAD:$META_GIT_PATH" 2>/dev/null | yq eval '.status' - 2>/dev/null || true)"
 
   [ "$head_phase" = "Deployment" ] || return 0
   [ "$staged_phase" = "Deployment" ] || return 0
   [ "$head_status" != "completed" ] || return 0
   [ "$staged_status" = "completed" ] || return 0
 
-  run_gate promotion-criteria
-  run_gate semantic-handoff
+  local rows=()
+  local row gate envs
+  mapfile -t rows < <(transition_gate_rows complete-change)
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r gate envs <<< "$row"
+    [ -n "$gate" ] || continue
+    run_gate_with_env "$gate" "$envs"
+  done
 }
 
 run_transition_gates_if_phase_changes

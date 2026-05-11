@@ -3,9 +3,8 @@
 <!-- CODESPEC:CONTRACT:READING -->
 ## 0. AI 阅读契约
 
-- 只有共享边界需要冻结时才创建契约；普通单 WI 内部实现不要创建本文件。
-- `status: frozen` 后执行分支不得修改本契约；需要修改时必须回到 parent feature 分支并重新审查。
-- 所有消费者必须在 `consumers` 中列出，并在对应 `work-items/*.yaml` 的 `contract_refs` 中反向引用。
+- 只有共享边界需要冻结时才创建契约；普通内部实现不要创建本文件。
+- `status: frozen` 后不得修改本契约；需要修改时必须通过 authority repair 流程并重新审查。
 
 <!-- CODESPEC:CONTRACT:IDENTITY -->
 ## 1. 契约身份与状态
@@ -14,8 +13,6 @@ contract_id: CONTRACT-001
 status: draft
 frozen_at: null
 freeze_review_ref: null
-consumers:
-  - WI-001
 requirement_refs:
   - REQ-001
 
@@ -46,6 +43,5 @@ requirement_refs:
 <!-- CODESPEC:CONTRACT:TRACE -->
 ## 5. 消费方与追溯
 
-- consumer: WI-001
-  requirement_refs: [REQ-001]
-  usage: [该 WI 如何依赖本契约]
+- requirement_refs: [REQ-001]
+  usage: [如何依赖本契约]

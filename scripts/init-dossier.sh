@@ -71,8 +71,7 @@ if [ -f "$PROJECT_ROOT/meta.yaml" ]; then
 fi
 
 # 创建 dossier 目录结构
-mkdir -p "$PROJECT_ROOT/work-items" \
-  "$PROJECT_ROOT/contracts" \
+mkdir -p "$PROJECT_ROOT/contracts" \
   "$PROJECT_ROOT/design-appendices" \
   "$PROJECT_ROOT/spec-appendices" \
   "$PROJECT_ROOT/reviews" \
@@ -84,6 +83,7 @@ cp "$WORKSPACE_ROOT/.codespec/templates/design.md" "$PROJECT_ROOT/design.md"
 cp "$WORKSPACE_ROOT/.codespec/templates/testing.md" "$PROJECT_ROOT/testing.md"
 cp "$WORKSPACE_ROOT/.codespec/templates/CLAUDE.md" "$PROJECT_ROOT/CLAUDE.md"
 cp "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md" "$PROJECT_ROOT/AGENTS.md"
+[ -f "$WORKSPACE_ROOT/.codespec/templates/AI_INSTRUCTIONS.md" ] && cp "$WORKSPACE_ROOT/.codespec/templates/AI_INSTRUCTIONS.md" "$PROJECT_ROOT/AI_INSTRUCTIONS.md"
 if [ ! -f "$PROJECT_ROOT/scripts/codespec-deploy" ]; then
   cp "$WORKSPACE_ROOT/.codespec/templates/codespec-deploy" "$PROJECT_ROOT/scripts/codespec-deploy"
   chmod +x "$PROJECT_ROOT/scripts/codespec-deploy"
@@ -97,13 +97,8 @@ CURRENT_BRANCH="$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null |
 RENDER_DATE="$TODAY" \
 RENDER_CHANGE_ID="baseline" \
 RENDER_BASE_VERSION="null" \
-RENDER_FEATURE_BRANCH="$CURRENT_BRANCH" \
-RENDER_EXECUTION_GROUP="null" \
-RENDER_EXECUTION_BRANCH="null" \
 RENDER_PHASE="Requirement" \
 RENDER_STATUS="active" \
-RENDER_FOCUS_WORK_ITEM="null" \
-RENDER_ACTIVE_WORK_ITEMS="[]" \
 RENDER_IMPLEMENTATION_BASE_REVISION="null" \
 RENDER_UPDATED_BY="codespec-init" \
 "$WORKSPACE_ROOT/.codespec/codespec" render-template \
@@ -121,7 +116,7 @@ log "initialized dossier in: $PROJECT_ROOT"
 log ""
 log "Next steps:"
 log "1. Edit spec.md to define requirements"
-log "2. Run requirement gates, then create reviews/design-review.yaml with scope/gate_evidence/findings"
+log "2. Run requirement gates, then record reviews/design-review.yaml with scope/gate_evidence/findings"
 log "3. See templates/phase-review-policy.md for the required review schema"
 log "4. Run: $(resolve_codespec_cmd) start-design"
 log "5. Use the same runtime entry for future phase/focus transitions; do not edit meta.yaml directly"

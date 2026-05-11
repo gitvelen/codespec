@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GATE="${1:-}"
 
+# shellcheck source=scripts/lib/testing-ledger.sh
+. "$FRAMEWORK_ROOT/scripts/lib/testing-ledger.sh"
+
 log() {
   printf '%s\n' "$*"
 }
@@ -30,12 +33,39 @@ yaml_list() {
   yq eval ".${key}[]" "$file" 2>/dev/null || true
 }
 
+gate_map_file() {
+  local file="$FRAMEWORK_ROOT/templates/gate-map.yaml"
+  [ -f "$file" ] || die "missing gate map: templates/gate-map.yaml"
+  printf '%s\n' "$file"
+}
+
+transition_for_target_phase() {
+  local target_phase="$1"
+  local file
+  file="$(gate_map_file)"
+  TARGET_PHASE="$target_phase" yq eval -r '.transitions | to_entries[] | select(.value.target_phase == strenv(TARGET_PHASE)) | .key' "$file" | head -1
+}
+
+required_review_gates_for_target_phase() {
+  local target_phase="$1"
+  local transition file
+  transition="$(transition_for_target_phase "$target_phase")"
+  [ -n "$transition" ] || return 0
+  file="$(gate_map_file)"
+  TRANSITION="$transition" yq eval -r '.transitions[strenv(TRANSITION)].gates[] | select(.gate != "review-quality") | .gate' "$file"
+}
+
 contract_status() {
   local file="$1"
   grep '^status:' "$file" | awk '{print $2}' || true
 }
 
 find_workspace_root() {
+  if [ -n "${CODESPEC_WORKSPACE_ROOT:-}" ] && [ -f "${CODESPEC_WORKSPACE_ROOT}/.codespec/codespec" ]; then
+    printf '%s\n' "$CODESPEC_WORKSPACE_ROOT"
+    return
+  fi
+
   local dir="$PWD"
   while [ "$dir" != "/" ]; do
     if [ -f "$dir/.codespec/codespec" ]; then
@@ -83,6 +113,28 @@ find_project_root() {
         (cd "$git_root/$meta_dir" && pwd)
       fi
       return
+    fi
+
+    if [ "${#metas[@]}" -gt 1 ]; then
+      local pwd_meta=""
+      local meta_path meta_abs
+      for meta_path in "${metas[@]}"; do
+        meta_dir="$(dirname "$meta_path")"
+        if [ "$meta_dir" = "." ]; then
+          meta_abs="$git_root"
+        else
+          meta_abs="$(cd "$git_root/$meta_dir" && pwd)"
+        fi
+        if [ "$PWD" = "$meta_abs" ] || [[ "$PWD" == "$meta_abs/"* ]]; then
+          pwd_meta="$meta_abs"
+          break
+        fi
+      done
+      if [ -n "$pwd_meta" ]; then
+        printf '%s\n' "$pwd_meta"
+        return
+      fi
+      die "multiple meta.yaml found in git repo; cd into a specific project directory or set CODESPEC_PROJECT_ROOT"
     fi
 
     printf '%s\n' "$git_root"
@@ -180,9 +232,6 @@ authority_repair_path_is_valid() {
     design.md|testing.md|deployment.md|contracts/*.md)
       return 0
       ;;
-    work-items/WI-[0-9][0-9][0-9].yaml)
-      return 0
-      ;;
     *)
       return 1
       ;;
@@ -212,7 +261,7 @@ validate_authority_repair_record() {
 
   gate="$(yaml_scalar "$repair_file" gate)"
   case "$gate" in
-    design-quality|design-readiness|implementation-ready|implementation-start|active-work-items-complete|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria) ;;
+    design-quality|design-readiness|implementation-ready|implementation-start|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria) ;;
     *) die "authority repair $repair_id has unsupported gate: $gate" ;;
   esac
 
@@ -229,7 +278,10 @@ validate_authority_repair_record() {
     gate_result="$(yaml_scalar "$repair_file" gate_result)"
     smoke_result="$(yaml_scalar "$repair_file" smoke_result)"
     [ "$gate_result" = 'pass' ] || die "closed authority repair $repair_id requires gate_result: pass"
-    [ "$smoke_result" = 'pass' ] || die "closed authority repair $repair_id requires smoke_result: pass"
+    case "$smoke_result" in
+      pass|not-run) ;;
+      *) die "closed authority repair $repair_id requires smoke_result: pass or not-run" ;;
+    esac
   fi
 }
 
@@ -400,18 +452,14 @@ require_context() {
 
   [ -f "$META_FILE" ] || die "missing $META_FILE"
   [ -f "$SPEC_FILE" ] || die "missing $SPEC_FILE"
-  [ -f "$DESIGN_FILE" ] || die "missing $DESIGN_FILE"
-}
 
-require_focus_wi() {
-  if [ -n "${CODESPEC_FOCUS_WI:-}" ] && [ "${CODESPEC_FOCUS_WI}" != 'null' ]; then
-    FOCUS_WI="$CODESPEC_FOCUS_WI"
-  else
-    FOCUS_WI="$(yaml_scalar "$META_FILE" focus_work_item)"
-  fi
-  [ "$FOCUS_WI" != "null" ] || die "focus_work_item is null"
-  WI_FILE="$PROJECT_ROOT/work-items/$FOCUS_WI.yaml"
-  [ -f "$WI_FILE" ] || die "missing work item: $WI_FILE"
+  local phase
+  phase="$(yaml_scalar "$META_FILE" phase)"
+  case "$phase" in
+    Design|Implementation|Testing|Deployment)
+      [ -f "$DESIGN_FILE" ] || die "missing $DESIGN_FILE"
+      ;;
+  esac
 }
 
 current_git_branch() {
@@ -423,10 +471,20 @@ current_git_branch() {
 }
 
 validate_git_revision() {
-  local revision="$1"
+  local project_root revision git_root
+  if [ "$#" -eq 2 ]; then
+    project_root="$1"
+    revision="$2"
+  else
+    project_root="$GIT_ROOT"
+    revision="$1"
+  fi
+  revision="${revision//$'\r'/}"
   [ -n "$revision" ] || return 1
   [ "$revision" != 'null' ] || return 1
-  git -C "$GIT_ROOT" rev-parse --verify "${revision}^{commit}" >/dev/null 2>&1
+  git -C "$project_root" cat-file -e "${revision}^{commit}" >/dev/null 2>&1 && return 0
+  git_root="$(git -C "$project_root" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  git -C "$git_root" cat-file -e "${revision}^{commit}" >/dev/null 2>&1
 }
 
 collect_staged_files() {
@@ -459,23 +517,6 @@ collect_implementation_span_files() {
     git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD
     git -C "$GIT_ROOT" ls-files --others --exclude-standard
   } | filter_project_paths
-}
-
-collect_active_work_items() {
-  local items
-  items=$(yaml_list "$META_FILE" active_work_items | grep -vE '^(|null)$' || true)
-
-  # Check for duplicates
-  if [ -n "$items" ]; then
-    local unique_count total_count
-    unique_count=$(echo "$items" | sort -u | wc -l)
-    total_count=$(echo "$items" | wc -l)
-    if [ "$unique_count" -ne "$total_count" ]; then
-      die "Duplicate work items found in active_work_items"
-    fi
-
-    printf '%s\n' "$items"
-  fi
 }
 
 # Collect dirty (uncommitted) files in the worktree.
@@ -546,6 +587,13 @@ check_ai_reading_contract_matrix() {
 check_dirty_worktree() {
   local strict="${1:-false}"
   local dirty_files
+
+  case "${CODESPEC_CHECK_CONTEXT:-live}" in
+    staged-snapshot|push-snapshot)
+      return 0
+      ;;
+  esac
+
   dirty_files="$(collect_dirty_files "$strict")"
   if [ -n "$dirty_files" ] && [ -n "${CODESPEC_DIRTY_WORKTREE_IGNORE:-}" ]; then
     local ignored=()
@@ -572,32 +620,19 @@ check_dirty_worktree() {
     die "dirty worktree: uncommitted files detected: $(printf '%s' "$dirty_files" | tr '\n' ', ')"
   fi
 
-  # In Implementation phase, check against active WI allowed_paths
+  # In Implementation phase, check against design.md §4 scope allowed paths
   local phase
   phase="$(yaml_scalar "$META_FILE" phase)"
   if [ "$phase" = 'Implementation' ] || [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
-    local active=()
-    mapfile -t active < <(collect_active_work_items)
-    if [ "${#active[@]}" -gt 0 ]; then
-      local dirty_in_scope=()
-      local file wi wi_file
-      local wi_allowed=()
-      for file in $dirty_files; do
-        for wi in "${active[@]}"; do
-          wi_file="$PROJECT_ROOT/work-items/$wi.yaml"
-          [ -f "$wi_file" ] || continue
-          mapfile -t wi_allowed < <(yaml_list "$wi_file" allowed_paths)
-          for pattern in "${wi_allowed[@]}"; do
-            if match_path "$file" "$pattern"; then
-              dirty_in_scope+=("$file")
-              break 2
-            fi
-          done
-        done
-      done
-      if [ "${#dirty_in_scope[@]}" -gt 0 ]; then
-        die "dirty worktree: uncommitted files within active WI scope: $(printf '%s' "${dirty_in_scope[*]}" | tr ' ' ', ')"
+    local dirty_in_scope=()
+    local file
+    for file in $dirty_files; do
+      if design_scope_allowed "$file"; then
+        dirty_in_scope+=("$file")
       fi
+    done
+    if [ "${#dirty_in_scope[@]}" -gt 0 ]; then
+      die "dirty worktree: uncommitted files within design scope: $(printf '%s' "${dirty_in_scope[*]}" | tr ' ' ', ')"
     fi
   fi
 
@@ -628,7 +663,7 @@ is_placeholder_token() {
   normalized_value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr -d "'\"")"
 
   case "$normalized_value" in
-    null|pending|todo|tbd|placeholder|none|yyyy-mm-dd|待填写|待补充|待确认)
+    null|pending|todo|tbd|placeholder|pass/fail|yyyy-mm-dd|待填写|待补充|待确认)
       return 0
       ;;
   esac
@@ -879,17 +914,85 @@ requirements_source_refs() {
   ' "$SPEC_FILE" | grep -v '^$' | sort -u
 }
 
+decision_source_refs() {
+  awk '
+    function print_inline_refs(value) {
+      gsub(/^[[:space:]]*\[/, "", value)
+      gsub(/\][[:space:]]*$/, "", value)
+      gsub(/[[:space:]]/, "", value)
+      count = split(value, parts, ",")
+      for (i = 1; i <= count; i++) {
+        if (parts[i] != "") print parts[i]
+      }
+    }
+    BEGIN { in_sources = 0; in_decisions = 0; capture = 0 }
+    /^## Inputs$/ || /^## 2\. 决策与来源$/ {
+      in_sources = 1
+      next
+    }
+    in_sources && /^### 已确认决策/ {
+      in_decisions = 1
+      capture = 0
+      next
+    }
+    in_sources && /^## / {
+      exit
+    }
+    in_decisions && /^### / {
+      exit
+    }
+    !in_decisions {
+      next
+    }
+    /^[[:space:]]*source_refs:[[:space:]]*\[/ {
+      line = $0
+      sub(/^[[:space:]]*source_refs:[[:space:]]*/, "", line)
+      print_inline_refs(line)
+      capture = 0
+      next
+    }
+    /^[[:space:]]*source_refs:[[:space:]]*$/ {
+      capture = 1
+      next
+    }
+    capture && /^[[:space:]]*-[[:space:]]+/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+      next
+    }
+    capture && /^[[:space:]]*[A-Za-z_]+:[[:space:]]*/ {
+      capture = 0
+      next
+    }
+  ' "$SPEC_FILE" | grep -v '^$' | sort -u
+}
+
+require_declared_source_ref_closure() {
+  local declared_refs=()
+  local used_refs=()
+  local ref
+  mapfile -t declared_refs < <(input_intake_refs)
+  mapfile -t used_refs < <(
+    {
+      requirements_source_refs
+      decision_source_refs
+    } | sort -u
+  )
+
+  for ref in "${used_refs[@]}"; do
+    contains_exact_line "$ref" "${declared_refs[@]}" || die "source_ref is not declared in spec.md §2 source_refs: $ref"
+  done
+}
+
 gate_metadata_consistency() {
-  local phase status focus_wi execution_group execution_branch implementation_base_revision active=() wi blocked_reason active_repair repair_file repair_phase
+  local phase status implementation_base_revision blocked_reason active_repair repair_file repair_phase
   phase="$(yaml_scalar "$META_FILE" phase)"
   status="$(yaml_scalar "$META_FILE" status)"
-  focus_wi="$(yaml_scalar "$META_FILE" focus_work_item)"
-  execution_group="$(yaml_scalar "$META_FILE" execution_group)"
-  execution_branch="$(yaml_scalar "$META_FILE" execution_branch)"
   implementation_base_revision="$(yaml_scalar "$META_FILE" implementation_base_revision)"
   blocked_reason="$(yaml_scalar "$META_FILE" blocked_reason)"
   active_repair="$(active_authority_repair_id)"
-  mapfile -t active < <(collect_active_work_items)
 
   case "$phase" in
     Requirement|Design|Implementation|Testing|Deployment) ;;
@@ -923,64 +1026,13 @@ gate_metadata_consistency() {
     validate_git_revision "$implementation_base_revision" || die "implementation_base_revision must be a valid commit (got: $implementation_base_revision)"
   fi
 
-  for wi in "${active[@]}"; do
-    [ -f "$PROJECT_ROOT/work-items/$wi.yaml" ] || die "active_work_items references missing work item: ${wi}"
-  done
-
-  if [ "$focus_wi" != 'null' ]; then
-    [ -f "$PROJECT_ROOT/work-items/$focus_wi.yaml" ] || die "missing work item: $PROJECT_ROOT/work-items/$focus_wi.yaml"
-    contains_exact_line "$focus_wi" "${active[@]}" || die "focus_work_item ${focus_wi} must be listed in active_work_items"
-  fi
-
   case "$phase" in
-    Implementation)
-      [ "$focus_wi" != 'null' ] || die 'Implementation phase requires focus_work_item'
-      [ "${#active[@]}" -gt 0 ] || die 'Implementation phase requires active_work_items to be non-empty'
-      [ "$implementation_base_revision" != 'null' ] || die 'Implementation phase requires implementation_base_revision'
-      ;;
-    Testing)
-      [ "$focus_wi" = 'null' ] || die 'Testing phase requires focus_work_item = null'
-      # Testing 阶段保留 active_work_items 用于 verification gate
-      [ "${#active[@]}" -gt 0 ] || die 'Testing phase requires active_work_items to be non-empty (should be preserved from Implementation)'
-      [ "$implementation_base_revision" != 'null' ] || die 'Testing phase requires implementation_base_revision'
-      ;;
-    Deployment)
-      [ "$focus_wi" = 'null' ] || die 'Deployment phase requires focus_work_item = null'
-      [ "$implementation_base_revision" != 'null' ] || die 'Deployment phase requires implementation_base_revision'
-      if [ "$status" = 'completed' ]; then
-        [ "${#active[@]}" -eq 0 ] || die 'completed status requires active_work_items = []'
-      else
-        # Deployment 阶段也保留 active_work_items
-        [ "${#active[@]}" -gt 0 ] || die 'Deployment phase requires active_work_items to be non-empty (should be preserved from Implementation)'
-      fi
+    Implementation|Testing|Deployment)
+      [ "$implementation_base_revision" != 'null' ] || die "${phase} phase requires implementation_base_revision"
       ;;
   esac
 
   log '✓ metadata-consistency gate passed'
-}
-
-gate_active_work_items_complete() {
-  local phase
-  phase="$(yaml_scalar "$META_FILE" phase)"
-  [ "$phase" = 'Implementation' ] || {
-    log "✓ active-work-items-complete gate passed (phase ${phase})"
-    return
-  }
-
-  local active=()
-  local rows=()
-  local row wi
-  mapfile -t active < <(collect_active_work_items)
-  mapfile -t rows < <(design_work_item_acceptance_rows)
-  [ "${#rows[@]}" -gt 0 ] || die 'design.md has no concrete WI derivation rows yet'
-
-  for row in "${rows[@]}"; do
-    [ -n "$row" ] || continue
-    wi="${row%%:*}"
-    contains_exact_line "$wi" "${active[@]}" || die "active_work_items missing design work item: ${wi}"
-  done
-
-  log '✓ active-work-items-complete gate passed'
 }
 
 collect_formal_requirement_ids() {
@@ -1112,28 +1164,70 @@ collect_spec_ids() {
   esac
 }
 
-work_item_refs_acceptance() {
-  local file
-  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
-    [ -f "$file" ] || continue
-    yaml_list "$file" acceptance_refs
-  done | grep -E '^ACC-[0-9]{3}$' | sort -u || true
+design_refs_acceptance() {
+  awk '
+    /<!-- CODESPEC:DESIGN:SLICES -->/{f=1;next} /<!-- CODESPEC:DESIGN:SLICES_END -->/{f=0}
+    f && /^[[:space:]]*-?[[:space:]]*acceptance_refs:[[:space:]]*\[/{
+      line=$0
+      sub(/^[[:space:]]*-?[[:space:]]*acceptance_refs:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      gsub(/[\[\]]/, "", line)
+      n=split(line, parts, /[,[:space:]]+/)
+      for(i=1;i<=n;i++) if(parts[i] ~ /^ACC-[0-9]{3}$/) print parts[i]
+      next
+    }
+    f && /^[[:space:]]*-?[[:space:]]*acceptance_refs:[[:space:]]*$/{
+      capture=1; next
+    }
+    capture && /^[[:space:]]*-[[:space:]]*ACC-[0-9]{3}/{
+      line=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line; next
+    }
+    capture && /^[[:space:]]*[^[:space:]-]/{capture=0}
+  ' "$DESIGN_FILE" | sort -u || true
 }
 
-work_item_refs_requirements() {
-  local file
-  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
-    [ -f "$file" ] || continue
-    yaml_list "$file" requirement_refs
-  done | grep -E '^REQ-[0-9]{3}$' | sort -u || true
+design_refs_requirements() {
+  awk '
+    /<!-- CODESPEC:DESIGN:SLICES -->/{f=1;next} /<!-- CODESPEC:DESIGN:SLICES_END -->/{f=0}
+    f && /^[[:space:]]*-?[[:space:]]*requirement_refs:[[:space:]]*\[/{
+      line=$0
+      sub(/^[[:space:]]*-?[[:space:]]*requirement_refs:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      gsub(/[\[\]]/, "", line)
+      n=split(line, parts, /[,[:space:]]+/)
+      for(i=1;i<=n;i++) if(parts[i] ~ /^REQ-[0-9]{3}$/) print parts[i]
+      next
+    }
+    f && /^[[:space:]]*-?[[:space:]]*requirement_refs:[[:space:]]*$/{
+      capture=1; next
+    }
+    capture && /^[[:space:]]*-[[:space:]]*REQ-[0-9]{3}/{
+      line=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line; next
+    }
+    capture && /^[[:space:]]*[^[:space:]-]/{capture=0}
+  ' "$DESIGN_FILE" | sort -u || true
 }
 
-work_item_refs_verification() {
-  local file
-  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
-    [ -f "$file" ] || continue
-    yaml_list "$file" verification_refs
-  done | grep -E '^VO-[0-9]{3}$' | sort -u || true
+design_refs_verification() {
+  awk '
+    /<!-- CODESPEC:DESIGN:SLICES -->/{f=1;next} /<!-- CODESPEC:DESIGN:SLICES_END -->/{f=0}
+    f && /^[[:space:]]*-?[[:space:]]*verification_refs:[[:space:]]*\[/{
+      line=$0
+      sub(/^[[:space:]]*-?[[:space:]]*verification_refs:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      gsub(/[\[\]]/, "", line)
+      n=split(line, parts, /[,[:space:]]+/)
+      for(i=1;i<=n;i++) if(parts[i] ~ /^VO-[0-9]{3}$/) print parts[i]
+      next
+    }
+    f && /^[[:space:]]*-?[[:space:]]*verification_refs:[[:space:]]*$/{
+      capture=1; next
+    }
+    capture && /^[[:space:]]*-[[:space:]]*VO-[0-9]{3}/{
+      line=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line; next
+    }
+    capture && /^[[:space:]]*[^[:space:]-]/{capture=0}
+  ' "$DESIGN_FILE" | sort -u || true
 }
 
 acceptance_expected_outcome() {
@@ -1205,19 +1299,6 @@ collect_approved_acceptance_ids() {
   ' "$SPEC_FILE" | sort -u || true
 }
 
-work_item_approved_acceptance_refs() {
-  local wi_file="$1"
-  local approved=()
-  local acc
-
-  [ -f "$wi_file" ] || return 0
-  mapfile -t approved < <(collect_approved_acceptance_ids)
-
-  while IFS= read -r acc; do
-    [ -n "$acc" ] || continue
-    contains_exact_line "$acc" "${approved[@]}" && printf '%s\n' "$acc"
-  done < <(yaml_list "$wi_file" acceptance_refs)
-}
 
 testing_target_acceptance_ids() {
   local approved=()
@@ -1229,9 +1310,13 @@ testing_target_acceptance_ids() {
   collect_spec_ids 'ACC'
 }
 
+testing_ledger_text() {
+  codespec_testing_ledger_text "$TESTING_FILE"
+}
+
 collect_test_case_ids() {
   [ -f "$TESTING_FILE" ] || return 0
-  grep -E '^[[:space:]]*-[[:space:]]*tc_id:[[:space:]]*TC-[A-Za-z0-9_-]+[[:space:]]*$' "$TESTING_FILE" \
+  testing_ledger_text | grep -E '^[[:space:]]*-[[:space:]]*tc_id:[[:space:]]*TC-[A-Za-z0-9_-]+[[:space:]]*$' \
     | sed -E 's/^[[:space:]]*-[[:space:]]*tc_id:[[:space:]]*//' \
     | sed -E 's/[[:space:]]*$//' \
     | sort -u || true
@@ -1240,7 +1325,7 @@ collect_test_case_ids() {
 test_case_block() {
   local tc="$1"
   [ -f "$TESTING_FILE" ] || return 0
-  awk -v tc="$tc" '
+  testing_ledger_text | awk -v tc="$tc" '
     function flush_case() {
       if (current_tc == tc && current_block != "") {
         selected = current_block
@@ -1269,7 +1354,7 @@ test_case_block() {
         printf "%s\n", selected
       }
     }
-  ' "$TESTING_FILE"
+  '
 }
 
 test_case_scalar() {
@@ -1303,12 +1388,26 @@ testing_target_test_case_ids() {
   done < <(testing_target_acceptance_ids) | sort -u
 }
 
-work_item_refs_test_cases() {
-  local file
-  for file in "$PROJECT_ROOT"/work-items/*.yaml; do
-    [ -f "$file" ] || continue
-    yaml_list "$file" test_case_refs
-  done | grep -E '^TC-[A-Za-z0-9_-]+$' | sort -u || true
+design_refs_test_cases() {
+  awk '
+    /<!-- CODESPEC:DESIGN:SLICES -->/{f=1;next} /<!-- CODESPEC:DESIGN:SLICES_END -->/{f=0}
+    f && /^[[:space:]]*-?[[:space:]]*test_case_refs:[[:space:]]*\[/{
+      line=$0
+      sub(/^[[:space:]]*-?[[:space:]]*test_case_refs:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      gsub(/[\[\]]/, "", line)
+      n=split(line, parts, /[,[:space:]]+/)
+      for(i=1;i<=n;i++) if(parts[i] ~ /^TC-[A-Za-z0-9_-]+$/) print parts[i]
+      next
+    }
+    f && /^[[:space:]]*-?[[:space:]]*test_case_refs:[[:space:]]*$/{
+      capture=1; next
+    }
+    capture && /^[[:space:]]*-[[:space:]]*TC-[A-Za-z0-9_-]+/{
+      line=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line; next
+    }
+    capture && /^[[:space:]]*[^[:space:]-]/{capture=0}
+  ' "$DESIGN_FILE" | sort -u || true
 }
 
 testing_record_latest_scalar_for_tc() {
@@ -1318,7 +1417,7 @@ testing_record_latest_scalar_for_tc() {
   local acc
   acc="$(test_case_scalar "$tc" acceptance_ref)"
   [ -n "$acc" ] || return 0
-  awk -v tc="$tc" -v acc="$acc" -v key="$key" -v scope="$scope" '
+  testing_ledger_text | awk -v tc="$tc" -v acc="$acc" -v key="$key" -v scope="$scope" '
     function reset_record() {
       in_record = 0
       record_tc = ""
@@ -1431,7 +1530,7 @@ testing_record_latest_scalar_for_tc() {
       if (should_abort) exit exit_code
       if (found) print selected
     }
-  ' "$TESTING_FILE"
+  '
 }
 
 has_test_case_pass() {
@@ -1479,7 +1578,7 @@ completion_level_less_than() {
 semantic_handoff_block_for_phase() {
   local handoff_phase="$1"
   [ -f "$TESTING_FILE" ] || return 0
-  awk -v handoff_phase="$handoff_phase" '
+  testing_ledger_text | awk -v handoff_phase="$handoff_phase" '
     function flush_record() {
       if (current_phase == handoff_phase && block != "") {
         selected = block
@@ -1513,7 +1612,7 @@ semantic_handoff_block_for_phase() {
       flush_record()
       if (selected != "") printf "%s\n", selected
     }
-  ' "$TESTING_FILE"
+  '
 }
 
 semantic_handoff_scalar() {
@@ -1553,25 +1652,17 @@ semantic_handoff_requires_unfinished() {
 
   case "$phase" in
     Implementation)
-      local active=() wi wi_file wi_level tc current_level target_level residual_risk
-      mapfile -t active < <(collect_active_work_items)
-      [ "${#active[@]}" -gt 0 ] || return 0
-      for wi in "${active[@]}"; do
-        wi_file="$PROJECT_ROOT/work-items/$wi.yaml"
-        [ -f "$wi_file" ] || continue
-        wi_level="$(yaml_scalar "$wi_file" completion_level)"
-        completion_level_less_than "$wi_level" integrated_runtime && return 0
-        while IFS= read -r tc; do
-          [ -n "$tc" ] || continue
-          target_level="$(test_case_scalar "$tc" required_completion_level)"
-          [ -n "$target_level" ] && [ "$target_level" != 'null' ] || target_level='integrated_runtime'
-          current_level="$(testing_record_latest_scalar_for_tc "$tc" completion_level branch-local)"
-          [ -n "$current_level" ] && [ "$current_level" != 'null' ] || current_level='fixture_contract'
-          completion_level_less_than "$current_level" "$target_level" && return 0
-          residual_risk="$(testing_record_latest_scalar_for_tc "$tc" residual_risk branch-local)"
-          [ -z "$residual_risk" ] || [ "$residual_risk" = 'none' ] || return 0
-        done < <(yaml_list "$wi_file" test_case_refs)
-      done
+      local tc target_level current_level residual_risk
+      while IFS= read -r tc; do
+        [ -n "$tc" ] || continue
+        target_level="$(test_case_scalar "$tc" required_completion_level)"
+        [ -n "$target_level" ] && [ "$target_level" != 'null' ] || target_level='integrated_runtime'
+        current_level="$(testing_record_latest_scalar_for_tc "$tc" completion_level branch-local)"
+        [ -n "$current_level" ] && [ "$current_level" != 'null' ] || current_level='fixture_contract'
+        completion_level_less_than "$current_level" "$target_level" && return 0
+        residual_risk="$(testing_record_latest_scalar_for_tc "$tc" residual_risk branch-local)"
+        [ -z "$residual_risk" ] || [ "$residual_risk" = 'none' ] || return 0
+      done < <(design_refs_test_cases)
       return 1
       ;;
     Testing)
@@ -1622,7 +1713,7 @@ testing_record_latest_scalar() {
   local acc="$1"
   local key="$2"
   local scope="${3:-}"
-  awk -v acc="$acc" -v key="$key" -v scope="$scope" '
+  testing_ledger_text | awk -v acc="$acc" -v key="$key" -v scope="$scope" '
     function reset_record() {
       in_record = 0
       record_scope = ""
@@ -1720,7 +1811,7 @@ testing_record_latest_scalar() {
         print selected
       }
     }
-  ' "$TESTING_FILE"
+  '
 }
 
 spec_acceptance_priority() {
@@ -1767,71 +1858,6 @@ has_full_integration_pass() {
   [ "$result" = 'pass' ]
 }
 
-check_circular_dependencies() {
-  local start_wi="$1"
-  local visited=()
-  local path=()
-
-  check_circular_recursive() {
-    local current="$1"
-    local dep
-
-    # Check if current WI is in the path (circular dependency detected)
-    for wi in "${path[@]}"; do
-      if [ "$wi" = "$current" ]; then
-        die "circular dependency detected: ${path[*]} -> $current"
-      fi
-    done
-
-    # Add current to path
-    path+=("$current")
-
-    # Check if already visited (optimization)
-    for wi in "${visited[@]}"; do
-      if [ "$wi" = "$current" ]; then
-        path=("${path[@]:0:${#path[@]}-1}")  # Remove current from path
-        return
-      fi
-    done
-
-    # Mark as visited
-    visited+=("$current")
-
-    # Check dependencies recursively
-    local wi_file="$PROJECT_ROOT/work-items/$current.yaml"
-    if [ -f "$wi_file" ]; then
-      while IFS= read -r dep; do
-        [ -n "$dep" ] || continue
-        [ "$dep" != 'null' ] || continue
-        check_circular_recursive "$dep"
-      done < <(yaml_list "$wi_file" dependency_refs)
-    fi
-
-    # Remove current from path
-    path=("${path[@]:0:${#path[@]}-1}")
-  }
-
-  check_circular_recursive "$start_wi"
-}
-
-check_dependency_pass_records() {
-  local wi_file="${1:-${WI_FILE:-}}"
-  local dep acc
-
-  [ -n "$wi_file" ] || die 'missing work item context for dependency check'
-  [ -f "$wi_file" ] || die "missing work item: $wi_file"
-
-  while IFS= read -r dep; do
-    [ -n "$dep" ] || continue
-    [ "$dep" != 'null' ] || continue
-    [ -f "$PROJECT_ROOT/work-items/$dep.yaml" ] || die "missing dependency work item: $dep"
-
-    while IFS= read -r acc; do
-      [ -n "$acc" ] || continue
-      has_testing_record "$acc" || die "dependency ${dep} is not complete: ${acc} has no pass record"
-    done < <(work_item_approved_acceptance_refs "$PROJECT_ROOT/work-items/$dep.yaml")
-  done < <(yaml_list "$wi_file" dependency_refs)
-}
 
 formal_id_definition_matches() {
   local dir="$1"
@@ -1881,7 +1907,7 @@ review_file_matches() {
 }
 
 gate_review_verdict_present() {
-  # NOTE: This gate only supports Requirement/Design/Implementation transitions.
+  # NOTE: This gate only supports Requirement/Design/Implementation phase-exit reviews.
   # If future phases require review verdict checks, add corresponding cases below.
   # Extensibility limitation: target_phase mapping must be manually maintained.
   local reviews_dir="$PROJECT_ROOT/reviews"
@@ -1896,6 +1922,10 @@ gate_review_verdict_present() {
     Implementation)
       expected_file='implementation-review.yaml'
       expected_phase='Design'
+      ;;
+    Testing)
+      expected_file='testing-review.yaml'
+      expected_phase='Implementation'
       ;;
     *)
       die 'review-verdict-present gate failed'
@@ -1924,6 +1954,9 @@ review_file_for_target_phase() {
     Implementation)
       printf '%s\n' "$PROJECT_ROOT/reviews/implementation-review.yaml"
       ;;
+    Testing)
+      printf '%s\n' "$PROJECT_ROOT/reviews/testing-review.yaml"
+      ;;
     *)
       return 1
       ;;
@@ -1944,6 +1977,23 @@ require_review_list_entries() {
   return 0
 }
 
+require_review_scope_entries() {
+  local review_file="$1"
+  local entries=()
+  local entry
+  mapfile -t entries < <(yaml_list "$review_file" scope | grep -vE '^(|null)$' || true)
+  [ "${#entries[@]}" -gt 0 ] || die 'review scope must list at least one reviewed artifact'
+  for entry in "${entries[@]}"; do
+    is_placeholder_token "$entry" && die "scope contains placeholder value in ${review_file#$PROJECT_ROOT/}"
+    case "$entry" in
+      /*|../*|*/../*|..|.)
+        die "review scope must use project-relative artifact paths: $entry"
+        ;;
+    esac
+    [ -e "$PROJECT_ROOT/$entry" ] || die "review scope references missing artifact: $entry"
+  done
+}
+
 require_review_scalar() {
   local review_file="$1"
   local key="$2"
@@ -1953,27 +2003,134 @@ require_review_scalar() {
   return 0
 }
 
+review_gate_command_satisfies() {
+  local command="$1"
+  local required="$2"
+  case "$required" in
+    contract-boundary)
+      [[ "$command" == *"contract-boundary"* || "$command" == *" boundary"* ]]
+      ;;
+    *)
+      [[ "$command" == *"$required"* ]]
+      ;;
+  esac
+}
+
+review_gate_entry_satisfies() {
+  local gate="$1"
+  local command="$2"
+  local required="$3"
+  [ "$gate" = "$required" ] && return 0
+  review_gate_command_satisfies "$command" "$required"
+}
+
+require_review_required_gate_evidence() {
+  local review_file="$1"
+  local target_phase="${CODESPEC_TARGET_PHASE:-}"
+  local gates=()
+  local commands=()
+  local required=()
+  local req idx command gate found
+
+  mapfile -t gates < <(yq eval '.gate_evidence[].gate // ""' "$review_file" 2>/dev/null | grep -v '^null$' || true)
+  mapfile -t commands < <(yq eval '.gate_evidence[].command' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
+  mapfile -t required < <(required_review_gates_for_target_phase "$target_phase")
+
+  for req in "${required[@]}"; do
+    found=0
+    for idx in "${!commands[@]}"; do
+      command="${commands[$idx]}"
+      gate="${gates[$idx]:-}"
+      if review_gate_entry_satisfies "$gate" "$command" "$req"; then
+        found=1
+        break
+      fi
+    done
+    [ "$found" -eq 1 ] || die "review gate_evidence missing required command: $req"
+  done
+}
+
 require_review_gate_evidence() {
   local review_file="$1"
+  local gates=()
   local commands=()
   local results=()
-  local idx command result
+  local checked_ats=()
+  local checked_revisions=()
+  local output_summaries=()
+  local idx gate command result checked_at checked_revision output_summary
 
+  mapfile -t gates < <(yq eval '.gate_evidence[].gate // ""' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
   mapfile -t commands < <(yq eval '.gate_evidence[].command' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
   mapfile -t results < <(yq eval '.gate_evidence[].result' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
+  mapfile -t checked_ats < <(yq eval '.gate_evidence[].checked_at // ""' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
+  mapfile -t checked_revisions < <(yq eval '.gate_evidence[].checked_revision // ""' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
+  mapfile -t output_summaries < <(yq eval '.gate_evidence[].output_summary // ""' "$review_file" 2>/dev/null | grep -vE '^(|null)$' || true)
   [ "${#commands[@]}" -gt 0 ] || die 'review gate_evidence must list at least one gate command'
   [ "${#commands[@]}" -eq "${#results[@]}" ] || die 'review gate_evidence entries must include command and result'
+  [ "${#commands[@]}" -eq "${#checked_revisions[@]}" ] || die 'review gate_evidence entries must include checked_revision'
+  [ "${#commands[@]}" -eq "${#checked_ats[@]}" ] || die 'review gate_evidence entries must include checked_at'
+  [ "${#commands[@]}" -eq "${#output_summaries[@]}" ] || die 'review gate_evidence entries must include output_summary'
+  [ "${#commands[@]}" -eq "${#gates[@]}" ] || die 'review gate_evidence entries must include gate'
 
   for idx in "${!commands[@]}"; do
+    gate="${gates[$idx]}"
     command="${commands[$idx]}"
     result="${results[$idx]}"
+    checked_at="${checked_ats[$idx]}"
+    checked_revision="${checked_revisions[$idx]}"
+    checked_revision="${checked_revision//$'\r'/}"
+    output_summary="${output_summaries[$idx]}"
     is_placeholder_token "$command" && die "review gate_evidence command contains placeholder value in ${review_file#$PROJECT_ROOT/}"
+    is_placeholder_token "$checked_revision" && die "review gate_evidence checked_revision contains placeholder value in ${review_file#$PROJECT_ROOT/}"
+    is_placeholder_token "$checked_at" && die "review gate_evidence checked_at contains placeholder value in ${review_file#$PROJECT_ROOT/}"
+    is_placeholder_token "$output_summary" && die "review gate_evidence output_summary contains placeholder value in ${review_file#$PROJECT_ROOT/}"
+    is_placeholder_token "$gate" && die "review gate_evidence gate contains placeholder value in ${review_file#$PROJECT_ROOT/}"
+    [[ "$checked_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "review gate_evidence checked_at must be UTC ISO-8601 seconds in ${review_file#$PROJECT_ROOT/}"
+    if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      validate_git_revision "$PROJECT_ROOT" "$checked_revision" || die "review gate_evidence checked_revision is not a valid commit: $checked_revision"
+    fi
     case "$result" in
       pass) ;;
       *) die "review gate_evidence result must be pass in ${review_file#$PROJECT_ROOT/}" ;;
     esac
   done
+  require_review_required_gate_evidence "$review_file"
   return 0
+}
+
+review_exception_scalar_for_tc() {
+  local review_file="$1"
+  local tc="$2"
+  local key="$3"
+  TC="$tc" KEY="$key" yq eval -r '.accepted_automation_exceptions[]? | select(.tc_id == strenv(TC)) | .[strenv(KEY)] // ""' "$review_file" 2>/dev/null | head -1
+}
+
+require_review_accepted_automation_exceptions() {
+  local review_file="$1"
+  local accs=()
+  local tcs=()
+  local acc tc mode reason accepted_by accepted_at
+
+  [ -f "$TESTING_FILE" ] || return 0
+  mapfile -t accs < <(collect_spec_ids 'ACC')
+
+  for acc in "${accs[@]}"; do
+    [ "$(spec_acceptance_priority "$acc")" = 'P0' ] || continue
+    mapfile -t tcs < <(test_cases_for_acceptance "$acc")
+    for tc in "${tcs[@]}"; do
+      mode="$(test_case_scalar "$tc" verification_mode)"
+      [ "$mode" != 'automated' ] || continue
+
+      reason="$(review_exception_scalar_for_tc "$review_file" "$tc" reason)"
+      accepted_by="$(review_exception_scalar_for_tc "$review_file" "$tc" accepted_by)"
+      accepted_at="$(review_exception_scalar_for_tc "$review_file" "$tc" accepted_at)"
+      is_placeholder_token "$reason" && die "accepted_automation_exceptions must accept P0 non-automated test case ${tc}"
+      is_placeholder_token "$accepted_by" && die "accepted_automation_exceptions must include accepted_by for ${tc}"
+      is_placeholder_token "$accepted_at" && die "accepted_automation_exceptions must include accepted_at for ${tc}"
+      [[ "$accepted_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "accepted_automation_exceptions accepted_at must be YYYY-MM-DD for ${tc}"
+    done
+  done
 }
 
 require_review_findings() {
@@ -2003,8 +2160,8 @@ gate_review_quality() {
   gate_review_verdict_present >/dev/null
 
   local review_file reviewed_by reviewed_at verdict
-  review_file="$(review_file_for_target_phase)" || die 'review-quality requires CODESPEC_TARGET_PHASE=Design or Implementation'
-  [ -f "$review_file" ] || die "missing review artifact: ${review_file#$PROJECT_ROOT/}"
+  review_file="$(review_file_for_target_phase)" || die 'review-quality requires CODESPEC_TARGET_PHASE=Design, Implementation, or Testing'
+  [ -f "$review_file" ] || die "missing review record: ${review_file#$PROJECT_ROOT/}"
 
   verdict="$(yaml_scalar "$review_file" verdict)"
   [ "$verdict" = 'approved' ] || die "review verdict must be approved in ${review_file#$PROJECT_ROOT/}"
@@ -2015,16 +2172,17 @@ gate_review_quality() {
   is_placeholder_token "$reviewed_at" && die "reviewed_at contains placeholder value in ${review_file#$PROJECT_ROOT/}"
   [[ "$reviewed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "reviewed_at must be YYYY-MM-DD in ${review_file#$PROJECT_ROOT/}"
 
-  require_review_list_entries "$review_file" scope 'review scope must list at least one reviewed artifact'
+  require_review_scope_entries "$review_file"
   require_review_gate_evidence "$review_file"
   require_review_findings "$review_file"
   require_review_scalar "$review_file" residual_risk
   require_review_scalar "$review_file" decision_notes
+  require_review_accepted_automation_exceptions "$review_file"
 
   log '✓ review-quality gate passed'
 }
 
-design_work_item_acceptance_rows() {
+design_slice_rows() {
   awk '
     function append_ref(value) {
       gsub(/[[:space:]]/, "", value)
@@ -2033,59 +2191,45 @@ design_work_item_acceptance_rows() {
       }
     }
     function flush_row() {
-      if (in_derivation && wi != "" && refs != "") print wi ":" refs
-      wi = ""
+      if (in_section && slice != "" && refs != "") print slice ":" refs
+      slice = ""
       refs = ""
       capture_refs = 0
     }
-    BEGIN { in_work_items = 0; in_derivation = 0; wi = ""; refs = ""; capture_refs = 0 }
-    /^## Work Item Derivation$/ {
+    BEGIN { in_section = 0; slice = ""; refs = ""; capture_refs = 0 }
+    /<!-- CODESPEC:DESIGN:SLICES -->/ {
       flush_row()
-      in_work_items = 1
-      in_derivation = 1
+      in_section = 1
       next
     }
-    /^## 7\. 工作项与验证$/ {
+    /<!-- CODESPEC:DESIGN:SLICES_END -->/ {
       flush_row()
-      in_work_items = 1
-      in_derivation = 0
-      next
-    }
-    in_work_items && /^### (工作项派生|Work Item Derivation)$/ {
-      flush_row()
-      in_derivation = 1
-      next
-    }
-    in_work_items && /^### / {
-      flush_row()
-      in_derivation = 0
+      in_section = 0
       next
     }
     /^## / {
       flush_row()
-      in_work_items = 0
-      in_derivation = 0
       next
     }
-    !in_derivation { next }
-    /^[[:space:]]*-[[:space:]]*wi_id:[[:space:]]*WI-[0-9]{3}[[:space:]]*$/ {
+    !in_section { next }
+    /^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*SLICE-[0-9]{3}[[:space:]]*$/ {
       flush_row()
-      wi = $0
-      sub(/^[[:space:]]*-[[:space:]]*wi_id:[[:space:]]*/, "", wi)
-      sub(/[[:space:]]*$/, "", wi)
+      slice = $0
+      sub(/^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*/, "", slice)
+      sub(/[[:space:]]*$/, "", slice)
       refs = ""
       capture_refs = 0
       next
     }
-    wi != "" && /^[[:space:]]*covered_acceptance_refs:[[:space:]]*\[/ {
+    slice != "" && /^[[:space:]]*acceptance_refs:[[:space:]]*\[/ {
       line = $0
-      sub(/^[[:space:]]*covered_acceptance_refs:[[:space:]]*\[/, "", line)
+      sub(/^[[:space:]]*acceptance_refs:[[:space:]]*\[/, "", line)
       sub(/\][[:space:]]*$/, "", line)
       append_ref(line)
       capture_refs = 0
       next
     }
-    wi != "" && /^[[:space:]]*covered_acceptance_refs:[[:space:]]*$/ {
+    slice != "" && /^[[:space:]]*acceptance_refs:[[:space:]]*$/ {
       capture_refs = 1
       next
     }
@@ -2105,69 +2249,48 @@ design_work_item_acceptance_rows() {
   ' "$DESIGN_FILE"
 }
 
-design_work_item_block() {
-  local wi="$1"
-  awk -v wi="$wi" '
+design_slice_block() {
+  local slice="$1"
+  awk -v slice="$slice" '
     function flush_row() {
-      if (current_wi == wi && current_row != "") {
+      if (current_slice == slice && current_row != "") {
         selected = current_row
       }
-      current_wi = ""
+      current_slice = ""
       current_row = ""
     }
 
-    /^## Work Item Derivation$/ {
+    /<!-- CODESPEC:DESIGN:SLICES -->/ {
       flush_row()
-      in_work_items = 1
-      in_derivation = 1
+      in_section = 1
       next
     }
 
-    /^## 7\. 工作项与验证$/ {
+    /<!-- CODESPEC:DESIGN:SLICES_END -->/ {
       flush_row()
-      in_work_items = 1
-      in_derivation = 0
+      in_section = 0
       next
     }
 
-    in_work_items && /^### (工作项派生|Work Item Derivation)$/ {
-      flush_row()
-      in_derivation = 1
+    !in_section {
       next
     }
 
-    in_work_items && /^### / {
+    /^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*SLICE-[0-9]{3}[[:space:]]*$/ {
       flush_row()
-      in_derivation = 0
-      next
-    }
-
-    /^## / {
-      flush_row()
-      in_work_items = 0
-      in_derivation = 0
-      next
-    }
-
-    !in_derivation {
-      next
-    }
-
-    /^[[:space:]]*-[[:space:]]*wi_id:[[:space:]]*WI-[0-9]{3}[[:space:]]*$/ {
-      flush_row()
-      current_wi = $0
-      sub(/^[[:space:]]*-[[:space:]]*wi_id:[[:space:]]*/, "", current_wi)
-      sub(/[[:space:]]*$/, "", current_wi)
+      current_slice = $0
+      sub(/^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*/, "", current_slice)
+      sub(/[[:space:]]*$/, "", current_slice)
       current_row = $0
       next
     }
 
-    current_wi != "" {
+    current_slice != "" {
       current_row = current_row ORS $0
     }
 
     END {
-      if (in_derivation) {
+      if (in_section) {
         flush_row()
       }
       if (selected != "") {
@@ -2398,52 +2521,7 @@ require_block_field() {
   return 0
 }
 
-check_focus_wi_design_alignment() {
-  local design_block
-  design_block="$(design_work_item_block "$FOCUS_WI")"
-  [ -n "$design_block" ] || die "focus work item ${FOCUS_WI} is missing from design work item derivation"
-
-  local design_requirement_refs=()
-  local design_acceptance_refs=()
-  local design_verification_refs=()
-  local design_test_case_refs=()
-
-  mapfile -t design_requirement_refs < <(printf '%s\n' "$design_block" | block_list_values requirement_refs | grep -vE '^(|null)$' || true)
-  mapfile -t design_acceptance_refs < <(printf '%s\n' "$design_block" | block_list_values covered_acceptance_refs | grep -vE '^(|null)$' || true)
-  mapfile -t design_verification_refs < <(printf '%s\n' "$design_block" | block_list_values verification_refs | grep -vE '^(|null)$' || true)
-  mapfile -t design_test_case_refs < <(printf '%s\n' "$design_block" | block_list_values test_case_refs | grep -vE '^(|null)$' || true)
-
-  # 从 WI_FILE 重新读取这些变量，避免依赖外部作用域
-  local wi_requirement_refs=()
-  local wi_acceptance_refs=()
-  local wi_verification_refs=()
-  local wi_test_case_refs=()
-
-  mapfile -t wi_requirement_refs < <(yaml_list "$WI_FILE" requirement_refs)
-  mapfile -t wi_acceptance_refs < <(yaml_list "$WI_FILE" acceptance_refs)
-  mapfile -t wi_verification_refs < <(yaml_list "$WI_FILE" verification_refs)
-  mapfile -t wi_test_case_refs < <(yaml_list "$WI_FILE" test_case_refs)
-
-  local wi_requirements_csv wi_acceptance_csv wi_verification_csv wi_test_case_csv
-  local design_requirements_csv design_acceptance_csv design_verification_csv design_test_case_csv
-
-  wi_requirements_csv="$(printf '%s\n' "${wi_requirement_refs[@]}" | paste -sd ',' -)"
-  wi_acceptance_csv="$(printf '%s\n' "${wi_acceptance_refs[@]}" | paste -sd ',' -)"
-  wi_verification_csv="$(printf '%s\n' "${wi_verification_refs[@]}" | paste -sd ',' -)"
-  wi_test_case_csv="$(printf '%s\n' "${wi_test_case_refs[@]}" | paste -sd ',' -)"
-
-  design_requirements_csv="$(printf '%s\n' "${design_requirement_refs[@]}" | paste -sd ',' -)"
-  design_acceptance_csv="$(printf '%s\n' "${design_acceptance_refs[@]}" | paste -sd ',' -)"
-  design_verification_csv="$(printf '%s\n' "${design_verification_refs[@]}" | paste -sd ',' -)"
-  design_test_case_csv="$(printf '%s\n' "${design_test_case_refs[@]}" | paste -sd ',' -)"
-
-  [ "$(normalize_csv "$wi_requirements_csv")" = "$(normalize_csv "$design_requirements_csv")" ] || die "design/work-item requirement_refs mismatch for $FOCUS_WI"
-  [ "$(normalize_csv "$wi_acceptance_csv")" = "$(normalize_csv "$design_acceptance_csv")" ] || die "design/work-item acceptance_refs mismatch for $FOCUS_WI"
-  [ "$(normalize_csv "$wi_verification_csv")" = "$(normalize_csv "$design_verification_csv")" ] || die "design/work-item verification_refs mismatch for $FOCUS_WI"
-  [ "$(normalize_csv "$wi_test_case_csv")" = "$(normalize_csv "$design_test_case_csv")" ] || die "design/work-item test_case_refs mismatch for $FOCUS_WI"
-}
-
-check_wi_refs_exist_in_spec() {
+check_design_refs_exist_in_spec() {
   local spec_requirements=()
   local spec_acceptances=()
   local spec_verifications=()
@@ -2455,38 +2533,72 @@ check_wi_refs_exist_in_spec() {
   mapfile -t spec_verifications < <(collect_spec_ids 'VO')
   mapfile -t known_test_cases < <(collect_test_case_ids)
 
-  for ref in "${requirement_refs[@]}"; do
-    contains_exact_line "$ref" "${spec_requirements[@]}" || die "$FOCUS_WI references unknown requirement_ref: ${ref}"
+  local design_reqs=() design_accs=() design_vos=() design_tcs=()
+  mapfile -t design_reqs < <(design_refs_requirements)
+  mapfile -t design_accs < <(design_refs_acceptance)
+  mapfile -t design_vos < <(design_refs_verification)
+  mapfile -t design_tcs < <(design_refs_test_cases)
+
+  for ref in "${design_reqs[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${spec_requirements[@]}" || die "design.md §7 references unknown requirement_ref: ${ref}"
   done
 
-  for ref in "${acceptance_refs[@]}"; do
-    contains_exact_line "$ref" "${spec_acceptances[@]}" || die "$FOCUS_WI references unknown acceptance_ref: ${ref}"
+  for ref in "${design_accs[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${spec_acceptances[@]}" || die "design.md §7 references unknown acceptance_ref: ${ref}"
   done
 
-  for ref in "${verification_refs[@]}"; do
-    contains_exact_line "$ref" "${spec_verifications[@]}" || die "$FOCUS_WI references unknown verification_ref: ${ref}"
+  for ref in "${design_vos[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${spec_verifications[@]}" || die "design.md §7 references unknown verification_ref: ${ref}"
   done
 
-  for ref in "${test_case_refs[@]}"; do
-    contains_exact_line "$ref" "${known_test_cases[@]}" || die "$FOCUS_WI references unknown test_case_ref: ${ref}"
+  for ref in "${design_tcs[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${known_test_cases[@]}" || die "design.md §7 references unknown test_case_ref: ${ref}"
   done
 }
 
-check_design_work_item_acceptance_alignment() {
-  local row wi design_refs work_item_file work_item_refs normalized_design normalized_work_item test_case_refs
-  while IFS= read -r row; do
-    [ -n "$row" ] || continue
-    wi="${row%%:*}"
-    design_refs="${row#*:}"
-    work_item_file="$PROJECT_ROOT/work-items/$wi.yaml"
-    [ -f "$work_item_file" ] || die "design references missing work item: $wi"
-    work_item_refs="$(yaml_list "$work_item_file" acceptance_refs | paste -sd ',' -)"
-    normalized_design="$(normalize_csv "$design_refs")"
-    normalized_work_item="$(normalize_csv "$work_item_refs")"
-    [ "$normalized_design" = "$normalized_work_item" ] || die "design/work-item acceptance mismatch for $wi"
-    test_case_refs="$(yaml_list "$work_item_file" test_case_refs | paste -sd ',' -)"
-    [ -n "$(normalize_csv "$test_case_refs")" ] || die "work-item $wi missing test_case_refs"
-  done < <(design_work_item_acceptance_rows)
+check_design_refs_cover_spec() {
+  local spec_requirements=()
+  local spec_acceptances=()
+  local spec_verifications=()
+  local target_test_cases=()
+  local design_reqs=()
+  local design_accs=()
+  local design_vos=()
+  local design_tcs=()
+  local ref
+
+  mapfile -t spec_requirements < <(collect_spec_ids 'REQ')
+  mapfile -t spec_acceptances < <(collect_spec_ids 'ACC')
+  mapfile -t spec_verifications < <(collect_spec_ids 'VO')
+  mapfile -t target_test_cases < <(testing_target_test_case_ids)
+  mapfile -t design_reqs < <(design_refs_requirements)
+  mapfile -t design_accs < <(design_refs_acceptance)
+  mapfile -t design_vos < <(design_refs_verification)
+  mapfile -t design_tcs < <(design_refs_test_cases)
+
+  for ref in "${spec_requirements[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${design_reqs[@]}" || die "trace gap: ${ref} is not referenced by any design.md §7 requirement_refs"
+  done
+
+  for ref in "${spec_acceptances[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${design_accs[@]}" || die "trace gap: ${ref} is not referenced by any design.md §7 acceptance_refs"
+  done
+
+  for ref in "${spec_verifications[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${design_vos[@]}" || die "trace gap: ${ref} is not referenced by any design.md §7 verification_refs"
+  done
+
+  for ref in "${target_test_cases[@]}"; do
+    [ -n "$ref" ] || continue
+    contains_exact_line "$ref" "${design_tcs[@]}" || die "trace gap: ${ref} is not referenced by any design.md §7 test_case_refs"
+  done
 }
 
 check_appendix_authority() {
@@ -2605,6 +2717,7 @@ gate_requirement_complete() {
     contains_exact_line "$intake_ref" "${closure_refs[@]}" || \
       die "input_ref is not closed in Requirements source coverage: ${intake_ref}"
   done
+  require_declared_source_ref_closure
 
   log '✓ requirement-complete gate passed'
 }
@@ -2771,17 +2884,16 @@ gate_design_structure_complete() {
   grep -qE '^## (Summary|1\. 设计概览)$' "$DESIGN_FILE" || die 'design.md missing design overview'
   grep -qE '^## (Technical Approach|3\. 架构决策)$' "$DESIGN_FILE" || die 'design.md missing architecture decisions'
   grep -qE '^## (Boundaries & Impacted Surfaces|4\. 系统结构)$' "$DESIGN_FILE" || die 'design.md missing system structure'
-  grep -qE '^## (Work Item Derivation|7\. 工作项与验证)$' "$DESIGN_FILE" || die 'design.md missing work item derivation'
+  grep -qE '^## 7\. 实现计划与验证$' "$DESIGN_FILE" || die 'design.md missing implementation plan and verification section'
   grep -qE '技术栈选择|runtime:' "$DESIGN_FILE" || die 'design.md missing technology stack selection'
   grep -qE 'external_interactions|外部交互' "$DESIGN_FILE" || die 'design.md missing external interaction design'
   grep -qE 'security_design|安全' "$DESIGN_FILE" || die 'design.md missing security design'
   grep -qE 'environment_config|环境' "$DESIGN_FILE" || die 'design.md missing environment configuration requirements'
 
   local derivation_rows=()
-  mapfile -t derivation_rows < <(design_work_item_acceptance_rows)
-  [ "${#derivation_rows[@]}" -gt 0 ] || die 'design.md has no concrete WI derivation rows yet'
+  mapfile -t derivation_rows < <(design_slice_rows)
+  [ "${#derivation_rows[@]}" -gt 0 ] || die 'design.md §7 has no concrete slice rows yet'
 
-  check_design_work_item_acceptance_alignment
   log '✓ design-structure-complete gate passed'
 }
 
@@ -2796,13 +2908,13 @@ gate_design_quality() {
   require_markdown_heading "$DESIGN_FILE" '^## 3\. 架构决策$|^## Technical Approach$' 'design.md missing architecture decision section'
   require_markdown_heading "$DESIGN_FILE" '^## 4\. 系统结构$|^## Boundaries & Impacted Surfaces$' 'design.md missing system structure section'
   require_markdown_heading "$DESIGN_FILE" '^## 5\. 契约设计$|^## External Interactions & Contracts$|^## Data & Storage Design$' 'design.md missing contract/data design section'
-  require_markdown_heading "$DESIGN_FILE" '^## 6\. 横切设计$|^## Cross-Cutting Design$|^## Cross Cutting Design$' 'design.md missing cross-cutting design section'
-  require_markdown_heading "$DESIGN_FILE" '^## 7\. 工作项与验证$|^## Work Item Derivation$' 'design.md missing work item and verification section'
+  require_markdown_heading "$DESIGN_FILE" '^## 6\. 横切设计$|^## 6\. Cross-Cutting Design$|^## 6\. Cross Cutting Design$|^## Cross-Cutting Design$|^## Cross Cutting Design$' 'design.md missing cross-cutting design section'
+  require_markdown_heading "$DESIGN_FILE" '^## 7\. 实现计划与验证$' 'design.md missing implementation plan and verification section'
   require_markdown_heading "$DESIGN_FILE" '^## 8\. 实现阶段输入$' 'design.md missing implementation input section (R8: Runbook/Contract/View/Verification)'
-  markdown_section_contains "$DESIGN_FILE" '^## 8\. 实现阶段输入$' 'runbook:' || die 'design.md implementation input section missing Runbook (R8)'
-  markdown_section_contains "$DESIGN_FILE" '^## 8\. 实现阶段输入$' 'contract_summary:' || die 'design.md implementation input section missing Contract (R8)'
-  markdown_section_contains "$DESIGN_FILE" '^## 8\. 实现阶段输入$' 'view_summary:' || die 'design.md implementation input section missing View (R8)'
-  markdown_section_contains "$DESIGN_FILE" '^## 8\. 实现阶段输入$' 'verification_summary:' || die 'design.md implementation input section missing Verification (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'runbook:' || die 'design.md implementation input section missing Runbook (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'contract_summary:' || die 'design.md implementation input section missing Contract (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'view_summary:' || die 'design.md implementation input section missing View (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'verification_summary:' || die 'design.md implementation input section missing Verification (R8)'
 
   grep -qE '技术栈选择|runtime:' "$DESIGN_FILE" || die 'design.md missing technology stack selection'
   grep -qE 'external_interactions|外部交互' "$DESIGN_FILE" || die 'design.md missing external interaction design'
@@ -2860,191 +2972,170 @@ baseline_section_has_real_content() {
 gate_implementation_readiness_baseline() {
   grep -qE '^## (Technical Approach|3\. 架构决策)$' "$DESIGN_FILE" || die 'design.md missing architecture decisions'
   grep -qE '^## (Boundaries & Impacted Surfaces|4\. 系统结构)$' "$DESIGN_FILE" || die 'design.md missing system structure'
-  grep -qE '^## (Verification Design|7\. 工作项与验证)$' "$DESIGN_FILE" || die 'design.md missing verification design'
+  grep -qE '^## (Verification Design|7\. 实现计划与验证|7\. 工作项与验证)$' "$DESIGN_FILE" || die 'design.md missing verification design'
+  grep -q '<!-- CODESPEC:DESIGN:SLICES -->' "$DESIGN_FILE" || die 'design.md §7 missing CODESPEC:DESIGN:SLICES marker'
   log '✓ implementation-readiness-baseline gate passed'
 }
 
-check_scope_path_coverage() {
-  local required_surfaces=()
-  mapfile -t required_surfaces < <(yaml_list "$WI_FILE" required_surfaces)
-
-  # Backwards compatibility: no required_surfaces → warn but pass
-  if [ "${#required_surfaces[@]}" -eq 0 ] || [ "${required_surfaces[0]}" = "null" ] || [ -z "${required_surfaces[0]}" ]; then
-    log "WARNING: $FOCUS_WI has no required_surfaces; scope-path coverage cannot be verified"
-    return 0
-  fi
-
-  for item in "${required_surfaces[@]}"; do
-    if is_placeholder_token "$item"; then
-      log "WARNING: $FOCUS_WI required_surfaces contains placeholder value; skipping coverage check"
-      return 0
-    fi
-  done
-
-  local uncovered=()
-  for surface in "${required_surfaces[@]}"; do
-    if ! match_any_path "$surface" "${allowed_paths[@]}"; then
-      uncovered+=("$surface")
-    fi
-  done
-
-  if [ "${#uncovered[@]}" -gt 0 ]; then
-    die "$FOCUS_WI required_surfaces not covered by allowed_paths: ${uncovered[*]}"
-  fi
+# fnmatch: portable glob matching for bash (no external fnmatch required)
+fnmatch() {
+  local pattern="$1"
+  local string="$2"
+  # Use bash pattern matching via case
+  case "$string" in
+    $pattern) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
+# Extract modifiable globs from design.md §4 (within CODESPEC:SCOPE_ALLOWED markers)
+design_scope_allowed_globs() {
+  awk '/<!-- CODESPEC:SCOPE_ALLOWED -->/{f=1;next} /<!-- CODESPEC:SCOPE_ALLOWED_END -->/{f=0} f && /^- `/' "$DESIGN_FILE" | sed 's/^- `\(.*\)`.*/\1/'
+}
+
+# Extract forbidden globs from design.md §4 (within CODESPEC:SCOPE_FORBIDDEN markers)
+design_scope_forbidden_globs() {
+  awk '/<!-- CODESPEC:SCOPE_FORBIDDEN -->/{f=1;next} /<!-- CODESPEC:SCOPE_FORBIDDEN_END -->/{f=0} f && /^- `/' "$DESIGN_FILE" | sed 's/^- `\(.*\)`.*/\1/'
+}
+
+# Unified lifecycle exemption check
+is_lifecycle_exempt() {
+  local file="$1"
+  case "$file" in
+    meta.yaml|testing.md|authority-repairs/*.yaml|authority-repairs/*|reviews/**|CLAUDE.md|AGENTS.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+design_scope_allowed() {
+  local file="$1"
+  local glob
+  while IFS= read -r glob; do
+    [ -n "$glob" ] || continue
+    fnmatch "$glob" "$file" && return 0
+  done < <(design_scope_allowed_globs)
+  return 1
+}
+
+design_scope_forbidden() {
+  local file="$1"
+  local glob
+  while IFS= read -r glob; do
+    [ -n "$glob" ] || continue
+    fnmatch "$glob" "$file" && return 0
+  done < <(design_scope_forbidden_globs)
+  return 1
+}
+
+file_permission() {
+  local file="$1"
+  local phase="$2"
+  # 1. lifecycle exempt
+  is_lifecycle_exempt "$file" && return 0
+  # 2. hardcoded forbidden
+  case "$file" in versions/**) return 1 ;; esac
+  # 3. authoritative doc
+  case "$file" in spec.md|design.md) return 1 ;; esac
+  # 4. design scope forbidden
+  design_scope_forbidden "$file" && return 1
+  # 5. deployment doc
+  case "$file" in deployment.md) [ "$phase" = "Deployment" ] && return 0 || return 1 ;; esac
+  # 6. contract doc - only in authority repair
+  case "$file" in contracts/*.md|contracts/*) return 1 ;; esac
+  # 7. design scope allowed (only in Implementation)
+  if [ "$phase" = "Implementation" ]; then
+    design_scope_allowed "$file" && return 0
+  fi
+  # 8. deny
+  return 1
+}
 
 gate_implementation_start() {
-  require_focus_wi
   validate_formal_id_definitions
-  [ "$(yaml_scalar "$WI_FILE" goal)" != 'null' ] || die "$FOCUS_WI missing goal"
-  [ "$(yaml_scalar "$WI_FILE" phase_scope)" = 'Implementation' ] || die "$FOCUS_WI phase_scope must be Implementation"
-  is_placeholder_token "$(yaml_scalar "$WI_FILE" goal)" && die "$FOCUS_WI goal contains placeholder value"
-  is_placeholder_token "$(yaml_scalar "$WI_FILE" derived_from)" && die "$FOCUS_WI derived_from contains placeholder value"
 
-  local requirement_refs=()
-  local acceptance_refs=()
-  local verification_refs=()
-  local test_case_refs=()
-  local allowed_paths=()
-  local forbidden_paths=()
-  local required_verification=()
-  local stop_conditions=()
-  local reopen_triggers=()
-  local branch_owned_paths=()
-  local scope=()
-  local out_of_scope=()
-  mapfile -t requirement_refs < <(yaml_list "$WI_FILE" requirement_refs)
-  mapfile -t acceptance_refs < <(yaml_list "$WI_FILE" acceptance_refs)
-  mapfile -t verification_refs < <(yaml_list "$WI_FILE" verification_refs)
-  mapfile -t test_case_refs < <(yaml_list "$WI_FILE" test_case_refs)
-  mapfile -t allowed_paths < <(yaml_list "$WI_FILE" allowed_paths)
-  mapfile -t forbidden_paths < <(yaml_list "$WI_FILE" forbidden_paths)
-  mapfile -t required_verification < <(yaml_list "$WI_FILE" required_verification)
-  mapfile -t stop_conditions < <(yaml_list "$WI_FILE" stop_conditions)
-  mapfile -t reopen_triggers < <(yaml_list "$WI_FILE" reopen_triggers)
-  mapfile -t branch_owned_paths < <(yaml_list "$WI_FILE" branch_execution.owned_paths)
-  mapfile -t scope < <(yaml_list "$WI_FILE" scope)
-  mapfile -t out_of_scope < <(yaml_list "$WI_FILE" out_of_scope)
+  # 1. §4 CODESPEC:SCOPE_ALLOWED exists and non-empty
+  grep -q '<!-- CODESPEC:SCOPE_ALLOWED -->' "$DESIGN_FILE" || die 'design.md §4 missing CODESPEC:SCOPE_ALLOWED marker'
+  local allowed_globs
+  allowed_globs="$(design_scope_allowed_globs)"
+  [ -n "$allowed_globs" ] || die 'design.md §4 SCOPE_ALLOWED section has no glob entries'
 
-  [ "${#requirement_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing requirement_refs"
-  [ "${#acceptance_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing acceptance_refs"
-  [ "${#verification_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing verification_refs"
-  [ "${#test_case_refs[@]}" -gt 0 ] || die "$FOCUS_WI missing test_case_refs"
-  [ "${#allowed_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing allowed_paths"
-  [ "${#forbidden_paths[@]}" -gt 0 ] || die "$FOCUS_WI missing forbidden_paths"
-  [ "${#required_verification[@]}" -gt 0 ] || die "$FOCUS_WI missing required_verification"
-  [ "${#stop_conditions[@]}" -gt 0 ] || die "$FOCUS_WI missing stop_conditions"
-  [ "${#reopen_triggers[@]}" -gt 0 ] || die "$FOCUS_WI missing reopen_triggers"
+  # 2. §4 CODESPEC:SCOPE_FORBIDDEN exists and non-empty
+  grep -q '<!-- CODESPEC:SCOPE_FORBIDDEN -->' "$DESIGN_FILE" || die 'design.md §4 missing CODESPEC:SCOPE_FORBIDDEN marker'
+  local forbidden_globs
+  forbidden_globs="$(design_scope_forbidden_globs)"
+  [ -n "$forbidden_globs" ] || die 'design.md §4 SCOPE_FORBIDDEN section has no glob entries'
 
-  # Check scope, out_of_scope, hard_constraints are not placeholder
-  for item in "${scope[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI scope contains placeholder value: $item"
+  # 3. §7 CODESPEC:DESIGN:SLICES exists
+  grep -q '<!-- CODESPEC:DESIGN:SLICES -->' "$DESIGN_FILE" || die 'design.md §7 missing CODESPEC:DESIGN:SLICES marker'
+
+  # 4. Each slice_id format SLICE-NNN and unique
+  local slice_ids=()
+  mapfile -t slice_ids < <(
+    awk '/<!-- CODESPEC:DESIGN:SLICES -->/{f=1;next} /<!-- CODESPEC:DESIGN:SLICES_END -->/{f=0} f && /^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*/{
+      line=$0; sub(/^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line
+    }' "$DESIGN_FILE"
+  )
+  [ "${#slice_ids[@]}" -gt 0 ] || die 'design.md §7 has no slice entries'
+  local id unique_count total_count
+  for id in "${slice_ids[@]}"; do
+    [[ "$id" =~ ^SLICE-[0-9]{3}$ ]] || die "design.md §7 slice_id format invalid: $id (expected SLICE-NNN)"
   done
-  for item in "${out_of_scope[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI out_of_scope contains placeholder value: $item"
-  done
-  for item in "${allowed_paths[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI allowed_paths contains placeholder value: $item"
-  done
-  for item in "${forbidden_paths[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI forbidden_paths contains placeholder value: $item"
-  done
-  for item in "${required_verification[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI required_verification contains placeholder value: $item"
-  done
-  for item in "${stop_conditions[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI stop_conditions contains placeholder value: $item"
-  done
-  for item in "${reopen_triggers[@]}"; do
-    is_placeholder_token "$item" && die "$FOCUS_WI reopen_triggers contains placeholder value: $item"
+  unique_count="$(printf '%s\n' "${slice_ids[@]}" | sort -u | wc -l)"
+  total_count="${#slice_ids[@]}"
+  [ "$unique_count" -eq "$total_count" ] || die 'design.md §7 has duplicate slice_id entries'
+
+  # 5. Each slice has goal, requirement_refs, acceptance_refs, verification_refs, test_case_refs
+  local slice block value
+  for slice in "${slice_ids[@]}"; do
+    block="$(design_slice_block "$slice")"
+    [ -n "$block" ] || die "design.md §7 slice ${slice} has no block"
+
+    value="$(printf '%s\n' "$block" | block_scalar_value goal || true)"
+    [ -n "$value" ] || die "design.md §7 slice ${slice} missing goal"
+    is_placeholder_token "$value" && die "design.md §7 slice ${slice} goal contains placeholder value"
+
+    value="$(printf '%s\n' "$block" | block_list_values requirement_refs | head -1 || true)"
+    [ -n "$value" ] || die "design.md §7 slice ${slice} missing requirement_refs"
+
+    value="$(printf '%s\n' "$block" | block_list_values acceptance_refs | head -1 || true)"
+    [ -n "$value" ] || die "design.md §7 slice ${slice} missing acceptance_refs"
+
+    value="$(printf '%s\n' "$block" | block_list_values verification_refs | head -1 || true)"
+    [ -n "$value" ] || die "design.md §7 slice ${slice} missing verification_refs"
+
+    value="$(printf '%s\n' "$block" | block_list_values test_case_refs | head -1 || true)"
+    [ -n "$value" ] || die "design.md §7 slice ${slice} missing test_case_refs"
   done
 
-  # scope-path coverage: warn if required_surfaces not set or placeholder
-  local _rs=()
-  mapfile -t _rs < <(yaml_list "$WI_FILE" required_surfaces)
-  if [ "${#_rs[@]}" -gt 0 ] && [ "${_rs[0]}" != "null" ] && [ -n "${_rs[0]}" ]; then
-    local _has_placeholder=0
-    for _item in "${_rs[@]}"; do
-      if is_placeholder_token "$_item"; then
-        _has_placeholder=1
-        break
-      fi
-    done
-    if [ "$_has_placeholder" -eq 0 ]; then
-      local _uncovered=()
-      for _surface in "${_rs[@]}"; do
-        if ! match_any_path "$_surface" "${allowed_paths[@]}"; then
-          _uncovered+=("$_surface")
-        fi
-      done
-      if [ "${#_uncovered[@]}" -gt 0 ]; then
-        die "$FOCUS_WI required_surfaces not covered by allowed_paths: ${_uncovered[*]}"
-      fi
-    else
-      log "WARNING: $FOCUS_WI required_surfaces contains placeholder; skipping coverage check"
-    fi
-  else
-    log "WARNING: $FOCUS_WI has no required_surfaces; scope-path coverage cannot be verified"
-  fi
-
-  # owned_paths 只在并行模式下强制要求
-  local execution_group
-  execution_group="$(yaml_scalar "$META_FILE" execution_group)"
-  if [ "$execution_group" != 'null' ]; then
-    [ "${#branch_owned_paths[@]}" -gt 0 ] || die "$FOCUS_WI: parallel execution requires branch_execution.owned_paths"
-  fi
-
-  [ "$(yaml_scalar "$WI_FILE" derived_from)" != 'null' ] || die "$FOCUS_WI missing derived_from"
-
-  check_focus_wi_design_alignment
-  check_wi_refs_exist_in_spec
-
-  local ref
-
-  # Check contracts before checking dependencies (better error ordering)
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    [ "$ref" != 'null' ] || continue
-    [ -f "$PROJECT_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
-    [ "$(contract_status "$PROJECT_ROOT/$ref")" = 'frozen' ] || die "$FOCUS_WI contract is not frozen: $ref"
-  done < <(yaml_list "$WI_FILE" contract_refs)
+  # 6. §8 has runbook, contract_summary, view_summary, verification_summary
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'runbook:' || die 'design.md implementation input section missing Runbook (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'contract_summary:' || die 'design.md implementation input section missing Contract (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'view_summary:' || die 'design.md implementation input section missing View (R8)'
+  markdown_section_contains "$DESIGN_FILE" '^## 8[.] 实现阶段输入$' 'verification_summary:' || die 'design.md implementation input section missing Verification (R8)'
 
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
 
-  # Validate dependency_type
-  local dependency_type dependency_refs_count
-  dependency_type="$(yaml_scalar "$WI_FILE" dependency_type)"
-  mapfile -t dependency_refs < <(yaml_list "$WI_FILE" dependency_refs)
-  dependency_refs_count="${#dependency_refs[@]}"
-  if [ -z "$dependency_type" ] || [ "$dependency_type" = 'null' ]; then
-    dependency_type='none'
-    if [ "$dependency_refs_count" -gt 0 ] && [ "${dependency_refs[0]}" != "" ] && [ "${dependency_refs[0]}" != "null" ]; then
-      dependency_type='strong'
-    fi
-  fi
+  # 7. §7 refs exist in spec.md / testing.md and cover every accepted obligation.
+  check_design_refs_exist_in_spec
+  check_design_refs_cover_spec
 
-  # Check dependency_type is valid. Weak dependencies are not accepted until they have distinct semantics.
-  case "$dependency_type" in
-    strong|none)
-      # Valid values
-      ;;
-    *)
-      die "$FOCUS_WI dependency_type must be strong or none (got: $dependency_type)"
-      ;;
-  esac
-
-  # Check semantic consistency: empty dependency_refs requires dependency_type = none
-  if [ "$dependency_refs_count" -eq 0 ] || [ "${dependency_refs[0]}" = "" ] || [ "${dependency_refs[0]}" = "null" ]; then
-    [ "$dependency_type" = 'none' ] || die "$FOCUS_WI has no dependencies but dependency_type is $dependency_type (must be none)"
-  else
-    [ "$dependency_type" != 'none' ] || die "$FOCUS_WI has dependencies but dependency_type is none (must be strong)"
-  fi
-
-  # Check for circular dependencies before checking pass records
-  check_circular_dependencies "$FOCUS_WI"
-
-  check_dependency_pass_records
+  # 8. §5 referenced contracts are frozen
+  local ref
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    [ "$ref" != 'null' ] || continue
+    [ "$ref" != 'none' ] || continue
+    [ -f "$PROJECT_ROOT/$ref" ] || die "design.md §5 references missing contract: $ref"
+    [ "$(contract_status "$PROJECT_ROOT/$ref")" = 'frozen' ] || die "design.md §5 contract is not frozen: $ref"
+  done < <(
+    awk '
+      /^## (5\. 契约设计|External Interactions & Contracts|Data & Storage Design)$/{f=1;next}
+      f && /^## /{f=0;next}
+      f && /^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/{
+        line=$0; sub(/^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line
+      }
+    ' "$DESIGN_FILE" | grep -vE '^(|null)$' || true
+  )
 
   log '✓ implementation-start gate passed'
 }
@@ -3087,12 +3178,24 @@ gate_phase_capability() {
       forbidden_label='implementation artifacts'
       ;;
     Testing)
-      forbidden=("src/**" "Dockerfile" "spec.md" "design.md" "work-items/**" "contracts/**" "deployment.md")
+      forbidden=("src/**" "Dockerfile" "spec.md" "design.md" "contracts/**" "deployment.md")
       forbidden_label='phase-frozen artifacts'
       ;;
     Deployment)
-      forbidden=("src/**" "Dockerfile" "spec.md" "design.md" "work-items/**" "contracts/**")
+      forbidden=("src/**" "Dockerfile" "spec.md" "design.md" "contracts/**")
       forbidden_label='phase-frozen artifacts'
+      ;;
+    Implementation)
+      # Use file_permission for Implementation phase
+      local file
+      for file in "${changed[@]}"; do
+        if closed_authority_repair_allows_path "$file"; then
+          continue
+        fi
+        file_permission "$file" "$phase" || die "phase-capability gate failed: ${phase} forbids modification of ${file}"
+      done
+      log '✓ phase-capability gate passed'
+      return
       ;;
     *)
       log "✓ phase-capability gate passed (phase ${phase})"
@@ -3135,12 +3238,8 @@ gate_scope() {
   if [ "$mode" = 'implementation-span' ]; then
     mapfile -t changed < <(collect_implementation_span_files)
   elif [ "$mode" = 'changed-files' ]; then
-    if [ "$phase" = 'Implementation' ]; then
-      require_focus_wi
-    fi
     mapfile -t changed < <(collect_explicit_changed_files)
   else
-    require_focus_wi
     # staged mode: collect both staged and dirty (unstaged/untracked) files
     local staged_files=() dirty_files=()
     mapfile -t staged_files < <(collect_staged_files)
@@ -3171,132 +3270,44 @@ gate_scope() {
     return
   fi
 
-  if [ "$mode" = 'implementation-span' ] || { [ "$mode" = 'changed-files' ] && [ "$phase" != 'Implementation' ]; }; then
-    local active=() global_forbidden=()
-    local file wi wi_file ok forbidden_match
-    local wi_allowed=() wi_forbidden=()
-
-    mapfile -t active < <(collect_active_work_items)
-    if [ "$mode" = 'implementation-span' ]; then
-      [ "${#active[@]}" -gt 0 ] || die 'Implementation scope span requires active_work_items'
-    else
-      [ "${#active[@]}" -gt 0 ] || die "${phase} changed-files scope requires active_work_items"
-    fi
-
-    # Authority files like work-items/WI-001.yaml may be explicitly owned by an
-    # active work item. Keep hard-frozen docs global, but let work-item files
-    # fall through to the per-WI allowed/forbidden match below.
-    if [ "$mode" = 'implementation-span' ]; then
-      global_forbidden=("versions/**" "spec.md" "design.md" "deployment.md")
-    else
-      global_forbidden=()
-    fi
-
-    for file in "${changed[@]}"; do
-      case "$file" in
-        meta.yaml|testing.md)
-          continue
-          ;;
-      esac
-      if [ "$mode" = 'changed-files' ] && [ "$phase" = 'Deployment' ] && [ "$file" = 'deployment.md' ]; then
-        continue
-      fi
-
-      if closed_authority_repair_allows_path "$file"; then
-        continue
-      fi
-
-      if match_any_path "$file" "${global_forbidden[@]}"; then
-        if closed_authority_repair_allows_path "$file"; then
-          continue
-        fi
-        die "implementation span file $file is forbidden by implementation phase scope"
-      fi
-
-      ok=0
-      forbidden_match=0
-      for wi in "${active[@]}"; do
-        wi_file="$PROJECT_ROOT/work-items/$wi.yaml"
-        [ -f "$wi_file" ] || die "missing work item: $wi_file"
-        mapfile -t wi_allowed < <(yaml_list "$wi_file" allowed_paths)
-        mapfile -t wi_forbidden < <(yaml_list "$wi_file" forbidden_paths)
-        [ "${#wi_forbidden[@]}" -gt 0 ] || die "$wi has empty forbidden_paths (must specify at least one pattern)"
-
-        if ! match_any_path "$file" "${wi_allowed[@]}"; then
-          continue
-        fi
-
-        if match_any_path "$file" "${wi_forbidden[@]}"; then
-          forbidden_match=1
-          continue
-        fi
-
-        ok=1
-        break
-      done
-
-      if [ "$ok" -eq 1 ]; then
-        continue
-      fi
-
-      if [ "$forbidden_match" -eq 1 ]; then
-        if [ "$mode" = 'implementation-span' ]; then
-          die "implementation span file $file is forbidden by matching active work item scope"
-        fi
-        die "changed file $file is forbidden by matching active work item scope"
-      fi
-
-      if [ "$mode" = 'implementation-span' ]; then
-        die "implementation span file $file is outside allowed_paths of active work items"
-      fi
-      die "changed file $file is outside allowed_paths of active work items"
-    done
-
-    log '✓ scope gate passed'
-    return
+  # Unified scope check using file_permission
+  local global_forbidden=()
+  if [ "$mode" = 'implementation-span' ]; then
+    global_forbidden=("versions/**" "spec.md" "design.md" "deployment.md")
   fi
 
-  local allowed=()
-  local forbidden=()
-  mapfile -t allowed < <(yaml_list "$WI_FILE" allowed_paths)
-  mapfile -t forbidden < <(yaml_list "$WI_FILE" forbidden_paths)
-
-  if [ "${#forbidden[@]}" -eq 0 ]; then
-    if [ "$mode" = 'implementation-span' ]; then
-      die 'active work items have empty forbidden_paths (must specify at least one pattern)'
-    fi
-    die "$FOCUS_WI has empty forbidden_paths (must specify at least one pattern)"
-  fi
-
-  local file pattern ok
+  local file
   for file in "${changed[@]}"; do
+    # Lifecycle exempt files bypass scope check
+    if is_lifecycle_exempt "$file"; then
+      continue
+    fi
+    # Deployment doc in Deployment phase
+    if [ "$mode" = 'changed-files' ] && [ "$phase" = 'Deployment' ] && [ "$file" = 'deployment.md' ]; then
+      continue
+    fi
+
     if closed_authority_repair_allows_path "$file"; then
       continue
     fi
 
-    for pattern in "${forbidden[@]}"; do
-      if match_path "$file" "$pattern"; then
-        if [ "$mode" = 'implementation-span' ]; then
-          die "implementation span file $file is forbidden by active work items"
-        fi
-        die "changed file $file is forbidden by $FOCUS_WI"
-      fi
-    done
+    # Global forbidden for implementation-span mode
+    if [ "$mode" = 'implementation-span' ] && match_any_path "$file" "${global_forbidden[@]}"; then
+      die "implementation span file $file is forbidden by implementation phase scope"
+    fi
 
-    if [ "${#allowed[@]}" -gt 0 ]; then
-      ok=0
-      for pattern in "${allowed[@]}"; do
-        if match_path "$file" "$pattern"; then
-          ok=1
-          break
-        fi
-      done
-      if [ "$ok" -ne 1 ]; then
-        if [ "$mode" = 'implementation-span' ]; then
-          die "implementation span file $file is outside allowed_paths of active work items"
-        fi
-        die "changed file $file is outside allowed_paths of $FOCUS_WI"
+    # Use unified file_permission for scope check
+    # For implementation-span mode, check against Implementation phase permissions
+    # since those files are Implementation-phase artifacts
+    local check_phase="$phase"
+    if [ "$mode" = 'implementation-span' ]; then
+      check_phase='Implementation'
+    fi
+    if ! file_permission "$file" "$check_phase"; then
+      if design_scope_forbidden "$file"; then
+        die "changed file $file is forbidden by design.md §4 forbidden scope"
       fi
+      die "changed file $file is outside allowed scope"
     fi
   done
 
@@ -3330,7 +3341,7 @@ validate_frozen_contract_file() {
 
   [ -n "$freeze_review_ref" ] && [ "$freeze_review_ref" != 'null' ] || die "frozen contract $file requires explicit review (missing freeze_review_ref)"
   review_file="$PROJECT_ROOT/$freeze_review_ref"
-  [ -f "$review_file" ] || die "frozen contract $file requires explicit review artifact: $freeze_review_ref"
+  [ -f "$review_file" ] || die "frozen contract $file requires explicit review record: $freeze_review_ref"
   [ "$(yaml_scalar "$review_file" contract_ref)" = "$contract_id" ] || die "freeze review $freeze_review_ref does not reference contract_id $contract_id"
   [ "$(yaml_scalar "$review_file" action)" = 'freeze' ] || die "freeze review $freeze_review_ref must have action=freeze"
   [ "$(yaml_scalar "$review_file" verdict)" = 'approved' ] || die "freeze review $freeze_review_ref must be approved"
@@ -3344,34 +3355,22 @@ gate_contract_boundary() {
   local mode
   mode="${CODESPEC_CONTRACT_BOUNDARY_MODE:-staged}"
 
-  # Check focus_work_item contract_refs (Implementation phase)
-  if [ -f "$META_FILE" ] && [ "$(yaml_scalar "$META_FILE" focus_work_item)" != 'null' ]; then
-    require_focus_wi
-    while IFS= read -r ref; do
-      [ -n "$ref" ] || continue
-      [ "$ref" != 'null' ] || continue
-      [ -f "$PROJECT_ROOT/$ref" ] || die "$FOCUS_WI references missing contract: $ref"
-    done < <(yaml_list "$WI_FILE" contract_refs)
-  fi
-
-  # Check active_work_items contract_refs (Testing/Deployment phase)
-  local phase
-  phase="$(yaml_scalar "$META_FILE" phase)"
-  if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
-    local active_wis=()
-    mapfile -t active_wis < <(yaml_list "$META_FILE" active_work_items)
-    for wi_id in "${active_wis[@]}"; do
-      [ -n "$wi_id" ] || continue
-      [ "$wi_id" != 'null' ] || continue
-      local wi_file="$PROJECT_ROOT/work-items/${wi_id}.yaml"
-      [ -f "$wi_file" ] || die "active work item $wi_id file not found"
-      while IFS= read -r ref; do
-        [ -n "$ref" ] || continue
-        [ "$ref" != 'null' ] || continue
-        [ -f "$PROJECT_ROOT/$ref" ] || die "$wi_id references missing contract: $ref"
-      done < <(yaml_list "$wi_file" contract_refs)
-    done
-  fi
+  # Check design.md §5 contract_refs exist
+  local ref
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    [ "$ref" != 'null' ] || continue
+    [ "$ref" != 'none' ] || continue
+    [ -f "$PROJECT_ROOT/$ref" ] || die "design.md §5 references missing contract: $ref"
+  done < <(
+    awk '
+      /^## (5\. 契约设计|External Interactions & Contracts|Data & Storage Design)$/{f=1;next}
+      f && /^## /{f=0;next}
+      f && /^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/{
+        line=$0; sub(/^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line
+      }
+    ' "$DESIGN_FILE" | grep -vE '^(|null|none|\[.*\])$' || true
+  )
 
   local rel_contract_root="contracts/"
   local file head_status current_status base_status implementation_base_revision
@@ -3387,6 +3386,12 @@ gate_contract_boundary() {
 
     if [ "$mode" = 'implementation-span' ]; then
       head_status="$(contract_scalar_from_revision "$implementation_base_revision" "$file" status || true)"
+      current_status="$(contract_scalar_current "$PROJECT_ROOT/$file" status)"
+      base_status="$head_status"
+    elif [ "$mode" = 'changed-files' ]; then
+      local base_revision
+      base_revision="${CODESPEC_CONTRACT_BASE_REVISION:-HEAD}"
+      head_status="$(contract_scalar_from_revision "$base_revision" "$file" status || true)"
       current_status="$(contract_scalar_current "$PROJECT_ROOT/$file" status)"
       base_status="$head_status"
     else
@@ -3410,62 +3415,12 @@ gate_contract_boundary() {
   done < <(
     if [ "$mode" = 'implementation-span' ]; then
       collect_implementation_span_files
+    elif [ "$mode" = 'changed-files' ]; then
+      collect_explicit_changed_files
     else
       collect_staged_files
     fi
   )
-
-  # Check contract consumers consistency with work-item contract_refs
-  local contract_file contract_id consumers wi_file wi_id contract_refs
-  while IFS= read -r contract_file; do
-    [ -f "$PROJECT_ROOT/$contract_file" ] || continue
-    contract_id="$(yaml_scalar "$PROJECT_ROOT/$contract_file" contract_id)"
-    [ -n "$contract_id" ] && [ "$contract_id" != 'null' ] || continue
-
-    # Collect consumers from contract
-    local contract_consumers=()
-    mapfile -t contract_consumers < <(yaml_list "$PROJECT_ROOT/$contract_file" consumers)
-
-    # Verify each consumer actually references this contract
-    for wi_id in "${contract_consumers[@]}"; do
-      [ -n "$wi_id" ] && [ "$wi_id" != 'null' ] || continue
-      wi_file="$PROJECT_ROOT/work-items/${wi_id}.yaml"
-      [ -f "$wi_file" ] || die "contract $contract_file lists consumer $wi_id but work-item file not found"
-
-      local found=0
-      while IFS= read -r ref; do
-        [ -n "$ref" ] && [ "$ref" != 'null' ] || continue
-        if [ "$ref" = "$contract_file" ]; then
-          found=1
-          break
-        fi
-      done < <(yaml_list "$wi_file" contract_refs)
-
-      [ "$found" -eq 1 ] || die "contract $contract_file lists $wi_id as consumer but $wi_id does not reference it in contract_refs"
-    done
-  done < <(find "$PROJECT_ROOT/contracts" -name '*.md' 2>/dev/null || true)
-
-  # Verify work-items that reference contracts are listed as consumers
-  while IFS= read -r wi_file; do
-    [ -f "$wi_file" ] || continue
-    wi_id="$(basename "$wi_file" .yaml)"
-
-    while IFS= read -r ref; do
-      [ -n "$ref" ] && [ "$ref" != 'null' ] || continue
-      [ -f "$PROJECT_ROOT/$ref" ] || continue
-
-      local found=0
-      while IFS= read -r consumer; do
-        [ -n "$consumer" ] && [ "$consumer" != 'null' ] || continue
-        if [ "$consumer" = "$wi_id" ]; then
-          found=1
-          break
-        fi
-      done < <(yaml_list "$PROJECT_ROOT/$ref" consumers)
-
-      [ "$found" -eq 1 ] || die "work-item $wi_id references contract $ref but is not listed in contract consumers"
-    done < <(yaml_list "$wi_file" contract_refs)
-  done < <(find "$PROJECT_ROOT/work-items" -name '*.yaml' 2>/dev/null || true)
 
   log '✓ contract-boundary gate passed'
 }
@@ -3473,14 +3428,13 @@ gate_contract_boundary() {
 gate_trace_consistency() {
   check_appendix_authority
   validate_formal_id_definitions
-  check_design_work_item_acceptance_alignment
   local reqs=()
   local accs=()
   local vos=()
-  local wi_reqs=()
-  local wis=()
-  local wi_vos=()
-  local wi_tcs=()
+  local design_reqs=()
+  local design_accs=()
+  local design_vos=()
+  local design_tcs=()
   local intake_refs=()
   local closure_refs=()
   local testing_accs=()
@@ -3488,10 +3442,10 @@ gate_trace_consistency() {
   mapfile -t reqs < <(collect_spec_ids 'REQ')
   mapfile -t accs < <(collect_spec_ids 'ACC')
   mapfile -t vos < <(collect_spec_ids 'VO')
-  mapfile -t wi_reqs < <(work_item_refs_requirements)
-  mapfile -t wis < <(work_item_refs_acceptance)
-  mapfile -t wi_vos < <(work_item_refs_verification)
-  mapfile -t wi_tcs < <(work_item_refs_test_cases)
+  mapfile -t design_reqs < <(design_refs_requirements)
+  mapfile -t design_accs < <(design_refs_acceptance)
+  mapfile -t design_vos < <(design_refs_verification)
+  mapfile -t design_tcs < <(design_refs_test_cases)
   mapfile -t intake_refs < <(input_intake_refs)
   mapfile -t closure_refs < <(requirements_source_refs)
   mapfile -t testing_accs < <(testing_target_acceptance_ids)
@@ -3516,20 +3470,20 @@ gate_trace_consistency() {
   phase="$(yaml_scalar "$META_FILE" phase)"
   if [ "$phase" = 'Design' ] || [ "$phase" = 'Implementation' ] || [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
     for req in "${reqs[@]}"; do
-      contains_exact_line "$req" "${wi_reqs[@]}" || die "trace gap: ${req} is not referenced by any work item requirement_refs"
+      contains_exact_line "$req" "${design_reqs[@]}" || die "trace gap: ${req} is not referenced by any design.md §7 requirement_refs"
     done
 
     for acc in "${accs[@]}"; do
-      contains_exact_line "$acc" "${wis[@]}" || die "trace gap: ${acc} is not referenced by any work item acceptance_refs"
+      contains_exact_line "$acc" "${design_accs[@]}" || die "trace gap: ${acc} is not referenced by any design.md §7 acceptance_refs"
     done
 
     for vo in "${vos[@]}"; do
-      contains_exact_line "$vo" "${wi_vos[@]}" || die "trace gap: ${vo} is not referenced by any work item verification_refs"
+      contains_exact_line "$vo" "${design_vos[@]}" || die "trace gap: ${vo} is not referenced by any design.md §7 verification_refs"
     done
 
     local tc
     for tc in "${testing_tcs[@]}"; do
-      contains_exact_line "$tc" "${wi_tcs[@]}" || die "trace gap: ${tc} is not referenced by any work item test_case_refs"
+      contains_exact_line "$tc" "${design_tcs[@]}" || die "trace gap: ${tc} is not referenced by any design.md §7 test_case_refs"
     done
   fi
 
@@ -3537,14 +3491,17 @@ gate_trace_consistency() {
   for ref in "${intake_refs[@]}"; do
     contains_exact_line "$ref" "${closure_refs[@]}" || die "trace gap: input_ref ${ref} is not represented in requirements closure"
   done
+  require_declared_source_ref_closure
 
   if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
     [ -f "$TESTING_FILE" ] || die 'testing.md is required in Testing/Deployment phase'
+    local testing_ledger
+    testing_ledger="$(testing_ledger_text)"
     for acc in "${testing_accs[@]}"; do
-      grep -q -E "acceptance_ref: ${acc}$" "$TESTING_FILE" || die "trace gap: ${acc} has no testing record"
+      grep -q -E "acceptance_ref: ${acc}$" <<<"$testing_ledger" || die "trace gap: ${acc} has no testing record"
     done
     for tc in "${testing_tcs[@]}"; do
-      grep -q -E "test_case_ref: ${tc}$|tc_id: ${tc}$" "$TESTING_FILE" || die "trace gap: ${tc} has no testing record"
+      grep -q -E "test_case_ref: ${tc}$|tc_id: ${tc}$" <<<"$testing_ledger" || die "trace gap: ${tc} has no testing record"
     done
   fi
 
@@ -3678,46 +3635,28 @@ gate_verification() {
   [ -f "$TESTING_FILE" ] || die 'missing testing.md'
 
   if [ "$phase" = 'Implementation' ]; then
-    local active=() wi wi_file tc acc priority verification_type required_stage verification_mode
-    mapfile -t active < <(collect_active_work_items)
-    [ "${#active[@]}" -gt 0 ] || die 'Implementation verification requires active_work_items'
+    local tc acc priority verification_type required_stage verification_mode
+    while IFS= read -r tc; do
+      [ -n "$tc" ] || continue
+      acc="$(test_case_scalar "$tc" acceptance_ref)"
+      verification_mode="$(test_case_scalar "$tc" verification_mode)"
+      required_stage="$(test_case_scalar "$tc" required_stage)"
 
-    for wi in "${active[@]}"; do
-      wi_file="$PROJECT_ROOT/work-items/$wi.yaml"
-      [ -f "$wi_file" ] || die "missing work item: $wi_file"
+      if [ "$required_stage" = 'deployment' ] || [ "$verification_mode" != 'automated' ]; then
+        continue
+      fi
 
-      # R10: validate WI completion_level enum
-      local wi_completion_level
-      wi_completion_level="$(yaml_scalar "$wi_file" completion_level)"
-      case "$wi_completion_level" in
-        fixture_contract|in_memory_domain|api_connected|db_persistent|integrated_runtime|owner_verified) ;;
-        *) die "$wi completion_level must be one of fixture_contract|in_memory_domain|api_connected|db_persistent|integrated_runtime|owner_verified (got: ${wi_completion_level:-missing})" ;;
-      esac
+      has_test_case_scope_pass "$tc" branch-local || die "design.md §7 test case ${tc} has no branch-local pass record"
 
-      check_dependency_pass_records "$wi_file"
-
-      while IFS= read -r tc; do
-        [ -n "$tc" ] || continue
-        acc="$(test_case_scalar "$tc" acceptance_ref)"
-        verification_mode="$(test_case_scalar "$tc" verification_mode)"
-        required_stage="$(test_case_scalar "$tc" required_stage)"
-
-        if [ "$required_stage" = 'deployment' ] || [ "$verification_mode" != 'automated' ]; then
-          continue
+      # Check P0 verification_type requirement in Implementation phase
+      priority="$(spec_acceptance_priority "$acc")"
+      verification_type="$(testing_record_latest_scalar_for_tc "$tc" verification_type branch-local)"
+      if [ "$priority" = 'P0' ]; then
+        if [ "$verification_type" != 'automated' ]; then
+          is_placeholder_token "$(test_case_scalar "$tc" automation_exception_reason)" && die "P0 acceptance ${acc} / ${tc} must use automated verification or document automation_exception_reason"
         fi
-
-        has_test_case_scope_pass "$tc" branch-local || die "current work item test case ${tc} has no branch-local pass record"
-
-        # Check P0 verification_type requirement in Implementation phase
-        priority="$(spec_acceptance_priority "$acc")"
-        verification_type="$(testing_record_latest_scalar_for_tc "$tc" verification_type branch-local)"
-        if [ "$priority" = 'P0' ]; then
-          if [ "$verification_type" != 'automated' ]; then
-            is_placeholder_token "$(test_case_scalar "$tc" automation_exception_reason)" && die "P0 acceptance ${acc} / ${tc} must use automated verification or document automation_exception_reason"
-          fi
-        fi
-      done < <(yaml_list "$wi_file" test_case_refs)
-    done
+      fi
+    done < <(design_refs_test_cases)
   fi
 
   if [ "$phase" = 'Testing' ] || [ "$phase" = 'Deployment' ]; then
@@ -3759,9 +3698,9 @@ gate_semantic_handoff() {
   [ "${#evidence_refs[@]}" -gt 0 ] || die 'semantic handoff missing evidence_refs'
 
   if [ "$phase" = 'Implementation' ]; then
-    local wi_refs=()
-    mapfile -t wi_refs < <(printf '%s\n' "$block" | block_list_values work_item_refs | grep -vE '^(|null|none)$' || true)
-    [ "${#wi_refs[@]}" -gt 0 ] || die 'semantic handoff missing work_item_refs'
+    local slice_refs=()
+    mapfile -t slice_refs < <(printf '%s\n' "$block" | block_list_values slice_refs | grep -vE '^(|null|none)$' || true)
+    [ "${#slice_refs[@]}" -gt 0 ] || die 'semantic handoff missing slice_refs'
   fi
 
   if semantic_handoff_requires_unfinished; then
@@ -3944,12 +3883,15 @@ gate_policy_consistency() {
     [ -z "$stale" ] || die "${file#$PROJECT_ROOT/} references stale gate names"
   done
 
-  grep -q 'spec-quality' "$FRAMEWORK_ROOT/templates/phase-review-policy.md" || die 'phase-review-policy template missing spec-quality gate'
-  grep -q 'design-quality' "$FRAMEWORK_ROOT/templates/phase-review-policy.md" || die 'phase-review-policy template missing design-quality gate'
-  grep -q 'test-plan-complete' "$FRAMEWORK_ROOT/templates/phase-review-policy.md" || die 'phase-review-policy template missing test-plan-complete gate'
-  grep -q 'review-quality' "$FRAMEWORK_ROOT/templates/phase-review-policy.md" || die 'phase-review-policy template missing review-quality gate'
-  grep -q 'active-work-items-complete' "$FRAMEWORK_ROOT/templates/phase-review-policy.md" || die 'phase-review-policy template missing active-work-items-complete gate'
-  grep -q 'deployment-plan-ready' "$FRAMEWORK_ROOT/templates/phase-review-policy.md" || die 'phase-review-policy template missing deployment-plan-ready gate'
+  local gate_map="$FRAMEWORK_ROOT/templates/gate-map.yaml"
+  [ -f "$gate_map" ] || die 'missing templates/gate-map.yaml'
+  for transition in start-design start-implementation start-testing start-deployment complete-change; do
+    TRANSITION="$transition" yq eval '.transitions | has(strenv(TRANSITION))' "$gate_map" | grep -qx 'true' || die "gate-map missing transition: $transition"
+  done
+  TRANSITION=start-testing yq eval -r '.transitions[strenv(TRANSITION)].gates[].gate' "$gate_map" | grep -qx 'review-quality' || die 'gate-map start-testing missing review-quality'
+  if [ -f "$FRAMEWORK_ROOT/skills/rfr/SKILL.md" ]; then
+    grep -q 'codespec gate-sequence' "$FRAMEWORK_ROOT/skills/rfr/SKILL.md" || die 'rfr skill must read gate sequences from codespec gate-sequence'
+  fi
 
   log '✓ policy-consistency gate passed'
 }
@@ -3987,9 +3929,6 @@ main() {
       gate_design_quality
       gate_implementation_start
       gate_implementation_readiness_baseline
-      ;;
-    active-work-items-complete)
-      gate_active_work_items_complete
       ;;
     implementation-start)
       gate_implementation_start

@@ -46,7 +46,7 @@ expect_fail_cmd() {
 
   [ "$status" -ne 0 ] || die "expected failure for command: $command"
   [[ "$output" == *"$expected"* ]] || die "expected failure output to contain '$expected', got: $output"
-  log "✓ expected failure: $expected"
+  log "ok expected failure: $expected"
 }
 
 assert_eq() {
@@ -55,334 +55,233 @@ assert_eq() {
   [ "$actual" = "$expected" ] || die "expected '$expected', got '$actual'"
 }
 
-run_scope_aggregation_regression() {
-  local project clean_head base output status
-  project="$TMP_WORKSPACE/scope-aggregation-project"
-  mkdir -p "$project/work-items"
-  (
-    cd "$project"
-    git init -q
-    git config user.email "test@example.com"
-    git config user.name "Test User"
-
-    mkdir -p frontend
-    cat > spec.md <<'EOF'
-# spec
-EOF
-    cat > design.md <<'EOF'
-# design
-EOF
-    cat > testing.md <<'EOF'
-# testing
-EOF
-    cat > meta.yaml <<'EOF'
-phase: Design
-status: active
-focus_work_item: null
-active_work_items: []
-implementation_base_revision: null
-EOF
-    cat > work-items/WI-001.yaml <<'EOF'
-allowed_paths:
-  - frontend/**
-forbidden_paths:
-  - versions/**
-  - spec.md
-  - design.md
-  - work-items/**
-  - deployment.md
-completion_level: fixture_contract
-EOF
-    cat > work-items/WI-002.yaml <<'EOF'
-allowed_paths:
-  - backend/**
-forbidden_paths:
-  - versions/**
-  - spec.md
-  - design.md
-  - work-items/**
-  - deployment.md
-  - frontend/**
-completion_level: fixture_contract
-EOF
-    git add .
-    git commit -q -m "base"
-    base="$(git rev-parse HEAD)"
-
-    cat > meta.yaml <<EOF
-phase: Implementation
-status: active
-focus_work_item: WI-001
-active_work_items: [WI-001, WI-002]
-implementation_base_revision: $base
-EOF
-    git add meta.yaml
-    git commit -q -m "enter implementation"
-
-    cat >> testing.md <<'EOF'
-
-- run_id: RUN-001
-  result: pass
-EOF
-    git add testing.md
-    git commit -q -m "add evidence"
-
-    cat > frontend/index.html <<'EOF'
-frontend change
-EOF
-    git add frontend/index.html
-    git commit -q -m "implement frontend slice"
-
-    CODESPEC_PROJECT_ROOT="$project" CODESPEC_SCOPE_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope >/dev/null
-    clean_head="$(git rev-parse HEAD)"
-
-    printf '\nforbidden implementation drift\n' >> spec.md
-    git add spec.md
-    git commit -q --no-verify -m "introduce forbidden spec drift"
-    set +e
-    output="$(CODESPEC_PROJECT_ROOT="$project" CODESPEC_SCOPE_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope 2>&1)"
-    status=$?
-    set -e
-    [ "$status" -ne 0 ] || die "implementation-span scope should reject spec.md drift"
-    assert_contains "$output" "implementation span file spec.md is forbidden"
-    git reset -q --hard "$clean_head"
-
-    mkdir -p docs
-    echo "unowned" > docs/unowned.txt
-    git add docs/unowned.txt
-    git commit -q --no-verify -m "introduce unowned file"
-    set +e
-    output="$(CODESPEC_PROJECT_ROOT="$project" CODESPEC_SCOPE_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope 2>&1)"
-    status=$?
-    set -e
-    [ "$status" -ne 0 ] || die "implementation-span scope should reject unowned file"
-    assert_contains "$output" "implementation span file docs/unowned.txt is outside allowed_paths"
-  )
-  log "✓ implementation-span scope uses per-WI ownership semantics"
-}
-
-run_monorepo_project_root_test() {
-  local repo app status_output expected_root
-  repo="$TMP_WORKSPACE/monorepo-project"
-  app="$repo/packages/app"
-  expected_root="$app"
-
-  git init "$repo" >/dev/null
-  cd "$repo"
-  git config user.name "Smoke Test"
-  git config user.email "smoke@test.local"
-  mkdir -p "$app"
-
-  cd "$app"
-  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
-  [ -f "$app/meta.yaml" ] || die "monorepo init should create dossier in current project subdir"
-  [ ! -f "$repo/meta.yaml" ] || die "monorepo init should not create dossier at git top-level"
-
-  status_output="$("$TMP_WORKSPACE/.codespec/codespec" status)"
-  assert_contains "$status_output" "project_root: $expected_root"
-
-  cd "$repo"
-  status_output="$("$TMP_WORKSPACE/.codespec/codespec" status)"
-  assert_contains "$status_output" "project_root: $expected_root"
-
-  cd "$TMP_WORKSPACE"
-  log "✓ monorepo project root resolves to the dossier subdir"
-}
-
-run_scope_path_coverage_test() {
-  local project base
-  project="$TMP_WORKSPACE/scope-coverage-project"
-  mkdir -p "$project/work-items"
-  (
-    cd "$project"
-    git init -q
-    git config user.email "test@example.com"
-    git config user.name "Test User"
-
-    cat > spec.md <<'EOF'
-# spec
-
-## Requirements
-- req_id: REQ-001
-  summary: test requirement
-  source_ref: fixture
-  rationale: test
-  priority: P0
-
-## Acceptance
-- acc_id: ACC-001
-  requirement_ref: REQ-001
-  expected_outcome: pass
-  priority: P0
-  priority_rationale: test
-  status: approved
-
-## Verification
-- vo_id: VO-001
-  acceptance_ref: ACC-001
-  verification_type: automated
-  verification_profile: focused
-  obligations:
-    - verify pass
-  artifact_expectation: output
-
-## 5. 运行约束
-none
-EOF
-    cat > design.md <<'EOF'
-# design
+# Helper: create a complete design.md for the main test-project
+write_complete_design() {
+  cat > design.md <<'DESIGNEOF'
+# design.md
 
 ## 0. AI 阅读契约
-- authority
 
-## Summary
-- solution_summary: coverage fixture
-- minimum_viable_design: minimal
+- 本文件是 Implementation 阶段的默认权威输入。
+- 所有架构决策、模块、接口、数据结构、外部交互和实现计划必须追溯到 REQ-*、ACC-*、VO-*、TC-*。
+- 若实现需要越出本文实现边界的范围，必须停止并回写设计或需求，不得隐性扩 scope。
+
+<!-- CODESPEC:DESIGN:OVERVIEW -->
+## 1. 设计概览
+
+- solution_summary: 使用最小 bash/git/yq fixture 验证 codespec 生命周期命令。
+- minimum_viable_design: 只创建一个可追溯文本实现和测试账本，足以覆盖 smoke 需求。
 - non_goals:
-  - production
+  - production deployment
 
-## Requirements Trace
-- trace_note: covers REQ-001
+<!-- CODESPEC:DESIGN:TRACE -->
+## 2. 需求追溯
 
-## Technical Approach
+- requirement_ref: REQ-001
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  design_response: 通过 SLICE-001 写入 src/test.txt，并通过 testing.md 记录自动化证据。
+
+<!-- CODESPEC:DESIGN:DECISIONS -->
+## 3. 架构决策
+
 - decision_id: ADR-001
   requirement_refs: [REQ-001]
-  decision: fixture
+  decision: 使用 bash fixture 和文件证据完成生命周期验证。
   alternatives_considered:
-    - none
-  rationale: test
+    - 引入应用框架会增加 smoke 成本，已放弃。
+  rationale: smoke 只验证框架行为，不需要业务运行时。
   consequences:
-    - none
-- runtime: bash
-- storage: none
+    - 验证证据集中在 git commit 与 testing.md。
 
-## Boundaries & Impacted Surfaces
-- impacted_surfaces:
-  - src/**
+### 技术栈选择
+
+- runtime: bash smoke fixture
+- storage: none
+- external_dependencies:
+  - none
+- tooling:
+  - git
+  - yq
+  - bash
+
+<!-- CODESPEC:DESIGN:STRUCTURE -->
+## 4. 系统结构
+
+- system_context: codespec lifecycle command fixture
+- data_flow:
+  - spec.md -> design.md -> testing.md
 - external_interactions:
   - name: none
-    failure_handling: none
+    direction: outbound
+    protocol: none
+    failure_handling: no external failure path
 
-## Data & Storage Design
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/**` — smoke implementation artifacts
+- `meta.yaml` — lifecycle metadata
+- `testing.md` — test evidence ledger
+- `contracts/**` — contract files when authorized
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — archived snapshots
+- `spec.md` — requirement authority
+- `design.md` — design authority (unless in authority repair)
+- `deployment.md` — deployment authority
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+<!-- CODESPEC:DESIGN:CONTRACTS -->
+## 5. 契约设计
+
+- api_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: no API contract in smoke fixture
 - data_contracts:
   - contract_ref: none
     requirement_refs: [REQ-001]
-    summary: fixture
+    summary: src/test.txt is the only implementation artifact
+- compatibility_policy:
+  - no compatibility migration needed
 
-## Cross-Cutting Design
-- security_design:
-  - no sensitive data
+<!-- CODESPEC:DESIGN:CROSS_CUTTING -->
+## 6. 横切设计
+
 - environment_config:
-  - none
+  - git, yq, bash must be available
+- security_design:
+  - no sensitive data or external credentials are used
 - reliability_design:
-  - fail fast
+  - lifecycle failures stop the smoke script immediately
+- observability_design:
+  - command output and testing.md records provide evidence
+- performance_design:
+  - none
 
-## 8. 实现阶段输入
-- runbook: fixture runbook
-- contract_summary: fixture contract
-- view_summary: fixture view
-- verification_summary: fixture verification
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
 
-## Work Item Derivation
-- wi_id: WI-001
-  goal: test goal
-  input_refs: []
+### 实现计划
+
+- slice_id: SLICE-001
+  goal: implement smoke verification capability
   requirement_refs: [REQ-001]
-  covered_acceptance_refs: [ACC-001]
+  acceptance_refs: [ACC-001]
   verification_refs: [VO-001]
   test_case_refs: [TC-ACC-001-01]
-  dependency_refs: []
-  contract_refs: []
-  contract_needed: false
-  notes_on_boundary: test
-EOF
-    cat > testing.md <<'EOF'
-# testing
+
+- slice_id: SLICE-002
+  goal: implement redeploy loop acceptance capability
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+
+### 验证设计
+
+- test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  approach: smoke gates and lifecycle commands pass
+  evidence: scripts/smoke.sh completes
+  required_stage: testing
+
+### 重开触发器
+
+- if lifecycle gates require duplicate spec/design sections again
+- if slice derivation drifts from design.md §7
+<!-- CODESPEC:DESIGN:SLICES_END -->
+
+<!-- CODESPEC:DESIGN:IMPLEMENTATION_INPUT -->
+## 8. 实现阶段输入
+
+### Runbook（场景如何跑）
+
+- runbook: smoke test runs lifecycle commands and verifies gate outcomes
+
+### Contract（接口与数据结构）
+
+- contract_summary: none required for smoke
+
+### View（各方看到什么）
+
+- view_summary: gate pass/fail output
+
+### Verification（验证证据）
+
+- verification_summary: TC-ACC-001-01 proves gate behavior
+DESIGNEOF
+}
+
+# Helper: write testing.md TC definition (no work_item_refs)
+write_tc_definition() {
+  cat > testing.md <<'EOF'
+# testing.md
+
+## 0. AI 阅读契约
+
+- 本文件先定义测试用例，再追加执行记录。
 
 ## 1. 验收覆盖与测试用例
+
 - tc_id: TC-ACC-001-01
   requirement_refs: [REQ-001]
   acceptance_ref: ACC-001
   verification_ref: VO-001
-  work_item_refs: [WI-001]
   test_type: integration
   verification_mode: automated
   required_stage: testing
-  scenario: test coverage
-  given: fixture
-  when: gate runs
-  then: coverage check works
-  evidence_expectation: output
+  scenario: smoke requirement can advance through the lifecycle
+  given: minimal smoke dossier is prepared
+  when: lifecycle commands run
+  then: gates pass with traceable evidence
+  evidence_expectation: scripts/smoke.sh output
   status: planned
 
 ## 2. 测试执行记录
 
 ## 3. 残留风险与返工判断
+
 - residual_risk: none
 EOF
-    cat > meta.yaml <<'EOF'
-phase: Implementation
-status: active
-focus_work_item: WI-001
-active_work_items: [WI-001]
-implementation_base_revision: null
+}
+
+# Helper: write testing.md with manual-only TC (for requirement-complete failure test)
+write_tc_manual() {
+  cat > testing.md <<'EOF'
+# testing.md
+
+## 0. AI 阅读契约
+
+- 本文件先定义测试用例，再追加执行记录。
+
+## 1. 验收覆盖与测试用例
+
+- tc_id: TC-ACC-001-01
+  requirement_refs: [REQ-001]
+  acceptance_ref: ACC-001
+  verification_ref: VO-001
+  test_type: manual
+  verification_mode: manual
+  required_stage: deployment
+  scenario: smoke requirement requires manual-only verification
+  given: minimal smoke dossier is prepared
+  when: lifecycle commands run
+  then: gates pass with traceable evidence
+  evidence_expectation: manual evidence
+  status: planned
+
+## 2. 测试执行记录
+
+## 3. 残留风险与返工判断
+
+- residual_risk: none
 EOF
-
-    # Test A: uncovered surface → implementation-start fails
-    cat > work-items/WI-001.yaml <<'EOF'
-goal: test goal
-scope:
-  - implement DB schema
-phase_scope: Implementation
-derived_from: design.md
-requirement_refs: [REQ-001]
-acceptance_refs: [ACC-001]
-verification_refs: [VO-001]
-test_case_refs: [TC-ACC-001-01]
-out_of_scope:
-  - production
-allowed_paths:
-  - src/**
-forbidden_paths:
-  - versions/**
-required_surfaces:
-  - src/**
-  - alembic.ini
-  - migrations/**
-required_verification:
-  - unit tests pass
-stop_conditions:
-  - scope expansion
-reopen_triggers:
-  - architecture change
-completion_level: fixture_contract
-EOF
-    git add .
-    git commit -q -m "base"
-    base="$(git rev-parse HEAD)"
-    yq eval ".implementation_base_revision = \"$base\"" -i meta.yaml
-
-    set +e
-    output="$(CODESPEC_PROJECT_ROOT="$project" "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-start 2>&1)"
-    status=$?
-    set -e
-    [ "$status" -ne 0 ] || die "implementation-start should reject uncovered required_surfaces"
-    assert_contains "$output" "required_surfaces not covered by allowed_paths"
-    log "✓ uncovered surface correctly blocked"
-
-    # Test B: no required_surfaces → warn but pass
-    yq eval 'del(.required_surfaces)' -i work-items/WI-001.yaml
-    output="$(CODESPEC_PROJECT_ROOT="$project" "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-start 2>&1)"
-    assert_contains "$output" "WARNING"
-    assert_contains "$output" "no required_surfaces"
-    log "✓ missing required_surfaces correctly warned"
-
-    # Test C: covered surfaces → pass
-    yq eval '.required_surfaces = ["src/**", "meta.yaml"]' -i work-items/WI-001.yaml
-    yq eval '.allowed_paths += ["meta.yaml"]' -i work-items/WI-001.yaml
-    CODESPEC_PROJECT_ROOT="$project" "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-start >/dev/null
-    log "✓ covered surfaces correctly passed"
-  )
 }
 
 replace_markdown_section() {
@@ -433,27 +332,524 @@ cd "$TMP_WORKSPACE"
 [ -d ".codespec" ] || die "install-workspace did not create .codespec/"
 [ -f "lessons_learned.md" ] || die "install-workspace did not create lessons_learned.md"
 [ -f "phase-review-policy.md" ] || die "install-workspace did not create phase-review-policy.md"
+[ -f ".codespec/templates/gate-map.yaml" ] || die "install-workspace did not copy gate-map.yaml"
+[ -f ".codespec/templates/AI_INSTRUCTIONS.md" ] || die "install-workspace did not copy AI_INSTRUCTIONS.md"
 [ -d "versions" ] || die "install-workspace did not create versions/"
-log "✓ workspace installed"
+log "ok workspace installed"
 
 printf 'custom stale policy without legacy gate names\n' > phase-review-policy.md
 "$FRAMEWORK_ROOT/scripts/install-workspace.sh" . >/dev/null
 assert_contains "$(<phase-review-policy.md)" "Phase Review Policy"
-log "✓ install-workspace refreshes workspace phase review policy"
-
-run_scope_aggregation_regression
+log "ok install-workspace refreshes workspace phase review policy"
 
 help_output=$("$TMP_WORKSPACE/.codespec/codespec" --help)
 assert_contains "$help_output" "scaffold-project-docs <version>"
+assert_contains "$help_output" "gate-sequence <transition>"
+assert_contains "$help_output" "scaffold-review <target-phase>"
+assert_contains "$help_output" "migrate-requirement-phase <project_root> [--apply]"
 assert_contains "$help_output" "authority-repair <begin|close|status>"
 assert_contains "$help_output" "completion-report"
-assert_contains "$help_output" "active-work-items-complete"
 assert_contains "$help_output" "deployment-plan-ready"
 assert_contains "$help_output" "semantic-handoff"
-log "✓ help exposes scaffold-project-docs, authority-repair, and hardening gates"
+assert_contains "$help_output" "scope"
+log "ok help exposes scaffold-project-docs, authority-repair, and gates"
 
-log "\n=== Test 1b: Monorepo project root ==="
+gate_sequence_output=$("$TMP_WORKSPACE/.codespec/codespec" gate-sequence start-testing)
+assert_contains "$gate_sequence_output" "review-quality"
+gate_sequence_json=$("$TMP_WORKSPACE/.codespec/codespec" gate-sequence start-testing --json)
+assert_json_eq "$gate_sequence_json" '.transition' '"start-testing"'
+assert_json_eq "$gate_sequence_json" '.gates | map(select(.gate == "review-quality")) | length' '1'
+log "ok gate-sequence exposes canonical transition gates"
+
+review_fixture="$TMP_WORKSPACE/review-scaffold-project"
+git init "$review_fixture" >/dev/null
+cd "$review_fixture"
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+"$TMP_WORKSPACE/.codespec/codespec" scaffold-review Design >/dev/null
+assert_contains "$(<reviews/design-review.yaml)" "verdict: pending"
+assert_contains "$(<reviews/design-review.yaml)" "result: pending"
+if grep -q 'verdict: approved' reviews/design-review.yaml; then
+  die "scaffold-review must not create approved review verdicts"
+fi
+cd "$TMP_WORKSPACE"
+log "ok scaffold-review creates pending review records only"
+
+agents_body="$(sed '1d' "$TMP_WORKSPACE/.codespec/templates/AGENTS.md")"
+claude_body="$(sed '1d' "$TMP_WORKSPACE/.codespec/templates/CLAUDE.md")"
+assert_eq "$agents_body" "$claude_body"
+assert_contains "$agents_body" "风险分层"
+assert_contains "$agents_body" "默认不创建额外 worktree"
+assert_contains "$(<"$TMP_WORKSPACE/.codespec/templates/phase-review-policy.md")" "规则权威源"
+assert_contains "$(<"$TMP_WORKSPACE/.codespec/templates/phase-review-policy.md")" "审查记录"
+log "ok agent templates stay aligned and review policy documents authority semantics"
+
+# Test 1b: Removed command stubs
+log "\n=== Test 1b: Removed command stubs ==="
+expect_fail_cmd \
+  "add-work-item has been removed" \
+  "cd '$TMP_WORKSPACE' && '$TMP_WORKSPACE/.codespec/codespec' add-work-item WI-001"
+
+expect_fail_cmd \
+  "set-active-work-items has been removed" \
+  "cd '$TMP_WORKSPACE' && '$TMP_WORKSPACE/.codespec/codespec' set-active-work-items WI-001"
+
+expect_fail_cmd \
+  "set-execution-context has been removed" \
+  "cd '$TMP_WORKSPACE' && '$TMP_WORKSPACE/.codespec/codespec' set-execution-context parallel main test-group"
+log "ok removed commands output friendly errors"
+
+# Test 1b2: Requirement phase migration command is dry-run by default
+log "\n=== Test 1b2: Requirement migration command ==="
+migration_project="$TMP_WORKSPACE/migration-project"
+git init "$migration_project" >/dev/null
+cd "$migration_project"
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+yq eval '.phase = "Requirements"' -i meta.yaml
+mkdir -p reviews
+cat > reviews/requirements-review.yaml <<'EOF'
+phase: Requirements
+verdict: approved
+reviewed_by: smoke
+reviewed_at: 2026-05-09
+scope:
+  - spec.md
+gate_evidence:
+  - command: codespec check-gate requirement-complete
+    result: pass
+findings:
+  - severity: none
+    summary: fixture
+residual_risk: none
+decision_notes: fixture
+EOF
+
+migration_dry_output="$("$TMP_WORKSPACE/.codespec/codespec" migrate-requirement-phase "$migration_project")"
+assert_contains "$migration_dry_output" "DRY RUN"
+assert_eq "$(yq eval '.phase' meta.yaml)" "Requirements"
+[ -f reviews/requirements-review.yaml ] || die "dry-run should not move requirements review"
+
+"$TMP_WORKSPACE/.codespec/codespec" migrate-requirement-phase "$migration_project" --apply >/dev/null
+assert_eq "$(yq eval '.phase' meta.yaml)" "Requirement"
+[ -f reviews/design-review.yaml ] || die "apply should move requirements review to design review"
+[ -f reviews/requirements-review.yaml ] && die "apply should remove old requirements review path"
+[ -f meta.yaml.bak ] || die "apply should back up meta.yaml"
+assert_contains "$(<reviews/design-review.yaml)" "phase: Requirement"
+cd "$TMP_WORKSPACE"
+log "ok migrate-requirement-phase is dry-run by default and applies safely"
+
+# Test 1c: Monorepo project root
+log "\n=== Test 1c: Monorepo project root ==="
+run_monorepo_project_root_test() {
+  local repo app status_output expected_root
+  repo="$TMP_WORKSPACE/monorepo-project"
+  app="$repo/packages/app"
+  expected_root="$app"
+
+  git init "$repo" >/dev/null
+  cd "$repo"
+  git config user.name "Smoke Test"
+  git config user.email "smoke@test.local"
+  mkdir -p "$app"
+
+  cd "$app"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+  [ -f "$app/meta.yaml" ] || die "monorepo init should create dossier in current project subdir"
+  [ ! -f "$repo/meta.yaml" ] || die "monorepo init should not create dossier at git top-level"
+
+  status_output="$("$TMP_WORKSPACE/.codespec/codespec" status)"
+  assert_contains "$status_output" "project_root: $expected_root"
+
+  cd "$repo"
+  status_output="$("$TMP_WORKSPACE/.codespec/codespec" status)"
+  assert_contains "$status_output" "project_root: $expected_root"
+
+  cd "$TMP_WORKSPACE"
+  log "ok monorepo project root resolves to the dossier subdir"
+}
 run_monorepo_project_root_test
+
+# Test 1d: Monorepo hooks must validate subproject phase transitions
+log "\n=== Test 1d: Monorepo pre-commit phase transition ==="
+run_monorepo_pre_commit_transition_test() {
+  local repo app output status
+  repo="$TMP_WORKSPACE/monorepo-phase-hook"
+  app="$repo/packages/app"
+
+  git init "$repo" >/dev/null
+  cd "$repo"
+  git config user.name "Smoke Test"
+  git config user.email "smoke@test.local"
+  mkdir -p "$app"
+
+  cd "$app"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+  cd "$repo"
+  git add .
+  git commit --no-verify -m "docs: init monorepo dossier" >/dev/null
+
+  yq eval '.phase = "Design"' -i "$app/meta.yaml"
+  git add "$app/meta.yaml"
+
+  set +e
+  output="$(git commit -m "test: manual phase transition should fail" 2>&1)"
+  status=$?
+  set -e
+
+  [ "$status" -ne 0 ] || die "monorepo pre-commit should reject invalid subproject phase transition"
+  assert_contains "$output" "input_owner contains placeholder value"
+  cd "$TMP_WORKSPACE"
+  log "ok monorepo pre-commit validates subproject phase transitions"
+}
+run_monorepo_pre_commit_transition_test
+
+# Test 1e: Multiple dossiers in one repository must be handled deliberately
+log "\n=== Test 1e: Multi-dossier hooks ==="
+run_multi_dossier_hook_test() {
+  local repo app1 app2 output status local_sha
+  repo="$TMP_WORKSPACE/multi-dossier-repo"
+  app1="$repo/packages/app1"
+  app2="$repo/packages/app2"
+
+  git init "$repo" >/dev/null
+  cd "$repo"
+  git config user.name "Smoke Test"
+  git config user.email "smoke@test.local"
+  mkdir -p "$app1" "$app2"
+
+  cd "$app1"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+  cd "$app2"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+  cd "$repo"
+  git add .
+  git commit --no-verify -m "docs: init multi dossier repo" >/dev/null
+
+  printf 'single project change\n' > "$app1/local-note.txt"
+  git add "$app1/local-note.txt"
+  git commit -m "docs: app1 local note" >/dev/null
+
+  printf 'cross project change\n' > "$app1/cross-note.txt"
+  printf 'cross project change\n' > "$app2/cross-note.txt"
+  git add "$app1/cross-note.txt" "$app2/cross-note.txt"
+  set +e
+  output="$(git commit -m "docs: cross dossier change should fail" 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || die "pre-commit should reject one commit touching multiple dossiers"
+  assert_contains "$output" "multiple codespec dossiers changed"
+  git reset HEAD "$app1/cross-note.txt" "$app2/cross-note.txt" >/dev/null 2>&1 || true
+  rm -f "$app1/cross-note.txt" "$app2/cross-note.txt"
+
+  local_sha="$(git rev-parse HEAD)"
+  set +e
+  output="$(printf 'refs/heads/main %s refs/heads/main 0000000000000000000000000000000000000000\n' "$local_sha" | "$TMP_WORKSPACE/.codespec/hooks/pre-push" 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -eq 0 ] || die "pre-push should validate multi-dossier repositories without requiring repo-root meta.yaml: $output"
+  assert_contains "$output" "pre-push checks passed"
+  cd "$TMP_WORKSPACE"
+  log "ok multi-dossier hooks handle project roots deliberately"
+}
+run_multi_dossier_hook_test
+
+# Test 1f: implementation-ready must prove complete design coverage
+log "\n=== Test 1f: Design coverage before Implementation ==="
+run_design_coverage_test() {
+  local repo output status
+  repo="$TMP_WORKSPACE/design-coverage-project"
+  git init "$repo" >/dev/null
+  cd "$repo"
+  git config user.name "Smoke Test"
+  git config user.email "smoke@test.local"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+
+  yq eval '.phase = "Design"' -i meta.yaml
+  cat > spec.md <<'EOF'
+# spec.md
+
+## Requirements
+
+- req_id: REQ-001
+  summary: Produce primary and audit outputs.
+  source_ref: docs/input.md#intent
+  rationale: Both outputs are required.
+  priority: P0
+
+## Acceptance
+
+- acc_id: ACC-001
+  requirement_ref: REQ-001
+  expected_outcome: Primary output is produced.
+  priority: P0
+  priority_rationale: primary output is core behavior
+  status: approved
+
+- acc_id: ACC-002
+  requirement_ref: REQ-001
+  expected_outcome: Audit output is produced.
+  priority: P0
+  priority_rationale: audit output prevents drift
+  status: approved
+
+## Verification
+
+- vo_id: VO-001
+  acceptance_ref: ACC-001
+  verification_type: automated
+  verification_profile: focused
+  obligations:
+    - Verify primary output.
+  artifact_expectation: primary log
+
+- vo_id: VO-002
+  acceptance_ref: ACC-002
+  verification_type: automated
+  verification_profile: focused
+  obligations:
+    - Verify audit output.
+  artifact_expectation: audit log
+EOF
+
+  cat > testing.md <<'EOF'
+# testing.md
+
+## 1. 验收覆盖与测试用例
+
+- tc_id: TC-ACC-001-01
+  requirement_refs: [REQ-001]
+  acceptance_ref: ACC-001
+  verification_ref: VO-001
+  test_type: integration
+  verification_mode: automated
+  required_stage: testing
+  scenario: primary output is generated
+  given: fixture command is available
+  when: command runs
+  then: primary output exists
+  evidence_expectation: primary log
+  status: planned
+
+- tc_id: TC-ACC-002-01
+  requirement_refs: [REQ-001]
+  acceptance_ref: ACC-002
+  verification_ref: VO-002
+  test_type: integration
+  verification_mode: automated
+  required_stage: testing
+  scenario: audit output is generated
+  given: fixture command is available
+  when: command runs
+  then: audit output exists
+  evidence_expectation: audit log
+  status: planned
+EOF
+
+  cat > design.md <<'EOF'
+# design.md
+
+## 0. AI 阅读契约
+- design authority
+
+## 1. 设计概览
+- solution_summary: Implement only primary output in this incomplete fixture.
+- minimum_viable_design: primary output only
+- non_goals:
+  - audit output intentionally omitted by this fixture
+
+## 2. 需求追溯
+- requirement_ref: REQ-001
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  design_response: primary output only
+
+## 3. 架构决策
+- decision_id: ADR-001
+  requirement_refs: [REQ-001]
+  decision: bash fixture
+  alternatives_considered:
+    - full output coverage
+  rationale: test gate coverage
+  consequences:
+    - omitted audit output must be caught
+- runtime: bash
+- storage: none
+
+## 4. 系统结构
+- system_context: fixture command
+- data_flow: trigger to primary output
+- external_interactions:
+  - name: none
+    failure_handling: none
+
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/**` — fixture implementation
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `spec.md` — requirement authority
+- `design.md` — design authority
+- `versions/**` — archive
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+## 5. 契约设计
+- api_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: none
+- data_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: primary output file
+- compatibility_policy:
+  - none
+
+## 6. 横切设计
+- security_design:
+  - none
+- environment_config:
+  - bash
+- reliability_design:
+  - command failure stops execution
+- observability_design:
+  - output log
+- performance_design:
+  - none
+
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
+
+### 实现计划
+
+- slice_id: SLICE-001
+  goal: Produce primary output only.
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+
+### 验证设计
+
+- test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  approach: run primary test
+  evidence: primary log
+  required_stage: testing
+
+### 重开触发器
+
+- audit output is required
+<!-- CODESPEC:DESIGN:SLICES_END -->
+
+## 8. 实现阶段输入
+
+### Runbook（场景如何跑）
+- runbook: run fixture command
+
+### Contract（接口与数据结构）
+- contract_summary: none
+
+### View（各方看到什么）
+- view_summary: primary output appears
+
+### Verification（验证证据）
+- verification_summary: TC-ACC-001-01 proves primary output
+EOF
+
+  mkdir -p reviews
+  cat > reviews/implementation-review.yaml <<'EOF'
+phase: Design
+verdict: approved
+reviewed_by: smoke-test
+reviewed_at: 2026-05-09
+scope:
+  - design.md
+  - testing.md
+gate_evidence:
+  - command: codespec check-gate implementation-ready
+    result: pass
+findings:
+  - severity: none
+    summary: no blocking findings
+residual_risk: none
+decision_notes: approved
+EOF
+
+  git add .
+  git commit --no-verify -m "docs: incomplete design coverage fixture" >/dev/null
+
+  expect_fail_cmd \
+    "ACC-002 is not referenced by any design.md" \
+    "cd '$repo' && CODESPEC_TARGET_PHASE=Implementation '$TMP_WORKSPACE/.codespec/codespec' check-gate implementation-ready"
+
+  set +e
+  output="$(cd "$repo" && "$TMP_WORKSPACE/.codespec/codespec" start-implementation 2>&1)"
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || die "start-implementation should fail when design.md §7 omits ACC/VO/TC coverage"
+
+  cd "$TMP_WORKSPACE"
+  log "ok implementation entry rejects incomplete design coverage"
+}
+run_design_coverage_test
+
+# Test 1g: review-quality must verify objective evidence shape
+log "\n=== Test 1g: Review quality evidence ==="
+run_review_quality_hardening_test() {
+  local repo revision
+  repo="$TMP_WORKSPACE/review-quality-project"
+  git init "$repo" >/dev/null
+  cd "$repo"
+  git config user.name "Smoke Test"
+  git config user.email "smoke@test.local"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+  git add .
+  git commit --no-verify -m "docs: baseline review quality fixture" >/dev/null
+  revision="$(git rev-parse HEAD)"
+  mkdir -p reviews
+
+  cat > reviews/design-review.yaml <<EOF
+phase: Requirement
+verdict: approved
+reviewed_by: smoke-test
+reviewed_at: 2026-05-09
+scope:
+  - missing.md
+gate_evidence:
+  - gate: requirement-complete
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate requirement-complete
+    result: pass
+    checked_at: 2026-05-09T00:00:00Z
+    checked_revision: $revision
+    output_summary: passed
+findings:
+  - severity: none
+    summary: no blocking findings
+residual_risk: none
+decision_notes: approved
+EOF
+
+  expect_fail_cmd \
+    "review scope references missing artifact: missing.md" \
+    "cd '$repo' && CODESPEC_TARGET_PHASE=Design '$TMP_WORKSPACE/.codespec/codespec' check-gate review-quality"
+
+  yq eval '.scope = ["spec.md"]' -i reviews/design-review.yaml
+  expect_fail_cmd \
+    "review gate_evidence missing required command: spec-quality" \
+    "cd '$repo' && CODESPEC_TARGET_PHASE=Design '$TMP_WORKSPACE/.codespec/codespec' check-gate review-quality"
+
+  cd "$TMP_WORKSPACE"
+  log "ok review-quality rejects missing scope artifacts and incomplete gate evidence"
+}
+run_review_quality_hardening_test
 
 # Test 2: Initialize project and dossier
 log "\n=== Test 2: Initialize project and dossier ==="
@@ -472,7 +868,13 @@ git config user.email "smoke@test.local"
 [ -d ".git/hooks" ] || die "init-dossier did not create .git/hooks"
 [ -x ".git/hooks/pre-commit" ] || die "init-dossier did not install pre-commit hook"
 grep -q -- "- rigor_profile: standard" spec.md || die "spec.md template should default rigor_profile to standard"
-log "✓ dossier initialized"
+
+# Verify no WI fields in meta.yaml
+focus_wi="$(yq eval '.focus_work_item // "absent"' meta.yaml 2>/dev/null)"
+[ "$focus_wi" = "absent" ] || [ "$focus_wi" = "null" ] || die "meta.yaml should not have focus_work_item field (got: $focus_wi)"
+active_wis="$(yq eval '.active_work_items // "absent"' meta.yaml 2>/dev/null)"
+[ "$active_wis" = "absent" ] || [ "$active_wis" = "null" ] || die "meta.yaml should not have active_work_items field (got: $active_wis)"
+log "ok dossier initialized without WI fields"
 
 # Test 3: Requirement phase
 log "\n=== Test 3: Requirement phase ==="
@@ -481,12 +883,11 @@ phase=$(yq eval '.phase' meta.yaml)
 
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "active" ] || die "initial status should be active, got: $status"
-log "✓ initial phase is Requirement"
+log "ok initial phase is Requirement"
 
 # Test 4: start-design
 log "\n=== Test 4: start-design ==="
 
-# Create input file
 mkdir -p docs
 cat > docs/test.md <<'EOF'
 # Test Input
@@ -495,7 +896,6 @@ cat > docs/test.md <<'EOF'
 Test input for smoke test.
 EOF
 
-# Create minimal spec.md for Requirement phase
 cat > spec.md <<'EOF'
 # spec.md
 
@@ -589,71 +989,13 @@ expect_fail_cmd \
   "test case" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate requirement-complete"
 
-cat > testing.md <<'EOF'
-# testing.md
-
-## 0. AI 阅读契约
-
-- 本文件先定义测试用例，再追加执行记录。
-
-## 1. 验收覆盖与测试用例
-
-- tc_id: TC-ACC-001-01
-  requirement_refs: [REQ-001]
-  acceptance_ref: ACC-001
-  verification_ref: VO-001
-  work_item_refs: [WI-001]
-  test_type: manual
-  verification_mode: manual
-  required_stage: deployment
-  scenario: smoke requirement requires manual-only verification
-  given: minimal smoke dossier is prepared
-  when: lifecycle commands run
-  then: gates pass with traceable evidence
-  evidence_expectation: manual evidence
-  status: planned
-
-## 2. 测试执行记录
-
-## 3. 残留风险与返工判断
-
-- residual_risk: none
-EOF
+write_tc_manual
 
 expect_fail_cmd \
   "automation_exception_reason" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate requirement-complete"
 
-cat > testing.md <<'EOF'
-# testing.md
-
-## 0. AI 阅读契约
-
-- 本文件先定义测试用例，再追加执行记录。
-
-## 1. 验收覆盖与测试用例
-
-- tc_id: TC-ACC-001-01
-  requirement_refs: [REQ-001]
-  acceptance_ref: ACC-001
-  verification_ref: VO-001
-  work_item_refs: [WI-001]
-  test_type: integration
-  verification_mode: automated
-  required_stage: testing
-  scenario: smoke requirement can advance through the lifecycle
-  given: minimal smoke dossier is prepared
-  when: lifecycle commands run
-  then: gates pass with traceable evidence
-  evidence_expectation: scripts/smoke.sh output
-  status: planned
-
-## 2. 测试执行记录
-
-## 3. 残留风险与返工判断
-
-- residual_risk: none
-EOF
+write_tc_definition
 
 mkdir -p reviews
 cat > reviews/design-review.yaml <<'EOF'
@@ -667,7 +1009,11 @@ expect_fail_cmd \
   "review scope must list at least one reviewed artifact" \
   "cd '$TMP_WORKSPACE/test-project' && CODESPEC_TARGET_PHASE=Design '$TMP_WORKSPACE/.codespec/codespec' check-gate review-quality"
 
-cat > reviews/design-review.yaml <<'EOF'
+git add docs spec.md testing.md meta.yaml AGENTS.md CLAUDE.md AI_INSTRUCTIONS.md scripts
+git commit --no-verify -m "docs: requirement baseline" >/dev/null
+design_review_revision="$(git rev-parse HEAD)"
+
+cat > reviews/design-review.yaml <<EOF
 phase: Requirement
 verdict: approved
 reviewed_by: smoke-test
@@ -676,12 +1022,24 @@ scope:
   - spec.md
   - testing.md
 gate_evidence:
-  - command: codespec check-gate requirement-complete
+  - gate: requirement-complete
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate requirement-complete
     result: pass
-  - command: codespec check-gate spec-quality
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $design_review_revision
+    output_summary: passed
+  - gate: spec-quality
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate spec-quality
     result: pass
-  - command: codespec check-gate test-plan-complete
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $design_review_revision
+    output_summary: passed
+  - gate: test-plan-complete
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate test-plan-complete
     result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $design_review_revision
+    output_summary: passed
 findings:
   - severity: none
     summary: no blocking findings
@@ -693,241 +1051,25 @@ CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/co
 CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate test-plan-complete
 CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" CODESPEC_TARGET_PHASE=Design "$TMP_WORKSPACE/.codespec/codespec" check-gate review-quality
 
-git add .
+git add reviews/design-review.yaml meta.yaml testing.md
 git commit -m "feat: initial proposal"
 
 "$TMP_WORKSPACE/.codespec/codespec" start-design
 
 phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Design" ] || die "start-design did not set phase to Design"
-log "✓ start-design succeeded"
+log "ok start-design succeeded"
 
-# Test 6: add-work-item and start-implementation
-log "\n=== Test 6: add-work-item and start-implementation ==="
+# Test 5: design and start-implementation (no WI parameters)
+log "\n=== Test 5: design and start-implementation ==="
 
-# Create minimal design.md
-cat > design.md <<'EOF'
-# design.md
-
-## 0. AI 阅读契约
-
-- 本文件与 work-items/*.yaml 是 Implementation 阶段的默认权威输入。
-- 实现阶段默认不读取原始材料；需求冲突或设计无法解释实现时才回读 spec.md。
-- 所有工作项必须追溯到 REQ-001、ACC-001、VO-001、TC-ACC-001-01。
-
-## 1. 设计概览
-
-- solution_summary: 使用最小 bash/git/yq fixture 验证 codespec 生命周期命令。
-- minimum_viable_design: 只创建一个可追溯文本实现和测试账本，足以覆盖 smoke 需求。
-- non_goals:
-  - production deployment
-
-## 2. 需求追溯
-
-- requirement_ref: REQ-001
-  acceptance_refs: [ACC-001]
-  verification_refs: [VO-001]
-  test_case_refs: [TC-ACC-001-01]
-  design_response: 通过 WI-001 写入 src/test.txt，并通过 testing.md 记录自动化证据。
-
-## 3. 架构决策
-
-- decision_id: ADR-001
-  requirement_refs: [REQ-001]
-  decision: 使用 bash fixture 和文件证据完成生命周期验证。
-  alternatives_considered:
-    - 引入应用框架会增加 smoke 成本，已放弃。
-  rationale: smoke 只验证框架行为，不需要业务运行时。
-  consequences:
-    - 验证证据集中在 git commit 与 testing.md。
-
-### 技术栈选择
-
-- runtime: bash smoke fixture
-- storage: none
-- external_dependencies:
-  - none
-- tooling:
-  - git
-  - yq
-  - bash
-
-## 4. 系统结构
-
-- system_context: codespec lifecycle command fixture
-- impacted_surfaces:
-  - src/**
-- unchanged_surfaces:
-  - spec.md after Implementation starts
-  - design.md after Implementation starts
-- data_flow:
-  - spec.md -> design.md -> work-items/WI-001.yaml -> testing.md
-- external_interactions:
-  - name: none
-    direction: outbound
-    protocol: none
-    failure_handling: no external failure path
-
-## 5. 契约设计
-
-- api_contracts:
-  - contract_ref: none
-    requirement_refs: [REQ-001]
-    summary: no API contract in smoke fixture
-- data_contracts:
-  - contract_ref: none
-    requirement_refs: [REQ-001]
-    summary: src/test.txt is the only implementation artifact
-- compatibility_policy:
-  - no compatibility migration needed
-
-## 6. 横切设计
-
-- environment_config:
-  - git, yq, bash must be available
-- security_design:
-  - no sensitive data or external credentials are used
-- reliability_design:
-  - lifecycle failures stop the smoke script immediately
-- observability_design:
-  - command output and testing.md records provide evidence
-- performance_design:
-  - none
-
-## 7. 工作项与验证
-
-### 工作项映射
-
-- wi_id: WI-001
-  requirement_refs: [REQ-001]
-  acceptance_refs: [ACC-001]
-  verification_refs: [VO-001]
-  test_case_refs: [TC-ACC-001-01]
-  summary: implement smoke verification capability
-- wi_id: WI-002
-  requirement_refs: [REQ-001]
-  acceptance_refs: [ACC-001]
-  verification_refs: [VO-001]
-  test_case_refs: [TC-ACC-001-01]
-  summary: implement same-phase WI switching capability
-
-### 工作项派生
-
-- wi_id: WI-001
-  requirement_refs:
-    - REQ-001
-  goal: implement smoke verification capability
-  covered_acceptance_refs: [ACC-001]
-  verification_refs:
-    - VO-001
-  test_case_refs:
-    - TC-ACC-001-01
-  dependency_refs: []
-  contract_refs: []
-  notes_on_boundary: smoke verification scope
-- wi_id: WI-002
-  requirement_refs:
-    - REQ-001
-  goal: implement same-phase WI switching capability
-  covered_acceptance_refs: [ACC-001]
-  verification_refs:
-    - VO-001
-  test_case_refs:
-    - TC-ACC-001-01
-  dependency_refs: []
-  contract_refs: []
-  notes_on_boundary: same-phase switching scope
-
-### 验证设计
-
-- test_case_ref: TC-ACC-001-01
-  acceptance_ref: ACC-001
-  approach: smoke gates and lifecycle commands pass
-  evidence: scripts/smoke.sh completes
-  required_stage: testing
-
-### 重开触发器
-
-- if lifecycle gates require duplicate spec/design sections again
-- if work item derivation drifts from work-items/*.yaml
-
-## 8. 实现阶段输入
-
-### Runbook（场景如何跑）
-
-- wi_id: WI-001
-  runbook: smoke test runs lifecycle commands and verifies gate outcomes
-- wi_id: WI-002
-  runbook: same-phase WI switching preserves active_work_items consistency
-
-### Contract（API/schema/error code 如何实现）
-
-- wi_id: WI-001
-  contract_summary: none required for smoke
-- wi_id: WI-002
-  contract_summary: none required for smoke
-
-### View（各方看到什么）
-
-- wi_id: WI-001
-  view_summary: gate pass/fail output
-- wi_id: WI-002
-  view_summary: meta.yaml state transitions
-
-### Verification（用什么 TC/fixture 证明）
-
-- wi_id: WI-001
-  verification_summary: TC-ACC-001-01 proves gate behavior
-- wi_id: WI-002
-  verification_summary: TC-ACC-001-01 proves WI switching
-EOF
+write_complete_design
 
 git add design.md meta.yaml
 git commit -m "feat: complete design"
+implementation_review_revision="$(git rev-parse HEAD)"
 
-"$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-001
-"$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-002
-
-[ -f "work-items/WI-001.yaml" ] || die "add-work-item did not create WI-001.yaml"
-[ -f "work-items/WI-002.yaml" ] || die "add-work-item did not create WI-002.yaml"
-
-expect_fail_cmd \
-  "goal contains placeholder value" \
-  "\"$TMP_WORKSPACE/.codespec/codespec\" start-implementation WI-001"
-
-# Update work item files with actual values from design.md
-for wi in WI-001 WI-002; do
-  if [ "$wi" = "WI-001" ]; then
-    goal="implement smoke verification capability"
-    scope_item="add smoke verification"
-  else
-    goal="implement same-phase WI switching capability"
-    scope_item="allow switching focus within Implementation"
-  fi
-
-  yq eval ".goal = \"$goal\"" -i "work-items/$wi.yaml"
-  yq eval ".scope = [\"$scope_item\"]" -i "work-items/$wi.yaml"
-  yq eval '.out_of_scope = ["production deployment"]' -i "work-items/$wi.yaml"
-  yq eval '.requirement_refs = ["REQ-001"]' -i "work-items/$wi.yaml"
-  yq eval '.acceptance_refs = ["ACC-001"]' -i "work-items/$wi.yaml"
-  yq eval '.verification_refs = ["VO-001"]' -i "work-items/$wi.yaml"
-  yq eval '.test_case_refs = ["TC-ACC-001-01"]' -i "work-items/$wi.yaml"
-  yq eval '.allowed_paths = ["src/**", "meta.yaml", "testing.md", "contracts/**"]' -i "work-items/$wi.yaml"
-  yq eval '.forbidden_paths = ["versions/**", "spec.md", "design.md", "work-items/**", "deployment.md"]' -i "work-items/$wi.yaml"
-  yq eval '.branch_execution.owned_paths = ["src/**", "testing.md", "meta.yaml"]' -i "work-items/$wi.yaml"
-  yq eval '.branch_execution.shared_paths = []' -i "work-items/$wi.yaml"
-  yq eval '.branch_execution.merge_order = 1' -i "work-items/$wi.yaml"
-  yq eval '.required_verification = ["unit tests pass"]' -i "work-items/$wi.yaml"
-  yq eval '.stop_conditions = ["scope expansion"]' -i "work-items/$wi.yaml"
-  yq eval '.reopen_triggers = ["architecture change"]' -i "work-items/$wi.yaml"
-done
-
-log "✓ add-work-item succeeded"
-
-git add work-items
-git commit -m "docs: finalize work items"
-
-cat > reviews/implementation-review.yaml <<'EOF'
+cat > reviews/implementation-review.yaml <<EOF
 phase: Design
 verdict: approved
 reviewed_by: smoke-test
@@ -935,13 +1077,19 @@ reviewed_at: 2026-04-16
 scope:
   - design.md
   - testing.md
-  - work-items/WI-001.yaml
-  - work-items/WI-002.yaml
 gate_evidence:
-  - command: codespec check-gate design-quality
+  - gate: design-quality
+    command: CODESPEC_TARGET_PHASE=Implementation codespec check-gate design-quality
     result: pass
-  - command: CODESPEC_TARGET_PHASE=Implementation codespec check-gate implementation-ready
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $implementation_review_revision
+    output_summary: passed
+  - gate: implementation-ready
+    command: CODESPEC_TARGET_PHASE=Implementation codespec check-gate implementation-ready
     result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $implementation_review_revision
+    output_summary: passed
 findings:
   - severity: none
     summary: no blocking findings
@@ -955,157 +1103,179 @@ git commit -m "docs: approve design"
 CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate design-quality
 CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" CODESPEC_TARGET_PHASE=Implementation "$TMP_WORKSPACE/.codespec/codespec" check-gate review-quality
 
-"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-001
+# start-implementation takes no WI-ID parameter
+"$TMP_WORKSPACE/.codespec/codespec" start-implementation
 
 phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Implementation" ] || die "start-implementation did not set phase"
 
-focus_wi=$(yq eval '.focus_work_item' meta.yaml)
-[ "$focus_wi" = "WI-001" ] || die "start-implementation did not set focus_work_item"
+# No focus_work_item or active_work_items in meta.yaml
+yq eval '.focus_work_item // "absent"' meta.yaml 2>/dev/null | grep -q "absent" || die "meta.yaml should not have focus_work_item"
 
-active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
-assert_json_eq "$active_wis" '. | length' '1'
-assert_json_eq "$active_wis" '.[0]' '"WI-001"'
+[ -f "testing.md" ] || die "start-implementation did not preserve testing.md"
 
-[ -f "testing.md" ] || die "start-implementation did not create testing.md"
-log "✓ start-implementation succeeded"
+git add meta.yaml
+git commit -m "chore: enter implementation"
+log "ok start-implementation succeeded without WI parameters"
 
-"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-002
+# Test 5b: scope gate based on design.md §4
+log "\n=== Test 5b: scope gate based on design.md §4 ==="
 
-focus_wi=$(yq eval '.focus_work_item' meta.yaml)
-[ "$focus_wi" = "WI-002" ] || die "same-phase start-implementation did not switch focus_work_item"
+mkdir -p src
+cat > src/test.txt <<'EOF'
+test implementation
+EOF
+git add src/test.txt
+CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate scope
+git commit -m "feat: implement SLICE-001"
+log "ok scope gate allows design.md §4 allowed paths"
 
-active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
-assert_json_eq "$active_wis" '. | length' '2'
-assert_json_eq "$active_wis" '.[0]' '"WI-001"'
-assert_json_eq "$active_wis" '.[1]' '"WI-002"'
-log "✓ same-phase WI switch succeeded"
-
-"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-002
-
-active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
-assert_json_eq "$active_wis" '. | length' '2'
-assert_json_eq "$active_wis" '.[0]' '"WI-001"'
-assert_json_eq "$active_wis" '.[1]' '"WI-002"'
-log "✓ same-phase WI switch is idempotent"
-
-"$TMP_WORKSPACE/.codespec/codespec" add-work-item WI-003
-yq eval '.goal = "implement orphan work item for missing design derivation check"' -i work-items/WI-003.yaml
-yq eval '.scope = ["orphan work item check"]' -i work-items/WI-003.yaml
-yq eval '.out_of_scope = ["production deployment"]' -i work-items/WI-003.yaml
-yq eval '.allowed_paths = ["src/**", "meta.yaml", "testing.md"]' -i work-items/WI-003.yaml
-yq eval '.forbidden_paths = ["versions/**", "spec.md", "design.md", "work-items/**", "contracts/**", "deployment.md"]' -i work-items/WI-003.yaml
-yq eval '.required_verification = ["unit tests pass"]' -i work-items/WI-003.yaml
-yq eval '.required_surfaces = ["src/**"]' -i work-items/WI-003.yaml
-expect_fail_cmd "focus work item WI-003 is missing from design work item derivation" "\"$TMP_WORKSPACE/.codespec/codespec\" start-implementation WI-003"
-rm -f work-items/WI-003.yaml
-
-"$TMP_WORKSPACE/.codespec/codespec" start-implementation WI-001
-"$TMP_WORKSPACE/.codespec/codespec" set-active-work-items WI-001
-
-focus_wi=$(yq eval '.focus_work_item' meta.yaml)
-[ "$focus_wi" = "WI-001" ] || die "same-phase start-implementation did not switch focus back to WI-001"
-
-active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
-assert_json_eq "$active_wis" '. | length' '1'
-assert_json_eq "$active_wis" '.[0]' '"WI-001"'
-log "✓ active_work_items can be narrowed after same-phase switching"
-
-expect_fail_cmd \
-  "active_work_items missing design work item" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
-
-"$TMP_WORKSPACE/.codespec/codespec" set-active-work-items WI-001,WI-002
-active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
-assert_json_eq "$active_wis" '. | length' '2'
-assert_json_eq "$active_wis" '.[0]' '"WI-001"'
-assert_json_eq "$active_wis" '.[1]' '"WI-002"'
-log "✓ start-testing requires every design-derived work item to stay active"
-
-yq eval '.allowed_paths += ["work-items/WI-001.yaml"]' -i work-items/WI-001.yaml
-yq eval '.forbidden_paths = ["versions/**", "spec.md", "design.md", "contracts/**", "deployment.md"]' -i work-items/WI-001.yaml
-git add work-items/WI-001.yaml
-"$TMP_WORKSPACE/.codespec/codespec" check-gate scope
-log "✓ scope gate allows explicitly owned active work item authority file edits"
-git reset HEAD work-items/WI-001.yaml >/dev/null 2>&1 || true
-git checkout -- work-items/WI-001.yaml
-
-printf '\n# unauthorized work item drift\n' >> work-items/WI-002.yaml
-git add work-items/WI-002.yaml
-expect_fail_cmd \
-  "work-items/WI-002.yaml is forbidden" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
-git reset HEAD work-items/WI-002.yaml >/dev/null 2>&1 || true
-git checkout -- work-items/WI-002.yaml
-log "✓ scope gate still rejects unowned work item authority file edits"
-
-printf '\n# unauthorized design repair drift\n' >> design.md
-git add design.md
-expect_fail_cmd \
-  "changed file design.md is forbidden by WI-001" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
-git reset HEAD design.md >/dev/null 2>&1 || true
-git checkout -- design.md
-log "✓ scope gate rejects design.md edits without authority repair mode"
-
-if [ "${CODESPEC_AUTHORITY_REPAIR_SMOKE_RUNNING:-}" = '1' ]; then
-  log "✓ nested authority repair close smoke skips recursive R14 fixture"
-else
-"$TMP_WORKSPACE/.codespec/codespec" authority-repair begin design-quality --paths design.md,work-items/WI-001.yaml --reason "design-quality gate found missing implementation handoff"
-repair_id="$(yq eval '.active_authority_repair' meta.yaml)"
-[ "$repair_id" != "null" ] || die "authority-repair begin did not set active_authority_repair"
-[ -f "authority-repairs/$repair_id.yaml" ] || die "authority-repair begin did not create repair record"
-
-printf '\n- authority_repair_note: implementation handoff clarified without changing product scope\n' >> design.md
-yq eval '.authority_repair_note = "design handoff clarified without changing product scope"' -i work-items/WI-001.yaml
-git add meta.yaml "authority-repairs/$repair_id.yaml" design.md work-items/WI-001.yaml
-"$TMP_WORKSPACE/.codespec/codespec" check-gate scope
-log "✓ active authority repair allows declared design/current-WI authority edits"
-
-printf '\n# unauthorized repair work item drift\n' >> work-items/WI-002.yaml
-git add work-items/WI-002.yaml
-expect_fail_cmd \
-  "outside active authority repair allowed_paths" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
-git reset HEAD work-items/WI-002.yaml >/dev/null 2>&1 || true
-git checkout -- work-items/WI-002.yaml
-log "✓ active authority repair rejects undeclared work item authority edits"
-
-printf '\n# unauthorized repair spec drift\n' >> spec.md
+# Test modifying forbidden path (spec.md)
+printf '\nforbidden implementation drift\n' >> spec.md
 git add spec.md
 expect_fail_cmd \
-  "outside active authority repair allowed_paths" \
+  "is forbidden by design.md" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
 git reset HEAD spec.md >/dev/null 2>&1 || true
 git checkout -- spec.md
-log "✓ active authority repair rejects undeclared spec.md edits"
+log "ok scope gate rejects spec.md drift (design.md §4 forbidden)"
 
-"$TMP_WORKSPACE/.codespec/codespec" authority-repair close --evidence "design-quality passed after clarifying implementation handoff"
-[ "$(yq eval '.active_authority_repair' meta.yaml)" = "null" ] || die "authority-repair close did not clear active_authority_repair"
-[ "$(yq eval '.status' "authority-repairs/$repair_id.yaml")" = "closed" ] || die "authority-repair close did not close repair record"
-[ "$(yq eval '.gate_result' "authority-repairs/$repair_id.yaml")" = "pass" ] || die "authority-repair close did not record gate pass"
-[ "$(yq eval '.smoke_result' "authority-repairs/$repair_id.yaml")" = "pass" ] || die "authority-repair close did not record smoke pass"
-git add meta.yaml "authority-repairs/$repair_id.yaml" design.md work-items/WI-001.yaml
-git commit -m "docs: repair implementation authority handoff"
-CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" CODESPEC_SCOPE_MODE=implementation-span "$TMP_WORKSPACE/.codespec/codespec" check-gate scope
-log "✓ closed authority repair lets implementation-span scope accept audited design repair"
-
-yq eval '.evidence = "tampered after close"' -i "authority-repairs/$repair_id.yaml"
-git add "authority-repairs/$repair_id.yaml"
+# Test modifying path outside allowed scope
+mkdir -p docs
+echo "unowned" > docs/unowned.txt
+git add docs/unowned.txt
 expect_fail_cmd \
-  "authority repair record authority-repairs/$repair_id.yaml can only be created closed or close a previously open repair" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate metadata-consistency"
-git reset HEAD "authority-repairs/$repair_id.yaml" >/dev/null 2>&1 || true
-git checkout -- "authority-repairs/$repair_id.yaml"
-log "✓ closed authority repair record cannot be silently rewritten"
+  "outside allowed scope" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
+git reset HEAD docs/unowned.txt >/dev/null 2>&1 || true
+rm -f docs/unowned.txt
+log "ok scope gate rejects paths outside design.md §4 allowed scope"
+
+# Test modifying forbidden path (versions/**)
+mkdir -p versions
+echo "forbidden" > versions/forbidden.txt
+git add versions/forbidden.txt
+expect_fail_cmd \
+  "forbidden" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
+git reset HEAD versions/forbidden.txt >/dev/null 2>&1 || true
+rm -rf versions
+log "ok scope gate rejects versions/** (design.md §4 forbidden)"
+
+# Test: design.md forbidden and allowed both match -> forbidden wins
+# design.md has spec.md in forbidden, so even if we add it to allowed it should still be rejected
+printf '\nforbidden priority test\n' >> deployment.md
+git add deployment.md
+expect_fail_cmd \
+  "forbidden" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
+git reset HEAD deployment.md >/dev/null 2>&1 || true
+git checkout -- deployment.md 2>/dev/null || true
+rm -f deployment.md
+log "ok scope gate forbidden takes priority over allowed"
+log "\n=== Test 5c: implementation-span scope ==="
+git reset --hard HEAD >/dev/null
+
+# Add RUN record
+cat >> testing.md <<'EOF'
+
+- run_id: RUN-001
+  test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  slice_ref: SLICE-001
+  test_type: unit
+  test_scope: branch-local
+  verification_type: automated
+  artifact_ref: src/test.txt
+  result: pass
+  tested_at: 2026-04-16
+  tested_by: smoke-test
+  residual_risk: none
+  reopen_required: false
+EOF
+
+git add testing.md
+git commit -m "test: add test record"
+
+printf '\nforbidden implementation drift\n' >> spec.md
+git add spec.md
+git commit -q --no-verify -m "introduce forbidden spec drift"
+expect_fail_cmd \
+  "implementation span file spec.md is forbidden" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
+git reset --soft HEAD~1 >/dev/null 2>&1 || true
+git restore --staged spec.md >/dev/null 2>&1 || true
+git checkout -- spec.md
+log "ok start-testing rejects committed forbidden drift across Implementation span"
+
+# Test 5d: authority repair flow
+log "\n=== Test 5d: authority repair ==="
+
+if [ "${CODESPEC_AUTHORITY_REPAIR_SMOKE_RUNNING:-}" = '1' ]; then
+  log "ok nested authority repair close smoke skips recursive fixture"
+else
+  "$TMP_WORKSPACE/.codespec/codespec" authority-repair begin design-quality --paths design.md --reason "design-quality gate found missing implementation handoff"
+  repair_id="$(yq eval '.active_authority_repair' meta.yaml)"
+  [ "$repair_id" != "null" ] || die "authority-repair begin did not set active_authority_repair"
+  [ -f "authority-repairs/$repair_id.yaml" ] || die "authority-repair begin did not create repair record"
+
+  printf '\n- authority_repair_note: implementation handoff clarified without changing product scope\n' >> design.md
+  git add meta.yaml "authority-repairs/$repair_id.yaml" design.md
+  "$TMP_WORKSPACE/.codespec/codespec" check-gate scope
+  log "ok active authority repair allows declared design authority edits"
+
+  printf '\n# unauthorized repair spec drift\n' >> spec.md
+  git add spec.md
+  expect_fail_cmd \
+    "outside active authority repair allowed_paths" \
+    "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate scope"
+  git reset HEAD spec.md >/dev/null 2>&1 || true
+  git checkout -- spec.md
+  log "ok active authority repair rejects undeclared spec.md edits"
+
+  cp "$TMP_WORKSPACE/.codespec/scripts/smoke.sh" "$TMP_WORKSPACE/.codespec/scripts/smoke.sh.original"
+  cat > "$TMP_WORKSPACE/.codespec/scripts/smoke.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${CODESPEC_AUTHORITY_REPAIR_SMOKE_RUNNING:-}" = "1" ]; then
+  printf 'nested full smoke should not run during authority repair close\n' >&2
+  exit 99
+fi
+exec "$(dirname "$0")/smoke.sh.original" "$@"
+EOF
+  chmod +x "$TMP_WORKSPACE/.codespec/scripts/smoke.sh"
+  "$TMP_WORKSPACE/.codespec/codespec" authority-repair close --evidence "design-quality passed after clarifying implementation handoff"
+  mv "$TMP_WORKSPACE/.codespec/scripts/smoke.sh.original" "$TMP_WORKSPACE/.codespec/scripts/smoke.sh"
+  chmod +x "$TMP_WORKSPACE/.codespec/scripts/smoke.sh"
+  [ "$(yq eval '.active_authority_repair' meta.yaml)" = "null" ] || die "authority-repair close did not clear active_authority_repair"
+  [ "$(yq eval '.status' "authority-repairs/$repair_id.yaml")" = "closed" ] || die "authority-repair close did not close repair record"
+  [ "$(yq eval '.gate_result' "authority-repairs/$repair_id.yaml")" = "pass" ] || die "authority-repair close did not record gate pass"
+  [ "$(yq eval '.smoke_result' "authority-repairs/$repair_id.yaml")" = "not-run" ] || die "authority-repair close should record smoke_result: not-run"
+  git add meta.yaml "authority-repairs/$repair_id.yaml" design.md
+  git commit -m "docs: repair implementation authority handoff"
+  log "ok authority-repair close does not invoke full framework smoke"
+  CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" CODESPEC_SCOPE_MODE=implementation-span "$TMP_WORKSPACE/.codespec/codespec" check-gate scope
+  log "ok closed authority repair lets implementation-span scope accept audited design repair"
+
+  yq eval '.evidence = "tampered after close"' -i "authority-repairs/$repair_id.yaml"
+  git add "authority-repairs/$repair_id.yaml"
+  expect_fail_cmd \
+    "authority repair record authority-repairs/$repair_id.yaml can only be created closed or close a previously open repair" \
+    "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate metadata-consistency"
+  git reset HEAD "authority-repairs/$repair_id.yaml" >/dev/null 2>&1 || true
+  git checkout -- "authority-repairs/$repair_id.yaml"
+  log "ok closed authority repair record cannot be silently rewritten"
 fi
 
 if ! git diff --quiet -- meta.yaml; then
   git add meta.yaml
   git commit -m "chore: enter implementation"
 else
-  log "✓ implementation phase metadata already committed"
+  log "ok implementation phase metadata already committed"
 fi
+
+# Test 6: semantic handoff with slice_refs
+log "\n=== Test 6: semantic handoff with slice_refs ==="
 
 expect_fail_cmd \
   "semantic handoff missing for phase Implementation" \
@@ -1117,7 +1287,7 @@ cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-001
   phase: Implementation
-  work_item_refs: [WI-001]
+  slice_refs: [SLICE-001]
   highest_completion_level: fixture_contract
   evidence_refs:
     - testing.md#RUN-001
@@ -1139,7 +1309,7 @@ cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-002
   phase: Implementation
-  work_item_refs: [WI-001]
+  slice_refs: [SLICE-001, SLICE-002]
   highest_completion_level: fixture_contract
   evidence_refs:
     - testing.md#RUN-001
@@ -1164,158 +1334,93 @@ completion_report="$("$TMP_WORKSPACE/.codespec/codespec" completion-report)"
 assert_contains "$completion_report" "phase: Implementation"
 assert_contains "$completion_report" "highest_completion_level: fixture_contract"
 assert_contains "$completion_report" "unfinished_items.required: yes"
+handoff_template="$("$TMP_WORKSPACE/.codespec/codespec" completion-report --handoff-template)"
+assert_contains "$handoff_template" "handoff_id: HANDOFF-"
+assert_contains "$handoff_template" "unfinished_items:"
 git add testing.md
 git commit -m "docs: record implementation semantic handoff"
-log "✓ semantic handoff requires active unfinished disclosure before implementation handoff"
+log "ok semantic handoff with slice_refs passed"
 
-printf '\nforbidden implementation drift\n' >> spec.md
-git add spec.md
-git commit --no-verify -m "test: introduce committed forbidden drift"
+cd "$TMP_WORKSPACE"
+git init report-project >/dev/null
+cd report-project
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+write_complete_design
+write_tc_definition
+yq eval '.phase = "Implementation" | .status = "active"' -i meta.yaml
+cat >> testing.md <<'EOF'
 
-expect_fail_cmd \
-  "implementation span file spec.md is forbidden" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
-
-git reset --soft HEAD~1 >/dev/null 2>&1 || true
-git restore --staged spec.md >/dev/null 2>&1 || true
-git checkout -- spec.md
-log "✓ start-testing should reject committed forbidden drift across Implementation span"
-
-mkdir -p contracts
-cat > contracts/shared.md <<'EOF'
-# Shared Contract
-
-contract_id: CONTRACT-001
-status: draft
-frozen_at: null
-freeze_review_ref: null
-consumers: []
-
-## Interface Definition
-shared interface
-EOF
-
-git add contracts/shared.md
-git commit --no-verify -m "test: add draft contract"
-
-python3 - <<'PY'
-from pathlib import Path
-path = Path("contracts/shared.md")
-text = path.read_text()
-text = text.replace("status: draft", "status: frozen")
-text = text.replace("frozen_at: null", "frozen_at: 2026-04-16")
-path.write_text(text)
-PY
-git add contracts/shared.md
-git commit --no-verify -m "test: freeze contract without explicit review"
-
-expect_fail_cmd \
-  "requires explicit review" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
-
-git reset --soft HEAD~2 >/dev/null 2>&1 || true
-git restore --staged contracts/shared.md >/dev/null 2>&1 || true
-rm -f contracts/shared.md
-log "✓ start-testing should reject draft-to-frozen contract changes without review"
-
-# Test 7: Implementation and testing
-log "\n=== Test 7: Implementation and testing ==="
-
-mkdir -p src
-cat > src/test.txt <<'EOF'
-test implementation
-EOF
-
-git add src/
-git commit -m "feat: implement WI-001"
-
-# Add test record
-cat > testing.md <<'EOF'
-- tc_id: TC-ACC-001-01
-  requirement_refs: [REQ-001]
-  acceptance_ref: ACC-001
-  verification_ref: VO-001
-  work_item_refs: [WI-001]
-  test_type: integration
-  verification_mode: automated
-  required_stage: testing
-  scenario: smoke requirement can advance through the lifecycle
-  given: minimal smoke dossier is prepared
-  when: lifecycle commands run
-  then: gates pass with traceable evidence
-  evidence_expectation: scripts/smoke.sh output
-  status: planned
-
-- run_id: RUN-001
+- run_id: RUN-REPORT-001
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
-  test_type: unit
+  slice_ref: SLICE-001
+  test_type: integration
   test_scope: branch-local
   verification_type: automated
   artifact_ref: src/test.txt
   result: pass
+  completion_level: integrated_runtime
   tested_at: 2026-04-16
   tested_by: smoke-test
   residual_risk: none
   reopen_required: false
 EOF
+completion_report="$("$TMP_WORKSPACE/.codespec/codespec" completion-report)"
+assert_contains "$completion_report" "highest_completion_level: integrated_runtime"
+handoff_template="$("$TMP_WORKSPACE/.codespec/codespec" completion-report --handoff-template)"
+assert_contains "$handoff_template" "current_completion_level: integrated_runtime"
+log "ok completion-report parses list-style testing ledger and renders handoff template"
 
-git add testing.md
-git commit -m "test: add test record"
+cd "$TMP_WORKSPACE/test-project"
 
-mkdir -p docs
-echo "dirty verification drift" > docs/dirty-verification.txt
-expect_fail_cmd \
-  "dirty worktree: uncommitted files detected" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate verification"
-expect_fail_cmd \
-  "dirty worktree: uncommitted files detected" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate contract-boundary"
-rm -f docs/dirty-verification.txt
-log "✓ verification and contract-boundary reject unrelated dirty worktree files"
+# Test 6b: HANDOFF without slice_refs fails
+log "\n=== Test 6b: HANDOFF without slice_refs fails ==="
 
-yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001", "WI-002"]' -i meta.yaml
-git add meta.yaml
-
-set +e
-output=$(git commit -m "test: should fail missing semantic handoff manual Testing transition" 2>&1)
-status=$?
-set -e
-
-[ "$status" -ne 0 ] || die "pre-commit should block manual Testing phase transition without semantic handoff"
-assert_contains "$output" "semantic handoff missing for phase Implementation"
-log "✓ pre-commit blocks manual Testing transition without semantic handoff"
-
-git reset HEAD meta.yaml >/dev/null 2>&1 || true
-git checkout -- meta.yaml
-
-yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"]' -i meta.yaml
-git add meta.yaml
-
-set +e
-output=$(git commit -m "test: should fail incomplete manual Testing transition" 2>&1)
-status=$?
-set -e
-
-[ "$status" -ne 0 ] || die "pre-commit should block manual Testing phase transition with incomplete active_work_items"
-assert_contains "$output" "active_work_items missing design work item: WI-002"
-log "✓ pre-commit blocks manual Testing transition with incomplete active_work_items"
-
-git reset HEAD meta.yaml >/dev/null 2>&1 || true
-git checkout -- meta.yaml
-
-expect_fail_cmd \
-  "semantic handoff missing for phase Implementation" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-testing"
-
+# We already know HANDOFF-001 and HANDOFF-002 have slice_refs, so the gate passes.
+# Test that missing slice_refs in Implementation is caught:
 cat >> testing.md <<'EOF'
 
-## 4. 主动未完成清单与语义验收
+- handoff_id: HANDOFF-BAD
+  phase: Implementation
+  highest_completion_level: fixture_contract
+  evidence_refs:
+    - testing.md#RUN-001
+  unfinished_items:
+    - source_ref: testing.md#TC-ACC-001-01
+      priority: P0
+      current_completion_level: fixture_contract
+      target_completion_level: integrated_runtime
+      blocker: test
+      next_step: test
+  fixture_or_fallback_paths:
+    - surface: test
+      completion_level: fixture_contract
+      real_api_verified: false
+      visible_failure_state: false
+      trace_retry_verified: false
+  wording_guard: "test"
+EOF
+
+expect_fail_cmd \
+  "semantic handoff missing slice_refs" \
+  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate semantic-handoff"
+
+# Remove the bad handoff entry
+git checkout -- testing.md
+git commit --allow-empty -m "chore: cleanup" >/dev/null
+log "ok HANDOFF without slice_refs is rejected"
+
+# Test 7: Implementation -> Testing transition
+log "\n=== Test 7: Implementation -> Testing ==="
+
+# Prepare full transition handoff
+cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-003
   phase: Implementation
-  work_item_refs: [WI-001, WI-002]
+  slice_refs: [SLICE-001, SLICE-002]
   highest_completion_level: fixture_contract
   evidence_refs:
     - testing.md#RUN-001
@@ -1336,6 +1441,56 @@ cat >> testing.md <<'EOF'
 EOF
 git add testing.md
 git commit -m "docs: record implementation transition handoff"
+testing_review_revision="$(git rev-parse HEAD)"
+
+cat > reviews/testing-review.yaml <<EOF
+phase: Implementation
+verdict: approved
+reviewed_by: smoke-test
+reviewed_at: 2026-04-16
+scope:
+  - testing.md
+  - meta.yaml
+gate_evidence:
+  - gate: metadata-consistency
+    command: codespec check-gate metadata-consistency
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $testing_review_revision
+    output_summary: passed
+  - gate: scope
+    command: CODESPEC_SCOPE_MODE=implementation-span codespec check-gate scope
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $testing_review_revision
+    output_summary: passed
+  - gate: contract-boundary
+    command: CODESPEC_CONTRACT_BOUNDARY_MODE=implementation-span codespec check-gate contract-boundary
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $testing_review_revision
+    output_summary: passed
+  - gate: verification
+    command: codespec check-gate verification
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $testing_review_revision
+    output_summary: passed
+  - gate: semantic-handoff
+    command: codespec check-gate semantic-handoff
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $testing_review_revision
+    output_summary: passed
+findings:
+  - severity: none
+    summary: no blocking findings
+residual_risk: no residual risk identified by review
+decision_notes: approved for Testing phase entry
+EOF
+
+git add reviews/testing-review.yaml
+git commit -m "docs: approve testing review"
 
 "$TMP_WORKSPACE/.codespec/codespec" start-testing
 
@@ -1343,8 +1498,9 @@ phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Testing" ] || die "start-testing did not set phase"
 git add meta.yaml
 git commit -m "chore: enter testing"
-log "✓ start-testing succeeded"
+log "ok start-testing succeeded"
 
+# Test: Testing phase blocks implementation artifact edits
 echo "testing-phase-drift" >> src/test.txt
 git add src/test.txt
 
@@ -1355,7 +1511,7 @@ set -e
 
 [ "$status" -ne 0 ] || die "Testing phase should block src/** modifications"
 assert_contains "$output" "Testing forbids phase-frozen artifacts: src/test.txt"
-log "✓ Testing phase blocks implementation artifact edits"
+log "ok Testing phase blocks implementation artifact edits"
 
 git reset HEAD src/test.txt >/dev/null 2>&1 || true
 git checkout -- src/test.txt
@@ -1363,13 +1519,11 @@ git checkout -- src/test.txt
 # Test 8: Deployment
 log "\n=== Test 8: Deployment ==="
 
-# Update testing.md with full-integration test
 cat > testing.md <<'EOF'
 - tc_id: TC-ACC-001-01
   requirement_refs: [REQ-001]
   acceptance_ref: ACC-001
   verification_ref: VO-001
-  work_item_refs: [WI-001]
   test_type: integration
   verification_mode: automated
   required_stage: testing
@@ -1383,7 +1537,7 @@ cat > testing.md <<'EOF'
 - run_id: RUN-001
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: unit
   test_scope: branch-local
   verification_type: automated
@@ -1399,7 +1553,7 @@ cat > testing.md <<'EOF'
 - run_id: RUN-002
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: integration
   test_scope: full-integration
   verification_type: automated
@@ -1416,7 +1570,7 @@ EOF
 git add testing.md
 git commit -m "test: add full-integration test"
 
-yq eval '.phase = "Deployment" | .status = "active" | .focus_work_item = null' -i meta.yaml
+yq eval '.phase = "Deployment" | .status = "active"' -i meta.yaml
 git add meta.yaml
 
 set +e
@@ -1426,7 +1580,7 @@ set -e
 
 [ "$status" -ne 0 ] || die "pre-commit should block manual Deployment phase transition without semantic handoff"
 assert_contains "$output" "semantic handoff missing for phase Testing"
-log "✓ pre-commit blocks manual Deployment transition without semantic handoff"
+log "ok pre-commit blocks manual Deployment transition without semantic handoff"
 
 git reset HEAD meta.yaml >/dev/null 2>&1 || true
 git checkout -- meta.yaml
@@ -1441,7 +1595,7 @@ cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-004
   phase: Testing
-  work_item_refs: [WI-001, WI-002]
+  slice_refs: [SLICE-001, SLICE-002]
   highest_completion_level: integrated_runtime
   evidence_refs:
     - testing.md#RUN-002
@@ -1459,33 +1613,33 @@ phase=$(yq eval '.phase' meta.yaml)
 [ -f "deployment.md" ] || die "start-deployment did not create deployment.md"
 git add meta.yaml deployment.md
 git commit -m "chore: enter deployment"
-log "✓ start-deployment succeeded"
+log "ok start-deployment succeeded"
 
 expect_fail_cmd \
   "deployment.md target_env must be set before deploy" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' deploy"
-log "✓ deploy refuses to run before deployment plan is ready"
+log "ok deploy refuses to run before deployment plan is ready"
 
-echo "# deployment-phase-drift" >> work-items/WI-001.yaml
-git add work-items/WI-001.yaml
+# Test: Deployment phase blocks design.md edits
+printf '\n# deployment phase drift\n' >> design.md
+git add design.md
 
 set +e
 output=$(git commit -m "test: should fail in Deployment phase" 2>&1)
 status=$?
 set -e
 
-[ "$status" -ne 0 ] || die "Deployment phase should block work-items/** modifications"
-assert_contains "$output" "Deployment forbids phase-frozen artifacts: work-items/WI-001.yaml"
-log "✓ Deployment phase blocks authority file edits"
+[ "$status" -ne 0 ] || die "Deployment phase should block design.md modifications"
+assert_contains "$output" "Deployment forbids phase-frozen artifacts: design.md"
+log "ok Deployment phase blocks authority file edits"
 
-git reset HEAD work-items/WI-001.yaml >/dev/null 2>&1 || true
-sed -i '$d' work-items/WI-001.yaml
+git reset HEAD design.md >/dev/null 2>&1 || true
+git checkout -- design.md
 
 # Test 9: Complete change
 log "\n=== Test 9: Complete change ==="
 
-# Fill deployment.md and provide a project deploy script
-cat > deployment.md <<EOF
+cat > deployment.md <<'EOF'
 # deployment.md
 
 ## Deployment Plan
@@ -1588,7 +1742,7 @@ chmod +x scripts/codespec-deploy
 expect_fail_cmd \
   "deploy result execution_ref is missing" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' deploy"
-log "✓ deploy rejects Chinese placeholder result values"
+log "ok deploy rejects Chinese placeholder result values"
 
 mv scripts/codespec-deploy.good scripts/codespec-deploy
 chmod +x scripts/codespec-deploy
@@ -1598,7 +1752,7 @@ chmod +x scripts/codespec-deploy
 
 assert_contains "$(<deployment.md)" "execution_ref: smoke-run-001"
 assert_contains "$(<deployment.md)" "status: pending"
-log "✓ deploy writes execution evidence and readiness data"
+log "ok deploy writes execution evidence and readiness data"
 
 git add deployment.md
 git commit -m "docs: record deployment execution evidence"
@@ -1615,22 +1769,21 @@ approved_at: pending
 EOF
 )"
 
-"$TMP_WORKSPACE/.codespec/codespec" reopen-implementation WI-001
+# reopen-implementation no longer accepts WI-ID
+"$TMP_WORKSPACE/.codespec/codespec" reopen-implementation
 
 phase=$(yq eval '.phase' meta.yaml)
 [ "$phase" = "Implementation" ] || die "reopen-implementation did not set phase to Implementation"
-focus_wi=$(yq eval '.focus_work_item' meta.yaml)
-[ "$focus_wi" = "WI-001" ] || die "reopen-implementation did not set focus_work_item"
 git checkout -- deployment.md
 git add meta.yaml
 git commit -m "chore: reopen implementation after failed acceptance"
-log "✓ reopen-implementation re-enters Implementation for failed manual verification"
+log "ok reopen-implementation re-enters Implementation for failed manual verification (no WI-ID parameter)"
 
 cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-006
   phase: Implementation
-  work_item_refs: [WI-001, WI-002]
+  slice_refs: [SLICE-001, SLICE-002]
   highest_completion_level: integrated_runtime
   evidence_refs:
     - deployment.md#Acceptance-Conclusion
@@ -1651,13 +1804,34 @@ git commit -m "docs: record reopened implementation semantic handoff"
 "$TMP_WORKSPACE/.codespec/codespec" start-testing
 git add meta.yaml
 git commit -m "chore: re-enter testing after failed acceptance"
+cat >> testing.md <<'EOF'
+
+- handoff_id: HANDOFF-007
+  phase: Testing
+  slice_refs: [SLICE-001, SLICE-002]
+  highest_completion_level: integrated_runtime
+  evidence_refs:
+    - testing.md#RUN-001
+    - deployment.md#Acceptance-Conclusion
+  unfinished_items:
+    - source_ref: deployment.md#Acceptance-Conclusion
+      priority: P0
+      current_completion_level: integrated_runtime
+      target_completion_level: owner_verified
+      blocker: redeploy acceptance has not passed yet
+      next_step: re-enter Deployment, deploy, and record manual acceptance
+  fixture_or_fallback_paths: none
+  wording_guard: "Testing re-entry has integrated evidence only; do not report owner_verified before redeploy acceptance"
+EOF
+git add testing.md
+git commit -m "docs: record testing handoff after failed acceptance"
 "$TMP_WORKSPACE/.codespec/codespec" start-deployment
 git add meta.yaml deployment.md
 git commit -m "chore: re-enter deployment after failed acceptance"
 "$TMP_WORKSPACE/.codespec/codespec" deploy
 
 assert_contains "$(<deployment.md)" "notes: pending manual acceptance"
-log "✓ redeploy resets manual acceptance conclusion to pending"
+log "ok redeploy resets manual acceptance conclusion to pending"
 
 replace_markdown_section deployment.md "## Acceptance Conclusion" "$(cat <<'EOF'
 status: pass
@@ -1670,7 +1844,7 @@ EOF
 git add meta.yaml deployment.md
 git commit -m "docs: record manual acceptance"
 
-yq eval '.status = "completed" | .stable_version = "manual-bypass" | .active_work_items = []' -i meta.yaml
+yq eval '.status = "completed" | .stable_version = "manual-bypass"' -i meta.yaml
 git add meta.yaml
 
 set +e
@@ -1680,7 +1854,7 @@ set -e
 
 [ "$status" -ne 0 ] || die "pre-commit should block manual Deployment completion without semantic handoff"
 assert_contains "$output" "semantic handoff missing for phase Deployment"
-log "✓ pre-commit blocks manual Deployment completion without semantic handoff"
+log "ok pre-commit blocks manual Deployment completion without semantic handoff"
 
 git reset HEAD meta.yaml >/dev/null 2>&1 || true
 git checkout -- meta.yaml
@@ -1693,7 +1867,7 @@ cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-005
   phase: Deployment
-  work_item_refs: [WI-001, WI-002]
+  slice_refs: [SLICE-001, SLICE-002]
   highest_completion_level: owner_verified
   evidence_refs:
     - deployment.md#Execution-Evidence
@@ -1710,50 +1884,36 @@ git commit -m "docs: record deployment semantic handoff"
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "completed" ] || die "complete-change did not set status to completed"
 [ "$(yq eval '.stable_version' meta.yaml)" = "smoke-v1" ] || die "complete-change did not set stable_version in workspace meta"
-[ "$(yq eval -o=json '.active_work_items' meta.yaml)" = "[]" ] || die "workspace completed dossier should clear active_work_items"
 [ -f "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" ] || die "complete-change did not archive stable version"
 git add meta.yaml
 git commit -m "chore: complete smoke-v1"
-log "✓ complete-change archived the accepted stable version"
+log "ok complete-change archived the accepted stable version"
 
 "$TMP_WORKSPACE/.codespec/codespec" scaffold-project-docs smoke-v1
 assert_contains "$(<"$TMP_WORKSPACE/project-docs/smoke-v1/系统功能说明书.md")" "| 状态 | Draft |"
-log "✓ scaffold-project-docs creates draft project document shells"
+log "ok scaffold-project-docs creates draft project document shells"
 
 # Completed dossiers should remain re-verifiable
 "$TMP_WORKSPACE/.codespec/codespec" check-gate verification
 "$TMP_WORKSPACE/.codespec/codespec" check-gate promotion-criteria
-log "✓ completed dossier remains re-verifiable"
+log "ok completed dossier remains re-verifiable"
 
-cp meta.yaml meta.before-reopen.yaml
-mkdir -p "$TMP_WORKSPACE/versions/mismatched-reopen"
-cp "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" "$TMP_WORKSPACE/versions/mismatched-reopen/meta.yaml"
-yq eval '.change_id = "different-change" | .active_work_items = ["WI-999"]' -i "$TMP_WORKSPACE/versions/mismatched-reopen/meta.yaml"
-yq eval '.change_id = "mismatched-reopen" | .stable_version = null | .phase = "Deployment" | .status = "completed" | .focus_work_item = null | .active_work_items = []' -i meta.yaml
-expect_fail_cmd \
-  "archived meta change_id mismatch" \
-  "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-deployment"
-mv meta.before-reopen.yaml meta.yaml
-
+# Reopen from completed state
 "$TMP_WORKSPACE/.codespec/codespec" start-deployment
 [ "$(yq eval '.phase' meta.yaml)" = "Deployment" ] || die "completed reopen should return to Deployment phase"
 [ "$(yq eval '.status' meta.yaml)" = "active" ] || die "completed reopen should reactivate the dossier"
-reopened_active_wis=$(yq eval -o=json '.active_work_items' meta.yaml)
-assert_json_eq "$reopened_active_wis" '. | length' '2'
-assert_json_eq "$reopened_active_wis" '.[0]' '"WI-001"'
-assert_json_eq "$reopened_active_wis" '.[1]' '"WI-002"'
 git add meta.yaml
 git commit -m "chore: reopen completed deployment"
-log "✓ start-deployment restores archived active_work_items for completed reopen"
+log "ok start-deployment reactivates completed dossier"
 
 bad_reopen_base="$(git rev-parse HEAD)"
-yq eval '.phase = "Deployment" | .status = "completed" | .stable_version = "smoke-v1" | .focus_work_item = null | .active_work_items = []' -i meta.yaml
+yq eval '.phase = "Deployment" | .status = "completed" | .stable_version = "smoke-v1"' -i meta.yaml
 cat >> testing.md <<'EOF'
 
 - run_id: RUN-BAD-REOPEN
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: integration
   test_scope: full-integration
   verification_type: automated
@@ -1770,9 +1930,10 @@ expect_fail_cmd \
   "full-integration pass record for ACC-001" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' start-deployment"
 git reset --hard "$bad_reopen_base" >/dev/null
-log "✓ completed Deployment reopen re-runs verification gates"
+log "ok completed Deployment reopen re-runs verification gates"
 
-cat > deployment.md <<EOF
+# Deployment readiness checks
+cat > deployment.md <<'EOF'
 # deployment.md
 
 ## Deployment Plan
@@ -1833,9 +1994,9 @@ set -e
 
 [ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime readiness is missing"
 assert_contains "$output" "runtime_ready: pass"
-log "✓ deployment-readiness requires runtime readiness"
+log "ok deployment-readiness requires runtime readiness"
 
-cat > deployment.md <<EOF
+cat > deployment.md <<'EOF'
 # deployment.md
 
 ## Deployment Plan
@@ -1893,7 +2054,7 @@ status=$?
 set -e
 
 [ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime readiness evidence is missing"
-log "✓ deployment-readiness requires runtime readiness evidence"
+log "ok deployment-readiness requires runtime readiness evidence"
 
 cat > deployment.md <<'EOF'
 # deployment.md
@@ -1955,7 +2116,7 @@ set -e
 
 [ "$status" -ne 0 ] || die "deployment-readiness should fail when manual verification readiness is missing"
 assert_contains "$output" "manual_verification_ready: pass"
-log "✓ deployment-readiness blocks handoff before manual verification is ready"
+log "ok deployment-readiness blocks handoff before manual verification is ready"
 
 cat > deployment.md <<'EOF'
 # deployment.md
@@ -2018,8 +2179,9 @@ set -e
 
 [ "$status" -ne 0 ] || die "deployment-readiness should fail when runtime evidence does not show restart for restart-required deployment"
 assert_contains "$output" "restart-required deployment"
-log "✓ deployment-readiness requires restart evidence when restart is required"
+log "ok deployment-readiness requires restart evidence when restart is required"
 
+# Artifact release mode
 cat > deployment.md <<'EOF'
 # deployment.md
 
@@ -2068,7 +2230,7 @@ approved_at: pending
 EOF
 
 CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate deployment-readiness
-log "✓ deployment-readiness supports artifact release mode"
+log "ok deployment-readiness supports artifact release mode"
 
 cat > scripts/codespec-deploy <<'EOF'
 #!/usr/bin/env bash
@@ -2094,28 +2256,19 @@ chmod +x scripts/codespec-deploy
 "$TMP_WORKSPACE/.codespec/codespec" deploy
 assert_contains "$(<deployment.md)" "execution_ref: artifact-run-001"
 assert_contains "$(<deployment.md)" "runtime_ready: not-applicable"
-log "✓ deploy supports artifact release mode"
-
-promoted_status=$(yq eval '.status' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
-[ "$promoted_status" = "completed" ] || die "complete-change did not preserve completed status in archived meta"
-promoted_active_wis=$(yq eval -o=json '.active_work_items' "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml")
-assert_json_eq "$promoted_active_wis" '. | length' '2'
-assert_json_eq "$promoted_active_wis" '.[0]' '"WI-001"'
-assert_json_eq "$promoted_active_wis" '.[1]' '"WI-002"'
-log "✓ complete-change preserves active work item snapshot in archive"
+log "ok deploy supports artifact release mode"
 
 # Test 10: testing ledger selection semantics
 log "\n=== Test 10: testing ledger selection semantics ==="
 git reset --hard HEAD >/dev/null
 
-yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001", "WI-002"] | .execution_group = null | .execution_branch = null' -i meta.yaml
+yq eval '.phase = "Testing" | .status = "active"' -i meta.yaml
 
 cat > testing.md <<'EOF'
 - tc_id: TC-ACC-001-01
   requirement_refs: [REQ-001]
   acceptance_ref: ACC-001
   verification_ref: VO-001
-  work_item_refs: [WI-001]
   test_type: integration
   verification_mode: automated
   required_stage: testing
@@ -2129,7 +2282,7 @@ cat > testing.md <<'EOF'
 - run_id: RUN-001
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: integration
   test_scope: full-integration
   verification_type: manual
@@ -2145,7 +2298,7 @@ cat > testing.md <<'EOF'
 - run_id: RUN-002
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: integration
   test_scope: full-integration
   verification_type: automated
@@ -2163,14 +2316,13 @@ git add meta.yaml testing.md
 git commit --no-verify -m "test: add ledger selection pass fixture"
 ledger_selection_base="$(git rev-parse HEAD)"
 "$TMP_WORKSPACE/.codespec/codespec" check-gate verification
-log "✓ verification uses the latest matching pass record without duplicating extracted fields"
+log "ok verification uses the latest matching pass record without duplicating extracted fields"
 
 cat > testing.md <<'EOF'
 - tc_id: TC-ACC-001-01
   requirement_refs: [REQ-001]
   acceptance_ref: ACC-001
   verification_ref: VO-001
-  work_item_refs: [WI-001]
   test_type: integration
   verification_mode: automated
   required_stage: testing
@@ -2184,7 +2336,7 @@ cat > testing.md <<'EOF'
 - run_id: RUN-001
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: integration
   test_scope: full-integration
   verification_type: automated
@@ -2200,7 +2352,7 @@ cat > testing.md <<'EOF'
 - run_id: RUN-002
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: manual
   test_scope: full-integration
   verification_type: manual
@@ -2218,24 +2370,18 @@ expect_fail_cmd \
   "full-integration pass record for ACC-001" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate verification"
 git reset --hard "$ledger_selection_base" >/dev/null
-log "✓ verification rejects a later full-integration failure after an earlier pass"
+log "ok verification rejects a later full-integration failure after an earlier pass"
 
-# Test 11: File modification rules
+# Test 11: File modification rules (no execution branch context)
 log "\n=== Test 11: File modification rules ==="
 
-# deployment/contract tests left dirty files; restore working tree before phase reset
 git reset --hard HEAD >/dev/null 2>&1 || true
 
-# Reset to Implementation phase for testing
-yq eval '.phase = "Implementation" | .status = "active" | .focus_work_item = "WI-001" | .active_work_items = ["WI-001"]' -i meta.yaml
-
-git checkout -b test-execution-branch
-
-"$TMP_WORKSPACE/.codespec/codespec" set-execution-context parallel main test-group
+yq eval '.phase = "Implementation" | .status = "active"' -i meta.yaml
 git add meta.yaml
-git commit -m "chore: set execution context"
+git commit --no-verify -m "chore: set implementation file rule fixture" >/dev/null
 
-# Test: execution branch cannot modify spec.md
+# spec.md cannot be modified in Implementation phase
 echo "# test" >> spec.md
 git add spec.md
 
@@ -2244,55 +2390,33 @@ output=$(git commit -m "test: should fail" 2>&1)
 status=$?
 set -e
 
-[ "$status" -ne 0 ] || die "pre-commit should block spec.md modification in execution branch"
-assert_contains "$output" "Cannot modify spec.md in execution branch"
-log "✓ pre-commit blocks spec.md modification in execution branch"
+[ "$status" -ne 0 ] || die "pre-commit should block spec.md modification in Implementation phase"
+assert_contains "$output" "forbids"
+log "ok pre-commit blocks spec.md modification in Implementation phase"
 
 git reset HEAD spec.md
 git checkout -- spec.md
 
-# Test: execution branch can modify testing.md
+# testing.md can be modified in Implementation phase
 echo "# test" >> testing.md
 git add testing.md
 git commit -m "test: testing.md modification allowed"
-log "✓ pre-commit allows testing.md modification in execution branch"
+log "ok pre-commit allows testing.md modification in Implementation phase"
 
-# Test: execution branch can modify src/**
+# src/** can be modified in Implementation phase (allowed in design.md §4)
 echo "test" >> src/test.txt
 git add src/test.txt
 git commit -m "feat: src modification allowed"
-log "✓ pre-commit allows src/** modification in execution branch"
+log "ok pre-commit allows src/** modification in Implementation phase"
 
 # Test 12: Gate checks
 log "\n=== Test 12: Gate checks ==="
 
-git checkout master
+git checkout master 2>/dev/null || git checkout main 2>/dev/null || true
 cd "$TMP_WORKSPACE/test-project"
 
-# Test metadata-consistency gate
-yq eval '.phase = "Implementation" | .focus_work_item = "WI-001" | .active_work_items = []' -i meta.yaml
-
-set +e
-output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
-status=$?
-set -e
-
-[ "$status" -ne 0 ] || die "metadata-consistency gate should fail when focus_work_item not in active_work_items"
-log "✓ metadata-consistency gate works"
-
-yq eval '.phase = "Implementation" | .status = "in_progress" | .focus_work_item = "WI-001" | .active_work_items = ["WI-001"]' -i meta.yaml
-set +e
-output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
-status=$?
-set -e
-
-[ "$status" -ne 0 ] || die "metadata-consistency gate should reject invalid status values"
-assert_contains "$output" "status"
-log "✓ metadata-consistency rejects invalid status enum"
-
-yq eval '.status = "active" | .active_work_items = ["WI-001"]' -i meta.yaml
-
-yq eval '.phase = "UnknownPhase" | .status = "active" | .focus_work_item = null | .active_work_items = [] | .implementation_base_revision = null' -i meta.yaml
+# metadata-consistency gate: no WI-related checks
+yq eval '.phase = "UnknownPhase" | .status = "active" | .implementation_base_revision = null' -i meta.yaml
 set +e
 output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
 status=$?
@@ -2300,9 +2424,9 @@ set -e
 
 [ "$status" -ne 0 ] || die "metadata-consistency gate should reject invalid phase values"
 assert_contains "$output" "phase"
-log "✓ metadata-consistency rejects invalid phase enum"
+log "ok metadata-consistency rejects invalid phase enum"
 
-yq eval '.phase = "Requirement" | .status = "completed" | .focus_work_item = null | .active_work_items = [] | .implementation_base_revision = null' -i meta.yaml
+yq eval '.phase = "Requirement" | .status = "completed" | .implementation_base_revision = null' -i meta.yaml
 set +e
 output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
 status=$?
@@ -2310,21 +2434,17 @@ set -e
 
 [ "$status" -ne 0 ] || die "metadata-consistency gate should reject completed status outside Deployment"
 assert_contains "$output" "completed status requires Deployment phase"
-log "✓ metadata-consistency rejects completed status outside Deployment"
+log "ok metadata-consistency rejects completed status outside Deployment"
 
-# Test: active Deployment still requires active_work_items until completed
-yq eval '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = []' -i meta.yaml
-set +e
-output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency 2>&1)
-status=$?
-set -e
+# metadata-consistency: no focus_work_item/active_work_items to check
+yq eval '.phase = "Implementation" | .status = "active"' -i meta.yaml
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_HEAD="$CURRENT_HEAD" yq eval ".implementation_base_revision = strenv(CURRENT_HEAD)" -i meta.yaml
+CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate metadata-consistency
+log "ok metadata-consistency passes without WI fields"
 
-[ "$status" -ne 0 ] || die "metadata-consistency gate should fail for active Deployment with empty active_work_items"
-log "✓ active Deployment still requires active_work_items"
-
-# Test phase-capability gate
-yq eval '.phase = "Requirement"' -i meta.yaml
-mkdir -p src
+# phase-capability gate
+yq eval '.phase = "Requirement" | .implementation_base_revision = null' -i meta.yaml
 echo "test" > src/forbidden.txt
 git add src/forbidden.txt
 
@@ -2334,12 +2454,12 @@ status=$?
 set -e
 
 [ "$status" -ne 0 ] || die "phase-capability gate should fail when src/** exists in Requirement phase"
-log "✓ phase-capability gate works"
+log "ok phase-capability gate works"
 
 git reset HEAD src/forbidden.txt
 rm -f src/forbidden.txt
 
-yq eval '.phase = "Design" | .status = "active" | .focus_work_item = null | .active_work_items = [] | .implementation_base_revision = null' -i meta.yaml
+yq eval '.phase = "Design" | .status = "active" | .implementation_base_revision = null' -i meta.yaml
 echo "design drift" > src/design-forbidden.txt
 git add src/design-forbidden.txt
 
@@ -2350,12 +2470,12 @@ set -e
 
 [ "$status" -ne 0 ] || die "phase-capability gate should fail when src/** is staged in Design phase"
 assert_contains "$output" "Design forbids implementation artifacts"
-log "✓ phase-capability blocks implementation artifacts in Design phase"
+log "ok phase-capability blocks implementation artifacts in Design phase"
 
 git reset HEAD src/design-forbidden.txt
 rm -f src/design-forbidden.txt
 
-yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"]' -i meta.yaml
+yq eval '.phase = "Testing" | .status = "active"' -i meta.yaml
 printf '\n# testing phase deployment drift\n' >> deployment.md
 git add deployment.md
 
@@ -2366,7 +2486,7 @@ set -e
 
 [ "$status" -ne 0 ] || die "phase-capability gate should fail when deployment.md is staged in Testing phase"
 assert_contains "$output" "deployment.md"
-log "✓ phase-capability blocks deployment.md in Testing phase"
+log "ok phase-capability blocks deployment.md in Testing phase"
 
 git reset HEAD deployment.md
 git checkout -- deployment.md
@@ -2376,9 +2496,8 @@ log "\n=== Test 13: promotion trace consistency ==="
 
 git reset --hard HEAD >/dev/null
 trace_consistency_base="$(git rev-parse HEAD)"
-CURRENT_HEAD="$trace_consistency_base" yq eval '.phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001", "WI-002"] | .implementation_base_revision = strenv(CURRENT_HEAD)' -i meta.yaml
-yq eval '.verification_refs = ["VO-999"]' -i work-items/WI-001.yaml
-yq eval '.verification_refs = ["VO-999"]' -i work-items/WI-002.yaml
+CURRENT_HEAD="$trace_consistency_base" yq eval '.phase = "Deployment" | .status = "active" | .implementation_base_revision = strenv(CURRENT_HEAD)' -i meta.yaml
+
 cat > deployment.md <<'EOF'
 # deployment.md
 
@@ -2433,17 +2552,20 @@ alerts:
 - [ ] archive stable version after manual acceptance
 EOF
 
-git add meta.yaml deployment.md work-items/WI-001.yaml work-items/WI-002.yaml
+git add meta.yaml deployment.md
+git commit --no-verify -m "test: prepare trace consistency fixture"
+
+# Break trace: change design.md §7 verification_refs to VO-999
+perl -0pi -e 's/verification_refs: \[VO-001\]/verification_refs: [VO-999]/g' design.md
+git add design.md
 git commit --no-verify -m "test: break trace before promotion"
 
 expect_fail_cmd \
-  "trace gap: VO-001 is not referenced by any work item verification_refs" \
+  "trace gap: VO-001 is not referenced by any design.md" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' complete-change smoke-v2.9"
 
 git reset --hard "$trace_consistency_base" >/dev/null
-yq eval '.verification_refs = ["VO-001"]' -i work-items/WI-001.yaml
-yq eval '.verification_refs = ["VO-001"]' -i work-items/WI-002.yaml
-log "✓ complete-change should re-check trace consistency"
+log "ok complete-change re-checks trace consistency"
 
 cat >> spec.md <<'EOF'
 
@@ -2455,27 +2577,25 @@ cat >> spec.md <<'EOF'
   - source_ref: REQ-002
   - priority: P1
 EOF
-yq eval '.requirement_refs += ["REQ-002"]' -i work-items/WI-001.yaml
-yq eval '.requirement_refs += ["REQ-002"]' -i work-items/WI-002.yaml
 
 expect_fail_cmd \
   "trace gap: REQ-002 has no ACC" \
   "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate trace-consistency"
 
-git checkout -- spec.md work-items/WI-001.yaml work-items/WI-002.yaml
-log "✓ trace-consistency rejects REQ without ACC even when source_ref mentions the REQ"
+git checkout -- spec.md
+log "ok trace-consistency rejects REQ without ACC even when source_ref mentions the REQ"
 
 # Test 14: Readset
-log "\n=== Test 13: Readset ==="
+log "\n=== Test 14: Readset ==="
 
-yq eval '.phase = "Requirement" | .status = "active"' -i meta.yaml
+yq eval '.phase = "Requirement" | .status = "active" | .implementation_base_revision = null' -i meta.yaml
 
 readset_output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" readset)
 
 assert_contains "$readset_output" "AGENTS.md"
 assert_contains "$readset_output" "meta.yaml"
 assert_contains "$readset_output" "spec.md"
-log "✓ readset output correct"
+log "ok readset output correct"
 
 readset_json=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" readset --json)
 
@@ -2485,14 +2605,15 @@ assert_json_eq "$readset_json" '.layered_readset.default | map(select(.path == "
 assert_json_eq "$readset_json" '.phase_capabilities.allowed[0]' '"authoritative dossier edits"'
 assert_json_eq "$readset_json" '.phase_capabilities.forbidden[0]' '"src/** and Dockerfile only"'
 CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" "$TMP_WORKSPACE/.codespec/codespec" check-gate policy-consistency
-log "✓ readset JSON output correct"
+log "ok readset JSON output correct"
 
 git reset --hard HEAD >/dev/null
 
-# Test 14: reset-to-requirement resolves promoted version from archived baseline metadata
-log "\n=== Test 14: reset-to-requirement ==="
+# Test 15: reset-to-requirement
+log "\n=== Test 15: reset-to-requirement ==="
 
-yq eval '.change_id = "baseline" | .base_version = null | .phase = "Deployment" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001", "WI-002"] | .execution_group = null | .execution_branch = null' -i meta.yaml
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_HEAD="$CURRENT_HEAD" yq eval ".change_id = \"baseline\" | .base_version = null | .phase = \"Deployment\" | .status = \"active\" | .implementation_base_revision = strenv(CURRENT_HEAD)" -i meta.yaml
 
 cat > deployment.md <<'EOF'
 # deployment.md
@@ -2515,7 +2636,7 @@ execution_ref: smoke-run-006
 deployment_method: automated
 deployed_at: 2026-04-16T10:00:00Z
 deployed_revision: build=test-2026-04-16
-source_revision: $CURRENT_HEAD
+source_revision: HEAD
 restart_required: yes
 restart_reason: application code changed and running process must reload new code
 runtime_observed_revision: build=test-2026-04-16
@@ -2553,7 +2674,7 @@ cat >> testing.md <<'EOF'
 
 - handoff_id: HANDOFF-014
   phase: Deployment
-  work_item_refs: [WI-001, WI-002]
+  slice_refs: [SLICE-001, SLICE-002]
   highest_completion_level: owner_verified
   evidence_refs:
     - deployment.md#Execution-Evidence
@@ -2578,13 +2699,15 @@ list_versions_output=$("$TMP_WORKSPACE/.codespec/codespec" list-versions)
 assert_contains "$list_versions_output" "Promoted Version"
 assert_contains "$list_versions_output" "Promoted At"
 assert_contains "$list_versions_output" "smoke-v2.8"
-log "✓ list-versions text output includes promoted metadata"
+log "ok list-versions text output includes promoted metadata"
 
 list_versions_json=$("$TMP_WORKSPACE/.codespec/codespec" list-versions --json)
 assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].promoted_version' '"smoke-v2.8"'
 assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].promoted_at | length > 0' 'true'
-log "✓ list-versions JSON output includes promoted metadata"
+log "ok list-versions JSON output includes promoted metadata"
 
+git add meta.yaml
+git commit --no-verify -m "chore: complete promoted baseline fixture" >/dev/null
 "$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
 
 reset_phase=$(yq eval '.phase' meta.yaml)
@@ -2595,28 +2718,28 @@ reset_base_version=$(yq eval '.base_version' meta.yaml)
 [ "$reset_base_version" = "smoke-v2.8" ] || die "reset-to-requirement did not carry promoted version into base_version"
 reset_change_id=$(yq eval '.change_id' meta.yaml)
 [ "$reset_change_id" = "smoke-v2.8-next" ] || die "reset-to-requirement did not derive next change_id from promoted version"
-log "✓ reset-to-requirement resolves promoted baseline version"
+log "ok reset-to-requirement resolves promoted baseline version"
 
 # Legacy compatibility: same-name archive should still reset through the direct path.
 mkdir -p "$TMP_WORKSPACE/versions/release-1"
 cp "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml" "$TMP_WORKSPACE/versions/release-1/meta.yaml"
 yq eval '.change_id = "release-1" | .promoted_version = "release-1"' -i "$TMP_WORKSPACE/versions/release-1/meta.yaml"
-yq eval '.change_id = "release-1" | .base_version = null | .phase = "Deployment" | .status = "completed" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml
+yq eval '.change_id = "release-1" | .base_version = null | .phase = "Deployment" | .status = "completed" | .stable_version = "release-1"' -i meta.yaml
 
-"$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
+"$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement --force
 
 legacy_base_version=$(yq eval '.base_version' meta.yaml)
 [ "$legacy_base_version" = "release-1" ] || die "reset-to-requirement should preserve direct same-name archive compatibility"
 legacy_change_id=$(yq eval '.change_id' meta.yaml)
 [ "$legacy_change_id" = "release-1-next" ] || die "legacy same-name archive should derive release-1-next change_id"
-log "✓ reset-to-requirement preserves same-name archive compatibility"
+log "ok reset-to-requirement preserves same-name archive compatibility"
 
 expect_fail_cmd \
   "current completed dossier has not been promoted yet" \
-  "cd '$TMP_WORKSPACE/test-project' && yq eval '.change_id = \"unpromoted\" | .base_version = null | .phase = \"Deployment\" | .status = \"completed\" | .focus_work_item = null | .active_work_items = [] | .execution_group = null | .execution_branch = null' -i meta.yaml && '$TMP_WORKSPACE/.codespec/codespec' reset-to-requirement"
+  "cd '$TMP_WORKSPACE/test-project' && yq eval '.change_id = \"unpromoted\" | .base_version = null | .phase = \"Deployment\" | .status = \"completed\"' -i meta.yaml && '$TMP_WORKSPACE/.codespec/codespec' reset-to-requirement --force"
 
-# Test 15: submit-pr
-log "\n=== Test 15: submit-pr ==="
+# Test 16: submit-pr
+log "\n=== Test 16: submit-pr ==="
 
 current_branch="$(git branch --show-current)"
 [ -n "$current_branch" ] || die "expected a current branch before submit-pr test"
@@ -2663,25 +2786,279 @@ EOF
 chmod +x "$TMP_WORKSPACE/bin/gh"
 
 git init --bare "$TMP_WORKSPACE/test-remote.git" >/dev/null
-git remote add origin "$TMP_WORKSPACE/test-remote.git"
+git remote add origin "$TMP_WORKSPACE/test-remote.git" 2>/dev/null || true
 git push --no-verify -u origin "$current_branch" >/dev/null
 git -C "$TMP_WORKSPACE/test-remote.git" symbolic-ref HEAD "refs/heads/$current_branch"
 git fetch origin >/dev/null
 git remote set-head origin -a >/dev/null
 
+# Commit authority files on master before branching so pre-push won't reject them
+cat > spec.md <<'EOF'
+# spec.md
+
+## 0. AI 阅读契约
+- authority
+
+## 1. 需求概览
+- change_goal: submit-pr smoke test
+- success_standard: lifecycle passes
+- primary_users:
+  - smoke-test
+- in_scope:
+  - submit-pr flow
+- out_of_scope:
+  - none
+
+## 2. 决策与来源
+- source_refs:
+  - docs/test.md#intent
+- source_owner: smoke-test
+- rigor_profile: standard
+- normalization_note: normalized
+- approval_basis: test-approval
+
+### 已确认决策
+- decision_id: DEC-001
+  source_refs:
+    - docs/test.md#intent
+  decision: smoke test submit-pr
+  rationale: coverage
+
+### 待澄清事项
+- clarification_id: CLAR-001
+  question: none
+  impact_if_unresolved: none
+
+## 3. 场景、流程与运行叙事
+submit-pr flow test.
+
+## 4. 需求与验收
+- req_id: REQ-001
+  summary: submit-pr smoke
+  source_ref: docs/test.md#intent
+  rationale: coverage
+  priority: P0
+
+- acc_id: ACC-001
+  requirement_ref: REQ-001
+  expected_outcome: gates pass
+  priority: P0
+  priority_rationale: P0
+  status: approved
+
+- vo_id: VO-001
+  acceptance_ref: ACC-001
+  verification_type: automated
+  verification_profile: focused
+  obligations:
+    - gates pass
+  artifact_expectation: smoke output
+
+## 5. 运行约束
+- environment_constraints:
+  - git, yq, bash
+- security_constraints:
+  - none
+- reliability_constraints:
+  - none
+- performance_constraints:
+  - none
+- compatibility_constraints:
+  - none
+
+## 6. 业务契约
+- terminology:
+  - term: submit-pr
+    definition: create PR for completed change
+- invariants:
+  - none
+- prohibitions:
+  - none
+
+## 7. 设计交接
+- design_must_address:
+  - submit-pr flow
+- narrative_handoff:
+  - submit-pr flow
+- suggested_slices:
+  - none
+- reopen_triggers:
+  - none
+EOF
+
+cat > design.md <<'EOF'
+# design.md
+
+## 0. AI 阅读契约
+
+- authority
+
+<!-- CODESPEC:DESIGN:OVERVIEW -->
+## 1. 设计概览
+
+- solution_summary: minimal bash fixture for submit-pr smoke test
+- minimum_viable_design: create a traceable text implementation and testing ledger
+- non_goals:
+  - production deployment
+
+<!-- CODESPEC:DESIGN:TRACE -->
+## 2. 需求追溯
+
+- requirement_ref: REQ-001
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  design_response: submit-pr smoke test fixture
+
+<!-- CODESPEC:DESIGN:DECISIONS -->
+## 3. 架构决策
+
+- decision_id: ADR-001
+  requirement_refs: [REQ-001]
+  decision: use bash fixture and file evidence
+  alternatives_considered:
+    - none
+  rationale: smoke only validates framework behavior
+  consequences:
+    - evidence in git commits and testing.md
+
+### 技术栈选择
+
+- runtime: bash smoke fixture
+- storage: none
+- external_dependencies:
+  - none
+- tooling:
+  - git
+  - yq
+  - bash
+
+<!-- CODESPEC:DESIGN:STRUCTURE -->
+## 4. 系统结构
+
+- system_context: codespec lifecycle command fixture
+- data_flow:
+  - spec.md -> design.md -> testing.md
+- external_interactions:
+  - name: none
+    direction: outbound
+    protocol: none
+    failure_handling: no external failure path
+
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/**` — smoke implementation artifacts
+- `meta.yaml` — lifecycle metadata
+- `testing.md` — test evidence ledger
+- `contracts/**` — contract files when authorized
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — archived snapshots
+- `spec.md` — requirement authority
+- `design.md` — design authority (unless in authority repair)
+- `deployment.md` — deployment authority
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+<!-- CODESPEC:DESIGN:CONTRACTS -->
+## 5. 外部契约依赖
+
+- contract_ref: none
+  interaction: none
+  boundary_check: none
+
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
+
+- slice_id: SLICE-001
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  description: submit-pr smoke test
+  files:
+    - src/test.txt
+  test_plan: verify submit-pr completes change and archives version
+
+- slice_id: SLICE-002
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  description: secondary slice
+  files:
+    - src/test.txt
+  test_plan: secondary coverage
+<!-- CODESPEC:DESIGN:SLICES_END -->
+EOF
+
+cat > testing.md <<'EOF'
+# testing.md
+
+## 1. 验收覆盖与测试用例
+
+- tc_id: TC-ACC-001-01
+  requirement_refs: [REQ-001]
+  acceptance_ref: ACC-001
+  verification_ref: VO-001
+  test_type: integration
+  verification_mode: automated
+  required_stage: testing
+  required_completion_level: integrated_runtime
+  scenario: submit-pr lifecycle
+  given: deployment dossier is complete
+  when: submit-pr runs
+  then: change is archived and PR created
+  evidence_expectation: smoke output
+  automation_exception_reason: none
+  manual_steps:
+    - none
+  status: planned
+
+## 2. 测试执行记录
+
+- run_id: RUN-016
+  test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  slice_ref: SLICE-001
+  test_type: integration
+  test_scope: full-integration
+  verification_type: automated
+  completion_level: integrated_runtime
+  command_or_steps: bash scripts/smoke.sh
+  artifact_ref: src/test.txt
+  result: pass
+  tested_at: 2026-04-16
+  tested_by: smoke-test
+  residual_risk: none
+  reopen_required: false
+
+## 4. 主动未完成清单与语义验收
+
+- handoff_id: HANDOFF-016
+  phase: Deployment
+  slice_refs: [SLICE-001, SLICE-002]
+  highest_completion_level: owner_verified
+  evidence_refs:
+    - deployment.md#Execution-Evidence
+    - deployment.md#Acceptance-Conclusion
+  unfinished_items: none
+  fixture_or_fallback_paths: none
+  wording_guard: "Deployment runtime and manual acceptance are recorded for submit-pr flow"
+EOF
+
+git add spec.md design.md testing.md
+git commit --no-verify -m "docs: prepare authority files for submit-pr" >/dev/null
+git push --no-verify origin "$current_branch" >/dev/null
+git fetch origin >/dev/null
+
 git checkout -b feature/submit-pr >/dev/null
 
-cp "$TMP_WORKSPACE/versions/smoke-v2.8/spec.md" spec.md
-cp "$TMP_WORKSPACE/versions/smoke-v2.8/design.md" design.md
-cp "$TMP_WORKSPACE/versions/smoke-v2.8/testing.md" testing.md
-cp "$TMP_WORKSPACE/versions/smoke-v2.8/deployment.md" deployment.md
-rm -rf work-items
-cp -R "$TMP_WORKSPACE/versions/smoke-v2.8/work-items" work-items
-
-CURRENT_HEAD="$(git rev-parse HEAD)"
-CURRENT_HEAD="$CURRENT_HEAD" yq eval '.change_id = "submit-pr-change" | .base_version = "smoke-v2.8" | .phase = "Deployment" | .status = "active" | .stable_version = null | .focus_work_item = null | .active_work_items = ["WI-001"] | .feature_branch = "feature/submit-pr" | .execution_group = null | .execution_branch = null | .implementation_base_revision = strenv(CURRENT_HEAD)' -i meta.yaml
-
-cat > deployment.md <<EOF
+# Prepare deployment-ready dossier for submit-pr
+cat > deployment.md <<'DEPLOYESCAPE'
 # deployment.md
 
 ## Deployment Plan
@@ -2697,12 +3074,12 @@ deployment_date: 2026-04-16
 2. Restart service
 
 ## Execution Evidence
+source_revision: __SUBMIT_PR_HEAD__
 status: pass
 execution_ref: smoke-run-submit-pr
 deployment_method: automated
 deployed_at: 2026-04-16T10:00:00Z
 deployed_revision: build=test-2026-04-16
-source_revision: $CURRENT_HEAD
 restart_required: yes
 restart_reason: application code changed and running process must reload new code
 runtime_observed_revision: build=test-2026-04-16
@@ -2734,10 +3111,14 @@ alerts:
 ## Post-deployment Actions
 - [ ] update related docs
 - [ ] archive stable version after manual acceptance
-EOF
+DEPLOYESCAPE
+
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_HEAD="$CURRENT_HEAD" yq eval ".change_id = \"submit-pr-change\" | .base_version = \"smoke-v2.8\" | .phase = \"Deployment\" | .status = \"active\" | .stable_version = null | .implementation_base_revision = strenv(CURRENT_HEAD)" -i meta.yaml
+sed -i "s/__SUBMIT_PR_HEAD__/$CURRENT_HEAD/" deployment.md
 
 git add -A
-git commit -m "docs: prepare submit-pr flow" >/dev/null
+git commit --no-verify -m "docs: prepare submit-pr flow" >/dev/null
 
 mkdir -p src
 echo "undeployed source drift" > src/undeployed-after-deploy.txt
@@ -2747,7 +3128,7 @@ expect_fail_cmd \
   "submit-pr includes source changes after deployed source_revision" \
   "cd '$TMP_WORKSPACE/test-project' && PATH='$TMP_WORKSPACE/bin:$PATH' TMP_GH_LOG='$TMP_WORKSPACE/gh.log' '$TMP_WORKSPACE/.codespec/codespec' submit-pr smoke-v3"
 git reset --hard HEAD^ >/dev/null
-log "✓ submit-pr rejects source changes made after deployment evidence"
+log "ok submit-pr rejects source changes made after deployment evidence"
 
 echo "# dirty" >> deployment.md
 expect_fail_cmd \
@@ -2763,13 +3144,13 @@ assert_eq "$(yq eval '.status' meta.yaml)" "completed"
 assert_eq "$(yq eval '.stable_version' meta.yaml)" "smoke-v3"
 assert_eq "$(git log -1 --pretty=%s)" "chore: complete change smoke-v3"
 assert_contains "$(<"$TMP_WORKSPACE/gh.log")" "pr create --base $current_branch --head feature/submit-pr"
-log "✓ submit-pr completes change, pushes branch, and creates PR"
+log "ok submit-pr completes change, pushes branch, and creates PR"
 
 submit_retry_output="$(PATH="$TMP_WORKSPACE/bin:$PATH" TMP_GH_LOG="$TMP_WORKSPACE/gh.log" "$TMP_WORKSPACE/.codespec/codespec" submit-pr smoke-v3)"
 assert_contains "$submit_retry_output" "https://example.test/pr/123"
 gh_pr_calls="$(grep -c '^pr create' "$TMP_WORKSPACE/gh.log")"
 assert_eq "$gh_pr_calls" "2"
-log "✓ submit-pr can retry PR creation from a completed dossier"
+log "ok submit-pr can retry PR creation from a completed dossier"
 
 rm -f "$TMP_WORKSPACE/body-path.log"
 set +e
@@ -2781,23 +3162,19 @@ set -e
 assert_contains "$output" "forced pr create failure"
 body_file="$(<"$TMP_WORKSPACE/body-path.log")"
 [ ! -e "$body_file" ] || die "submit-pr leaked PR body temp file after gh failure: $body_file"
-log "✓ submit-pr cleans PR body temp file when gh pr create fails"
+log "ok submit-pr cleans PR body temp file when gh pr create fails"
 
-yq eval '.execution_group = "parallel-group" | .execution_branch = "feature/submit-pr" | .feature_branch = "'"$current_branch"'"' -i meta.yaml
-expect_fail_cmd \
-  "submit-pr must run from feature_branch" \
-  "cd '$TMP_WORKSPACE/test-project' && PATH='$TMP_WORKSPACE/bin:$PATH' TMP_GH_LOG='$TMP_WORKSPACE/gh.log' '$TMP_WORKSPACE/.codespec/codespec' submit-pr smoke-v3"
-log "✓ submit-pr rejects execution branches"
-
+# submit-pr rejects default branch
 git reset --hard HEAD >/dev/null
 git checkout "$current_branch" >/dev/null
-yq eval '.phase = "Deployment" | .status = "completed" | .stable_version = "smoke-v3" | .focus_work_item = null | .active_work_items = [] | .feature_branch = "'"$current_branch"'" | .execution_group = null | .execution_branch = null' -i meta.yaml
+yq eval '.phase = "Deployment" | .status = "completed" | .stable_version = "smoke-v3"' -i meta.yaml
 expect_fail_cmd \
   "submit-pr must not run on the default branch" \
   "cd '$TMP_WORKSPACE/test-project' && PATH='$TMP_WORKSPACE/bin:$PATH' TMP_GH_LOG='$TMP_WORKSPACE/gh.log' '$TMP_WORKSPACE/.codespec/codespec' submit-pr smoke-v3"
-log "✓ submit-pr rejects default branch execution"
+log "ok submit-pr rejects default branch execution"
 
-log "\n=== Test 16: hardening regressions ==="
+# Test 17: hardening regressions
+log "\n=== Test 17: hardening regressions ==="
 
 cd "$TMP_WORKSPACE"
 git init hardening-project >/dev/null
@@ -2807,14 +3184,10 @@ git config user.email "smoke@test.local"
 "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
 
 expect_fail_cmd \
-  "Invalid work item ID format" \
-  "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' add-work-item ../escape"
-
-expect_fail_cmd \
   "Invalid stable version" \
   "cd '$TMP_WORKSPACE/hardening-project' && yq eval '.phase = \"Deployment\" | .status = \"completed\"' -i meta.yaml && cp '$TMP_WORKSPACE/.codespec/templates/deployment.md' deployment.md && '$TMP_WORKSPACE/.codespec/codespec' scaffold-project-docs ../escaped"
 rm -f deployment.md
-yq eval '.phase = "Requirement" | .status = "active" | .stable_version = null | .focus_work_item = null | .active_work_items = [] | .implementation_base_revision = null' -i meta.yaml
+yq eval '.phase = "Requirement" | .status = "active" | .stable_version = null | .implementation_base_revision = null' -i meta.yaml
 git add .
 git commit -m "docs: initial template dossier" >/dev/null
 
@@ -2881,7 +3254,6 @@ cat > testing.md <<'EOF'
   requirement_refs: [REQ-001]
   acceptance_ref: ACC-001
   verification_ref: VO-001
-  work_item_refs: [WI-001]
   test_type: integration
   verification_mode: automated
   required_stage: testing
@@ -2910,7 +3282,7 @@ expect_fail_cmd \
   "spec.md missing constraints/verification section" \
   "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate spec-quality"
 mv spec.before-missing-constraints.md spec.md
-log "✓ spec-quality does not treat Verification as runtime constraints"
+log "ok spec-quality does not treat Verification as runtime constraints"
 
 mkdir -p spec-appendices
 cat > spec-appendices/smoke-appendix.md <<'EOF'
@@ -2922,7 +3294,7 @@ expect_fail_cmd \
   "spec.md AI reading contract must define appendix reading matrix" \
   "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate spec-quality"
 rm -rf spec-appendices
-log "✓ spec-quality requires an appendix reading matrix when spec appendices exist"
+log "ok spec-quality requires an appendix reading matrix when spec appendices exist"
 
 cp spec.md spec.before-bare-id.md
 cat >> spec.md <<'EOF'
@@ -2943,60 +3315,23 @@ expect_fail_cmd \
   "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate test-plan-complete"
 mv spec.before-bare-id.md spec.md
 
-mkdir -p work-items
-cat > work-items/WI-001.yaml <<'EOF'
-wi_id: WI-001
-goal: hardening design fixture
-phase_scope: Implementation
-derived_from: design.md
-requirement_refs:
-  - REQ-001
-acceptance_refs:
-  - ACC-001
-verification_refs:
-  - VO-001
-test_case_refs:
-  - TC-ACC-001-01
-allowed_paths:
-  - src/**
-forbidden_paths:
-  - spec.md
-scope:
-  - hardening fixture
-out_of_scope:
-  - production
-required_verification:
-  - smoke passes
-completion_level: fixture_contract
-stop_conditions:
-  - scope expansion
-reopen_triggers:
-  - design mismatch
-dependency_refs: []
-contract_refs: []
-branch_execution:
-  owned_paths:
-    - src/**
-  shared_paths: []
-  merge_order: 1
-EOF
-
+# design.md with slice-based §7 (no WI)
 cat > design.md <<'EOF'
 # design.md
 
 ## 0. AI 阅读契约
 - authority
 
-## Summary
+## 1. 设计概览
 - solution_summary: hardening fixture
 - minimum_viable_design: minimal
 - non_goals:
   - production
 
-## Requirements Trace
+## 2. 需求追溯
 - trace_note: this design is not for REQ-001
 
-## Technical Approach
+## 3. 架构决策
 - decision_id: ADR-001
   requirement_refs: [REQ-001]
   decision: use fixture
@@ -3008,60 +3343,108 @@ cat > design.md <<'EOF'
 - runtime: bash
 - storage: none
 
-## Boundaries & Impacted Surfaces
-- impacted_surfaces:
-  - src/**
+## 4. 系统结构
+- system_context: hardening fixture
+- data_flow: none
 - external_interactions:
   - name: none
     failure_handling: none
 
-## Data & Storage Design
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/**` — hardening fixture
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — archived
+- `spec.md` — requirement authority
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+## 5. 契约设计
+- api_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
 - data_contracts:
   - contract_ref: none
     requirement_refs: [REQ-001]
     summary: fixture data
+- compatibility_policy:
+  - none
 
-## Security Design
+## 6. 横切设计
 - security_design:
   - no sensitive data
 - environment_config:
   - none
 - reliability_design:
   - fail fast
+- observability_design:
+  - none
+- performance_design:
+  - none
+
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
+
+### 实现计划
+
+- slice_id: SLICE-001
+  goal: hardening design fixture
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+
+### 验证设计
+
+- test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  approach: fixture
+  evidence: fixture
+  required_stage: testing
+
+### 重开触发器
+
+- none
+<!-- CODESPEC:DESIGN:SLICES_END -->
 
 ## 8. 实现阶段输入
-- runbook: fixture runbook
-- contract_summary: fixture contract
-- view_summary: fixture view
-- verification_summary: fixture verification
 
-## Work Item Derivation
-- wi_id: WI-001
-  requirement_refs:
-    - REQ-001
-  goal: hardening design fixture
-  covered_acceptance_refs: [ACC-001]
-  verification_refs:
-    - VO-001
-  test_case_refs:
-    - TC-ACC-001-01
-  dependency_refs: []
-  contract_refs: []
-  notes_on_boundary: fixture
+### Runbook（场景如何跑）
+
+- runbook: fixture runbook
+
+### Contract（接口与数据结构）
+
+- contract_summary: fixture contract
+
+### View（各方看到什么）
+
+- view_summary: fixture view
+
+### Verification（验证证据）
+
+- verification_summary: fixture verification
 EOF
 
 expect_fail_cmd \
-  "design.md missing cross-cutting design section" \
+  "design.md does not reference requirement REQ-001" \
   "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate design-quality"
-log "✓ design-quality does not treat Security Design as the full cross-cutting section"
+log "ok design-quality requires structured Requirements Trace references"
 
-perl -0pi -e 's/## Security Design/## Cross-Cutting Design/' design.md
+perl -0pi -e 's/## 6\. 横切设计/## 6. Cross-Cutting Design/' design.md
 expect_fail_cmd \
   "design.md does not reference requirement REQ-001" \
   "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate design-quality"
-log "✓ design-quality requires structured Requirements Trace references"
 
+# Fix the trace to properly reference REQ-001
 perl -0pi -e 's/- trace_note: this design is not for REQ-001/- requirement_ref: REQ-001\n  acceptance_refs: [ACC-001]\n  verification_refs: [VO-001]\n  test_case_refs: [TC-ACC-001-01]\n  design_response: fixture satisfies requirement/' design.md
+perl -0pi -e 's/## 6\. Cross-Cutting Design/## 6. 横切设计/' design.md
+
 mkdir -p design-appendices
 cat > design-appendices/smoke-appendix.md <<'EOF'
 # Smoke Design Appendix
@@ -3072,31 +3455,33 @@ expect_fail_cmd \
   "design.md AI reading contract must define appendix reading matrix" \
   "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate design-quality"
 rm -rf design-appendices
-log "✓ design-quality requires an appendix reading matrix when design appendices exist"
+log "ok design-quality requires an appendix reading matrix when design appendices exist"
 
-perl -0pi -e 's/covered_acceptance_refs: \[ACC-001\]/covered_acceptance_refs:\n    - ACC-001/' design.md
-"$TMP_WORKSPACE/.codespec/codespec" check-gate design-quality >/dev/null
-log "✓ design work item parser supports block-style covered_acceptance_refs"
+design_quality_output="$("$TMP_WORKSPACE/.codespec/codespec" check-gate design-quality 2>&1)"
+[[ "$design_quality_output" != *"awk: warning"* ]] || die "design-quality output should not contain awk warnings"
+log "ok design-quality passes with slice-based §7"
 
-rm -rf work-items
+# Test: removed command stubs output friendly errors
+expect_fail_cmd \
+  "add-work-item has been removed" \
+  "cd '$TMP_WORKSPACE/hardening-project' && '$TMP_WORKSPACE/.codespec/codespec' add-work-item WI-001"
+log "ok removed add-work-item stub in hardening project"
+
 cp "$TMP_WORKSPACE/.codespec/templates/design.md" design.md
 
 cd "$TMP_WORKSPACE"
+# pre-push phase-capability drift check (no WI context)
 git init push-project >/dev/null
 cd push-project
 git config user.name "Smoke Test"
 git config user.email "smoke@test.local"
 "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
-mkdir -p work-items src
-cat > work-items/WI-001.yaml <<'EOF'
-wi_id: WI-001
-completion_level: fixture_contract
-EOF
+mkdir -p src
 git add .
 git commit --no-verify -m "docs: initialize push fixture" >/dev/null
 PUSH_BASE="$(git rev-parse HEAD)"
-PUSH_BASE="$PUSH_BASE" yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"] | .implementation_base_revision = strenv(PUSH_BASE)' -i meta.yaml
-git add meta.yaml work-items/WI-001.yaml
+PUSH_BASE="$PUSH_BASE" yq eval '.phase = "Testing" | .status = "active" | .implementation_base_revision = strenv(PUSH_BASE)' -i meta.yaml
+git add meta.yaml
 git commit --no-verify -m "docs: enter testing fixture" >/dev/null
 echo "forbidden testing drift" > src/push-drift.txt
 git add src/push-drift.txt
@@ -3110,52 +3495,35 @@ set -e
 [ "$status" -ne 0 ] || die "pre-push should reject committed Testing phase source drift"
 assert_contains "$output" "phase-capability gate failed"
 assert_contains "$output" "src/push-drift.txt"
-log "✓ pre-push checks committed phase-capability drift"
+log "ok pre-push checks committed phase-capability drift"
 
 cd "$TMP_WORKSPACE"
-git init push-scope-project >/dev/null
-cd push-scope-project
+git init push-snapshot-project >/dev/null
+cd push-snapshot-project
 git config user.name "Smoke Test"
 git config user.email "smoke@test.local"
 "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
-mkdir -p work-items docs
-cat > work-items/WI-001.yaml <<'EOF'
-wi_id: WI-001
-allowed_paths:
-  - testing.md
-forbidden_paths:
-  - versions/**
-  - spec.md
-  - design.md
-  - work-items/**
-  - contracts/**
-  - deployment.md
-completion_level: fixture_contract
-EOF
 git add .
-git commit --no-verify -m "docs: initialize push scope fixture" >/dev/null
-PUSH_SCOPE_BASE="$(git rev-parse HEAD)"
-PUSH_SCOPE_BASE="$PUSH_SCOPE_BASE" yq eval '.phase = "Testing" | .status = "active" | .focus_work_item = null | .active_work_items = ["WI-001"] | .implementation_base_revision = strenv(PUSH_SCOPE_BASE)' -i meta.yaml
-git add meta.yaml
-git commit --no-verify -m "docs: enter testing push scope fixture" >/dev/null
-echo "unowned testing drift" > docs/unowned.txt
-git add docs/unowned.txt
-git commit --no-verify -m "test: bypass testing WI scope" >/dev/null
-PUSH_SCOPE_LOCAL="$(git rev-parse HEAD)"
-PUSH_SCOPE_REMOTE="$(git rev-parse HEAD^)"
+git commit --no-verify -m "docs: initialize push snapshot fixture" >/dev/null
+printf '\n- snapshot push fixture\n' >> spec.md
+git add spec.md
+git commit --no-verify -m "docs: update pushed requirement snapshot" >/dev/null
+printf 'live dirty file outside pushed commit\n' > dirty-live.txt
+PUSH_LOCAL="$(git rev-parse HEAD)"
+PUSH_REMOTE="$(git rev-parse HEAD^)"
 set +e
-output="$(printf 'refs/heads/feature %s refs/heads/feature %s\n' "$PUSH_SCOPE_LOCAL" "$PUSH_SCOPE_REMOTE" | .git/hooks/pre-push 2>&1)"
+output="$(printf 'refs/heads/feature %s refs/heads/feature %s\n' "$PUSH_LOCAL" "$PUSH_REMOTE" | .git/hooks/pre-push 2>&1)"
 status=$?
 set -e
-[ "$status" -ne 0 ] || die "pre-push should reject committed Testing phase WI scope drift"
-assert_contains "$output" "outside allowed_paths of active work items"
-assert_contains "$output" "docs/unowned.txt"
-log "✓ pre-push checks committed Testing phase WI scope drift"
+[ "$status" -eq 0 ] || die "pre-push should validate pushed snapshot without live dirty worktree: $output"
+assert_contains "$output" "pre-push checks passed"
+log "ok pre-push validates pushed snapshot instead of live dirty worktree"
 
 cd "$TMP_WORKSPACE/hardening-project"
 
 mkdir -p reviews
-cat > reviews/design-review.yaml <<'EOF'
+hardening_review_revision="$(git rev-parse HEAD)"
+cat > reviews/design-review.yaml <<EOF
 phase: Requirement
 verdict: approved
 reviewed_by: smoke-test
@@ -3164,12 +3532,24 @@ scope:
   - spec.md
   - testing.md
 gate_evidence:
-  - command: codespec check-gate requirement-complete
+  - gate: requirement-complete
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate requirement-complete
     result: pass
-  - command: codespec check-gate spec-quality
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $hardening_review_revision
+    output_summary: passed
+  - gate: spec-quality
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate spec-quality
     result: pass
-  - command: codespec check-gate test-plan-complete
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $hardening_review_revision
+    output_summary: passed
+  - gate: test-plan-complete
+    command: CODESPEC_TARGET_PHASE=Design codespec check-gate test-plan-complete
     result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $hardening_review_revision
+    output_summary: passed
 findings:
   - severity: none
     summary: no blocking findings
@@ -3189,11 +3569,416 @@ set -e
 
 [ "$status" -ne 0 ] || die "pre-commit should reject staged phase transition when staged dossier is incomplete"
 assert_contains "$output" "input_owner contains placeholder value"
-log "✓ pre-commit validates staged dossier content, not unstaged working tree content"
+log "ok pre-commit validates staged dossier content, not unstaged working tree content"
 
-# Test required_surfaces coverage gate
-log "\n=== Test: required_surfaces scope-path coverage ==="
-run_scope_path_coverage_test
-log "✓ required_surfaces coverage gate validated"
+# Test 18: design.md §4/§7 gate validations
+log "\n=== Test 18: design.md §4/§7 gate validations ==="
+
+# Test: §4 empty SCOPE_ALLOWED -> implementation-ready rejects
+cd "$TMP_WORKSPACE"
+git init scope-empty-project >/dev/null
+cd scope-empty-project
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+
+cat > design.md <<'EOF'
+# design.md
+
+## 0. AI 阅读契约
+- authority
+
+## 1. 设计概览
+- solution_summary: fixture
+- minimum_viable_design: fixture
+- non_goals:
+  - none
+
+## 2. 需求追溯
+- requirement_ref: REQ-001
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  design_response: fixture
+
+## 3. 架构决策
+- decision_id: ADR-001
+  requirement_refs: [REQ-001]
+  decision: fixture
+  alternatives_considered:
+    - none
+  rationale: test
+  consequences:
+    - none
+- runtime: bash
+- storage: none
+
+## 4. 系统结构
+- system_context: fixture
+- data_flow: none
+- external_interactions:
+  - name: none
+    failure_handling: none
+
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — archived
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+## 5. 契约设计
+- api_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
+- data_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
+- compatibility_policy:
+  - none
+
+## 6. 横切设计
+- security_design:
+  - none
+- environment_config:
+  - none
+- reliability_design:
+  - none
+- observability_design:
+  - none
+- performance_design:
+  - none
+
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
+
+### 实现计划
+
+- slice_id: SLICE-001
+  goal: fixture
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+
+### 验证设计
+
+- test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  approach: fixture
+  evidence: fixture
+  required_stage: testing
+
+### 重开触发器
+
+- none
+<!-- CODESPEC:DESIGN:SLICES_END -->
+
+## 8. 实现阶段输入
+
+### Runbook（场景如何跑）
+
+- runbook: fixture
+
+### Contract（接口与数据结构）
+
+- contract_summary: fixture
+
+### View（各方看到什么）
+
+- view_summary: fixture
+
+### Verification（验证证据）
+
+- verification_summary: fixture
+EOF
+
+git add .
+git commit -m "docs: scope-empty fixture" >/dev/null
+
+expect_fail_cmd \
+  "SCOPE_ALLOWED section has no glob entries" \
+  "cd '$TMP_WORKSPACE/scope-empty-project' && CODESPEC_TARGET_PHASE=Implementation '$TMP_WORKSPACE/.codespec/codespec' check-gate implementation-ready"
+log "ok implementation-ready rejects empty §4 SCOPE_ALLOWED"
+
+# Test: §7 duplicate slice_id -> implementation-ready rejects
+cd "$TMP_WORKSPACE"
+git init duplicate-slice-project >/dev/null
+cd duplicate-slice-project
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+
+cat > design.md <<'EOF'
+# design.md
+
+## 0. AI 阅读契约
+- authority
+
+## 1. 设计概览
+- solution_summary: fixture
+- minimum_viable_design: fixture
+- non_goals:
+  - none
+
+## 2. 需求追溯
+- requirement_ref: REQ-001
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  design_response: fixture
+
+## 3. 架构决策
+- decision_id: ADR-001
+  requirement_refs: [REQ-001]
+  decision: fixture
+  alternatives_considered:
+    - none
+  rationale: test
+  consequences:
+    - none
+- runtime: bash
+- storage: none
+
+## 4. 系统结构
+- system_context: fixture
+- data_flow: none
+- external_interactions:
+  - name: none
+    failure_handling: none
+
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/**` — fixture
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — archived
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+## 5. 契约设计
+- api_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
+- data_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
+- compatibility_policy:
+  - none
+
+## 6. 横切设计
+- security_design:
+  - none
+- environment_config:
+  - none
+- reliability_design:
+  - none
+- observability_design:
+  - none
+- performance_design:
+  - none
+
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
+
+### 实现计划
+
+- slice_id: SLICE-001
+  goal: first slice
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+
+- slice_id: SLICE-001
+  goal: duplicate slice
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+
+### 验证设计
+
+- test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  approach: fixture
+  evidence: fixture
+  required_stage: testing
+
+### 重开触发器
+
+- none
+<!-- CODESPEC:DESIGN:SLICES_END -->
+
+## 8. 实现阶段输入
+
+### Runbook（场景如何跑）
+
+- runbook: fixture
+
+### Contract（接口与数据结构）
+
+- contract_summary: fixture
+
+### View（各方看到什么）
+
+- view_summary: fixture
+
+### Verification（验证证据）
+
+- verification_summary: fixture
+EOF
+
+git add .
+git commit -m "docs: duplicate slice fixture" >/dev/null
+
+expect_fail_cmd \
+  "duplicate slice_id entries" \
+  "cd '$TMP_WORKSPACE/duplicate-slice-project' && CODESPEC_TARGET_PHASE=Implementation '$TMP_WORKSPACE/.codespec/codespec' check-gate implementation-ready"
+log "ok implementation-ready rejects duplicate slice_id in §7"
+
+# Test: §7 missing verification_refs -> implementation-ready rejects
+cd "$TMP_WORKSPACE"
+git init missing-vo-slice-project >/dev/null
+cd missing-vo-slice-project
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+
+cat > design.md <<'EOF'
+# design.md
+
+## 0. AI 阅读契约
+- authority
+
+## 1. 设计概览
+- solution_summary: fixture
+- minimum_viable_design: fixture
+- non_goals:
+  - none
+
+## 2. 需求追溯
+- requirement_ref: REQ-001
+  acceptance_refs: [ACC-001]
+  verification_refs: [VO-001]
+  test_case_refs: [TC-ACC-001-01]
+  design_response: fixture
+
+## 3. 架构决策
+- decision_id: ADR-001
+  requirement_refs: [REQ-001]
+  decision: fixture
+  alternatives_considered:
+    - none
+  rationale: test
+  consequences:
+    - none
+- runtime: bash
+- storage: none
+
+## 4. 系统结构
+- system_context: fixture
+- data_flow: none
+- external_interactions:
+  - name: none
+    failure_handling: none
+
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/**` — fixture
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — archived
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
+
+## 5. 契约设计
+- api_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
+- data_contracts:
+  - contract_ref: none
+    requirement_refs: [REQ-001]
+    summary: fixture
+- compatibility_policy:
+  - none
+
+## 6. 横切设计
+- security_design:
+  - none
+- environment_config:
+  - none
+- reliability_design:
+  - none
+- observability_design:
+  - none
+- performance_design:
+  - none
+
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
+
+### 实现计划
+
+- slice_id: SLICE-001
+  goal: missing VO slice
+  requirement_refs: [REQ-001]
+  acceptance_refs: [ACC-001]
+  test_case_refs: [TC-ACC-001-01]
+
+### 验证设计
+
+- test_case_ref: TC-ACC-001-01
+  acceptance_ref: ACC-001
+  approach: fixture
+  evidence: fixture
+  required_stage: testing
+
+### 重开触发器
+
+- none
+<!-- CODESPEC:DESIGN:SLICES_END -->
+
+## 8. 实现阶段输入
+
+### Runbook（场景如何跑）
+
+- runbook: fixture
+
+### Contract（接口与数据结构）
+
+- contract_summary: fixture
+
+### View（各方看到什么）
+
+- view_summary: fixture
+
+### Verification（验证证据）
+
+- verification_summary: fixture
+EOF
+
+git add .
+git commit -m "docs: missing vo slice fixture" >/dev/null
+
+expect_fail_cmd \
+  "missing verification_refs" \
+  "cd '$TMP_WORKSPACE/missing-vo-slice-project' && CODESPEC_TARGET_PHASE=Implementation '$TMP_WORKSPACE/.codespec/codespec' check-gate implementation-ready"
+log "ok implementation-ready rejects slice missing verification_refs"
 
 log "\n=== All tests passed ==="

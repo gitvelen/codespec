@@ -3,14 +3,14 @@
 <!-- CODESPEC:DESIGN:READING -->
 ## 0. AI 阅读契约
 
-- 本文件与 `work-items/*.yaml` 是 Implementation 阶段的默认权威输入。
-- 实现阶段默认不读取原始材料；只有需求冲突、设计无法解释实现、或需要重开时才回读 `spec.md` / 原始材料。
-- 所有架构决策、模块、接口、页面、数据结构、外部交互、测试策略和工作项必须追溯到 `REQ-*`、`ACC-*`、`VO-*`、`TC-*`。
-- 若实现需要越出本文或当前 WI 的边界，必须停止并回写设计或需求，不得隐性扩 scope。
+- 本文件是 Implementation 阶段的默认权威输入。
+- 所有架构决策、模块、接口、数据结构、外部交互和实现计划必须追溯到 REQ-*、ACC-*、VO-*、TC-*。
+- 若实现需要越出本文实现边界的范围，必须停止并回写设计或需求，不得隐性扩 scope。
+- 本文件各章节标题和 `<!-- CODESPEC:... -->` 标记必须保留；框架 gate 通过这些标记和标题别名来定位章节内容。
 
 | 附件类型 | 读取触发 | 权威边界 | 冲突处理 |
 |---|---|---|---|
-| `design-appendices/*.md` | 当前 WI 或实现问题命中对应模块、页面、Agent、流程、数据或运维细节时读取；不要默认全量读取 | 只展开本文已批准设计的强证据和实现输入；不得新增需求、扩大 scope 或改写 `REQ-*` / `ACC-*` / `VO-*` / `TC-*` 口径 | 与本文或 `spec.md` 冲突时停止并回写权威文档，Implementation 阶段按 authority repair 路径处理 |
+| `design-appendices/*.md` | 当前任务命中对应模块、页面、Agent、流程、数据或运维细节时读取；不要默认全量读取 | 只展开本文已批准设计的强证据和实现输入；不得新增需求、扩大 scope 或改写 `REQ-*` / `ACC-*` / `VO-*` / `TC-*` 口径 | 与本文或 `spec.md` 冲突时停止并回写权威文档，Implementation 阶段按 authority repair 路径处理 |
 
 <!-- CODESPEC:DESIGN:OVERVIEW -->
 ## 1. 设计概览
@@ -54,17 +54,26 @@
 ## 4. 系统结构
 
 - system_context: [当前系统入口、调用链或模块背景]
-- impacted_surfaces:
-  - [会修改的模块、路径、接口或页面]
-- unchanged_surfaces:
-  - [必须保持不变的重要边界]
-- data_flow:
-  - [关键数据流或状态流]
+- data_flow: [关键数据流或状态流]
 - external_interactions:
   - name: [外部系统或 none]
     direction: inbound/outbound/both
     protocol: [HTTP/event/SDK/file/none]
     failure_handling: [失败、超时、重试或降级策略]
+
+<!-- CODESPEC:SCOPE_ALLOWED -->
+### 可修改路径
+
+- `src/auth/**` — [说明]
+- `src/middleware/token.ts` — [说明]
+<!-- CODESPEC:SCOPE_ALLOWED_END -->
+
+<!-- CODESPEC:SCOPE_FORBIDDEN -->
+### 不可修改路径
+
+- `versions/**` — 归档快照
+- `src/billing/**` — 不在本次变更范围
+<!-- CODESPEC:SCOPE_FORBIDDEN_END -->
 
 <!-- CODESPEC:DESIGN:CONTRACTS -->
 ## 5. 契约设计
@@ -94,33 +103,17 @@
 - performance_design:
   - [容量、时延、并发、资源消耗；没有则写 none]
 
-<!-- CODESPEC:DESIGN:WORK_ITEMS -->
-## 7. 工作项与验证
+<!-- CODESPEC:DESIGN:SLICES -->
+## 7. 实现计划与验证
 
-### 工作项映射
+### 实现计划
 
-- wi_id: WI-001
+- slice_id: SLICE-001
+  goal: [本次交付的可验证目标]
   requirement_refs: [REQ-001]
   acceptance_refs: [ACC-001]
   verification_refs: [VO-001]
   test_case_refs: [TC-ACC-001-01]
-  summary: [垂直切片摘要]
-
-### 工作项派生
-
-- wi_id: WI-001
-  requirement_refs:
-    - REQ-001
-  goal: [本 WI 的可执行目标]
-  covered_acceptance_refs: [ACC-001]
-  verification_refs:
-    - VO-001
-  test_case_refs:
-    - TC-ACC-001-01
-  dependency_refs: []
-  dependency_type: none
-  contract_refs: []
-  notes_on_boundary: [修改边界和不做事项]
 
 ### 验证设计
 
@@ -133,28 +126,23 @@
 ### 重开触发器
 
 - [什么情况必须重开 spec/design]
+<!-- CODESPEC:DESIGN:SLICES_END -->
 
 <!-- CODESPEC:DESIGN:IMPLEMENTATION_INPUT -->
 ## 8. 实现阶段输入
 
-每个 WI 和核心场景必须交付以下四层实现输入。缺失任何一层都会导致实现阶段冷启动困难。机器 gate 只检查结构存在，语义充分性由人工复审 cold-start drill 保证。
-
 ### Runbook（场景如何跑）
 
-- wi_id: WI-001
-  runbook: [用连续文字描述本 WI 的场景如何从触发走到终态。实现者读完应能知道运行入口在哪、怎么触发、正常路径和失败路径分别怎么走、输入输出是什么、超时/拒绝/重开/降级怎么处理]
+- runbook: [用连续文字描述场景如何从触发走到终态]
 
-### Contract（API/schema/error code 如何实现）
+### Contract（接口与数据结构）
 
-- wi_id: WI-001
-  contract_summary: [本 WI 涉及的接口、数据结构、错误码、权限。若已有 contracts/*.md 则引用，否则在此描述]
+- contract_summary: [引用 contracts/*.md 或在此描述]
 
 ### View（各方看到什么）
 
-- wi_id: WI-001
-  view_summary: [本 WI 完成后，用户/调用方/监控系统分别看到什么变化]
+- view_summary: [完成后用户/调用方/监控看到的变化]
 
-### Verification（用什么 TC/fixture 证明）
+### Verification（验证证据）
 
-- wi_id: WI-001
-  verification_summary: [引用已有的 TC-*，说明每个 TC 在本 WI 中证明什么行为]
+- verification_summary: [引用 TC-*，说明每个 TC 证明什么行为]

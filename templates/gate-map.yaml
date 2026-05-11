@@ -1,0 +1,65 @@
+transitions:
+  start-design:
+    from_phase: Requirement
+    target_phase: Design
+    review_file: reviews/design-review.yaml
+    gates:
+      - gate: requirement-complete
+        env:
+          CODESPEC_TARGET_PHASE: Design
+      - gate: spec-quality
+        env:
+          CODESPEC_TARGET_PHASE: Design
+      - gate: test-plan-complete
+        env:
+          CODESPEC_TARGET_PHASE: Design
+      - gate: review-quality
+        env:
+          CODESPEC_TARGET_PHASE: Design
+
+  start-implementation:
+    from_phase: Design
+    target_phase: Implementation
+    review_file: reviews/implementation-review.yaml
+    gates:
+      - gate: implementation-ready
+        env:
+          CODESPEC_TARGET_PHASE: Implementation
+      - gate: review-quality
+        env:
+          CODESPEC_TARGET_PHASE: Implementation
+
+  start-testing:
+    from_phase: Implementation
+    target_phase: Testing
+    review_file: reviews/testing-review.yaml
+    gates:
+      - gate: metadata-consistency
+      - gate: scope
+        env:
+          CODESPEC_SCOPE_MODE: implementation-span
+      - gate: contract-boundary
+        env:
+          CODESPEC_CONTRACT_BOUNDARY_MODE: implementation-span
+      - gate: verification
+      - gate: semantic-handoff
+      - gate: review-quality
+        env:
+          CODESPEC_TARGET_PHASE: Testing
+
+  start-deployment:
+    from_phase: Testing
+    target_phase: Deployment
+    review_file: null
+    gates:
+      - gate: trace-consistency
+      - gate: verification
+      - gate: semantic-handoff
+
+  complete-change:
+    from_phase: Deployment
+    target_phase: completed
+    review_file: null
+    gates:
+      - gate: promotion-criteria
+      - gate: semantic-handoff

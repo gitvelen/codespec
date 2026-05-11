@@ -64,7 +64,7 @@ codespec v2.0 一键安装脚本
 
 安装后:
   cd <workspace-dir>/<project-name>
-  # 初始化 dossier 后，手工创建 reviews/design-review.yaml 并填写审查结论
+  # 初始化 dossier 后，记录 reviews/design-review.yaml，写明审查结论与 gate evidence
   # 然后使用标准 runtime 入口推进阶段：codespec start-design
   # 若 codespec 不在 PATH，则使用 <workspace-dir>/.codespec/codespec start-design
 EOF
@@ -167,32 +167,11 @@ ${GREEN}========================================${NC}
   ${YELLOW}# 2. 编辑 spec.md 定义需求${NC}
   vim spec.md
 
-  ${YELLOW}# 3. 运行 gate，创建 review verdict，并进入 Design 阶段${NC}
-  $codespec_cmd check-gate requirement-complete
-  $codespec_cmd check-gate spec-quality
-  $codespec_cmd check-gate test-plan-complete
-  mkdir -p reviews
-  cat > reviews/design-review.yaml <<EOFR
-phase: Requirement
-verdict: approved
-reviewed_by: $(git config user.name || echo "your-name")
-reviewed_at: \$(date +%F)
-scope:
-  - spec.md
-  - testing.md
-gate_evidence:
-  - command: $codespec_cmd check-gate requirement-complete
-    result: pass
-  - command: $codespec_cmd check-gate spec-quality
-    result: pass
-  - command: $codespec_cmd check-gate test-plan-complete
-    result: pass
-findings:
-  - severity: none
-    summary: no blocking findings
-residual_risk: no residual risk identified by review
-decision_notes: approved for Design phase entry
-EOFR
+  ${YELLOW}# 3. 查看 gate 序列，完成语义复审，再进入 Design 阶段${NC}
+  $codespec_cmd gate-sequence start-design
+  $codespec_cmd scaffold-review Design
+  # 运行 gate 并完成语义复审后，把 reviews/design-review.yaml 从 pending 更新为 approved。
+  # gate pass 不等于语义复审通过；不要直接把脚手架当作批准记录。
   $codespec_cmd start-design
 
   ${YELLOW}# 5. 查看当前状态${NC}

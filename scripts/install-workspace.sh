@@ -34,6 +34,7 @@ WORKSPACE_ROOT="${1:-$PWD}"
 # 创建 .codespec 目录结构
 mkdir -p "$WORKSPACE_ROOT/.codespec" \
   "$WORKSPACE_ROOT/.codespec/hooks" \
+  "$WORKSPACE_ROOT/.codespec/scripts/lib" \
   "$WORKSPACE_ROOT/.codespec/scripts" \
   "$WORKSPACE_ROOT/.codespec/templates" \
   "$WORKSPACE_ROOT/.codespec/skills"
@@ -46,17 +47,27 @@ cp "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$WORKSPACE_ROOT/.codespec/scripts/ch
 cp "$FRAMEWORK_ROOT/scripts/install-hooks.sh" "$WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh"
 cp "$FRAMEWORK_ROOT/scripts/install-workspace.sh" "$WORKSPACE_ROOT/.codespec/scripts/install-workspace.sh"
 cp "$FRAMEWORK_ROOT/scripts/init-dossier.sh" "$WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh"
+cp "$FRAMEWORK_ROOT/scripts/audit-regressions.sh" "$WORKSPACE_ROOT/.codespec/scripts/audit-regressions.sh"
+cp "$FRAMEWORK_ROOT/scripts/lint.sh" "$WORKSPACE_ROOT/.codespec/scripts/lint.sh"
 cp "$FRAMEWORK_ROOT/scripts/migrate-to-requirement-phase.sh" "$WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh"
 cp "$FRAMEWORK_ROOT/scripts/smoke.sh" "$WORKSPACE_ROOT/.codespec/scripts/smoke.sh"
+cp "$FRAMEWORK_ROOT/scripts/lib/testing-ledger.sh" "$WORKSPACE_ROOT/.codespec/scripts/lib/testing-ledger.sh"
 
 # 复制模板文件
-cp "$FRAMEWORK_ROOT/templates/AGENTS.md" "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md"
-cp "$FRAMEWORK_ROOT/templates/CLAUDE.md" "$WORKSPACE_ROOT/.codespec/templates/CLAUDE.md"
+cp "$FRAMEWORK_ROOT/templates/AI_INSTRUCTIONS.md" "$WORKSPACE_ROOT/.codespec/templates/AI_INSTRUCTIONS.md"
+cp "$FRAMEWORK_ROOT/templates/gate-map.yaml" "$WORKSPACE_ROOT/.codespec/templates/gate-map.yaml"
+{
+  printf '# AGENTS.md\n\n'
+  cat "$FRAMEWORK_ROOT/templates/AI_INSTRUCTIONS.md"
+} > "$WORKSPACE_ROOT/.codespec/templates/AGENTS.md"
+{
+  printf '# CLAUDE.md\n\n'
+  cat "$FRAMEWORK_ROOT/templates/AI_INSTRUCTIONS.md"
+} > "$WORKSPACE_ROOT/.codespec/templates/CLAUDE.md"
 cp "$FRAMEWORK_ROOT/templates/meta.yaml" "$WORKSPACE_ROOT/.codespec/templates/meta.yaml"
 cp "$FRAMEWORK_ROOT/templates/spec.md" "$WORKSPACE_ROOT/.codespec/templates/spec.md"
 cp "$FRAMEWORK_ROOT/templates/design.md" "$WORKSPACE_ROOT/.codespec/templates/design.md"
 cp "$FRAMEWORK_ROOT/templates/phase-review-policy.md" "$WORKSPACE_ROOT/.codespec/templates/phase-review-policy.md"
-cp "$FRAMEWORK_ROOT/templates/work-item.yaml" "$WORKSPACE_ROOT/.codespec/templates/work-item.yaml"
 cp "$FRAMEWORK_ROOT/templates/testing.md" "$WORKSPACE_ROOT/.codespec/templates/testing.md"
 cp "$FRAMEWORK_ROOT/templates/contract.md" "$WORKSPACE_ROOT/.codespec/templates/contract.md"
 cp "$FRAMEWORK_ROOT/templates/deployment.md" "$WORKSPACE_ROOT/.codespec/templates/deployment.md"
@@ -72,6 +83,8 @@ chmod +x "$WORKSPACE_ROOT/.codespec/codespec" \
   "$WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/install-workspace.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh" \
+  "$WORKSPACE_ROOT/.codespec/scripts/audit-regressions.sh" \
+  "$WORKSPACE_ROOT/.codespec/scripts/lint.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh" \
   "$WORKSPACE_ROOT/.codespec/scripts/smoke.sh"
 
@@ -87,18 +100,18 @@ else
   # Append missing hard rules from template to existing lessons_learned.md
   existing_rules="$(grep -oE '\*\*R[0-9]+\*\*' "$WORKSPACE_ROOT/lessons_learned.md" | sort -u || true)"
   template_rules="$(grep -oE '\*\*R[0-9]+\*\*' "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md" | sort -u || true)"
-  missing_rules=""
+  missing_rule_lines=()
   for rule in $template_rules; do
     if ! printf '%s\n' "$existing_rules" | grep -qF "$rule"; then
-      rule_line="$(grep "$rule" "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md" | head -1)"
-      missing_rules="${missing_rules}
-${rule_line}"
+      rule_line="$(grep -F "$rule" "$WORKSPACE_ROOT/.codespec/templates/lessons_learned.md" | head -1)"
+      missing_rule_lines+=("$rule_line")
     fi
   done
-  if [ -n "$missing_rules" ]; then
-    # Insert missing rules after the last existing R-* rule in the hard rules section
-    sed -i "/^\*\*R[0-9]\+\*\*/:a;n;/^$/!ba;i\\${missing_rules#?
-}" "$WORKSPACE_ROOT/lessons_learned.md" 2>/dev/null || true
+  if [ "${#missing_rule_lines[@]}" -gt 0 ]; then
+    {
+      printf '\n## 补齐的硬规则（codespec install %s）\n\n' "$(date +%F)"
+      printf '%s\n' "${missing_rule_lines[@]}"
+    } >> "$WORKSPACE_ROOT/lessons_learned.md"
   fi
 fi
 

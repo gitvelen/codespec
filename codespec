@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_ROOT="$SCRIPT_DIR"
 
+# shellcheck source=scripts/lib/testing-ledger.sh
+. "$FRAMEWORK_ROOT/scripts/lib/testing-ledger.sh"
+
 log() {
   printf '%s\n' "$*"
 }
@@ -218,6 +221,28 @@ find_project_root() {
       return
     fi
 
+    if [ "${#metas[@]}" -gt 1 ]; then
+      local pwd_meta=""
+      local meta_path meta_abs
+      for meta_path in "${metas[@]}"; do
+        meta_dir="$(dirname "$meta_path")"
+        if [ "$meta_dir" = "." ]; then
+          meta_abs="$git_root"
+        else
+          meta_abs="$(cd "$git_root/$meta_dir" && pwd)"
+        fi
+        if [ "$PWD" = "$meta_abs" ] || [[ "$PWD" == "$meta_abs/"* ]]; then
+          pwd_meta="$meta_abs"
+          break
+        fi
+      done
+      if [ -n "$pwd_meta" ]; then
+        printf '%s\n' "$pwd_meta"
+        return
+      fi
+      die "multiple meta.yaml found in git repo; cd into a specific project directory or set CODESPEC_PROJECT_ROOT"
+    fi
+
     printf '%s\n' "$git_root"
     return
   fi
@@ -244,23 +269,12 @@ render_template() {
   content="${content//__DATE__/${RENDER_DATE:-}}"
   content="${content//__CHANGE_ID__/${RENDER_CHANGE_ID:-}}"
   content="${content//__BASE_VERSION__/${RENDER_BASE_VERSION:-}}"
-  content="${content//__FEATURE_BRANCH__/${RENDER_FEATURE_BRANCH:-}}"
-  content="${content//__EXECUTION_GROUP__/${RENDER_EXECUTION_GROUP:-}}"
-  content="${content//__EXECUTION_BRANCH__/${RENDER_EXECUTION_BRANCH:-}}"
   content="${content//__UPDATED_BY__/${RENDER_UPDATED_BY:-}}"
   content="${content//__PHASE__/${RENDER_PHASE:-}}"
   content="${content//__STATUS__/${RENDER_STATUS:-}}"
-  content="${content//__FOCUS_WORK_ITEM__/${RENDER_FOCUS_WORK_ITEM:-}}"
-  content="${content//__ACTIVE_WORK_ITEMS__/${RENDER_ACTIVE_WORK_ITEMS:-[]}}"
   content="${content//__IMPLEMENTATION_BASE_REVISION__/${RENDER_IMPLEMENTATION_BASE_REVISION:-null}}"
-  content="${content//__WI_ID__/${RENDER_WI_ID:-}}"
   content="${content//__DERIVED_FROM__/${RENDER_DERIVED_FROM:-}}"
   printf '%s\n' "$content" > "$dest"
-}
-
-validate_work_item_id() {
-  local wi_id="$1"
-  [[ "$wi_id" =~ ^WI-[0-9]{3}$ ]] || die "Invalid work item ID format: '$wi_id' (expected WI-XXX where X is a digit)"
 }
 
 validate_stable_version() {
@@ -268,6 +282,71 @@ validate_stable_version() {
   [ -n "$stable_version" ] || die 'Invalid stable version: empty value'
   [[ "$stable_version" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid stable version: '$stable_version' (use letters, digits, dot, underscore, or dash)"
   [[ "$stable_version" != *..* ]] || die "Invalid stable version: '$stable_version' must not contain '..'"
+}
+
+gate_map_file() {
+  local file="$FRAMEWORK_ROOT/templates/gate-map.yaml"
+  [ -f "$file" ] || die "missing gate map: templates/gate-map.yaml"
+  printf '%s\n' "$file"
+}
+
+transition_exists() {
+  local transition="$1"
+  local file
+  file="$(gate_map_file)"
+  TRANSITION="$transition" yq eval '.transitions | has(strenv(TRANSITION))' "$file" 2>/dev/null | grep -qx 'true'
+}
+
+transition_gate_rows() {
+  local transition="$1"
+  local include_review="${2:-yes}"
+  local file
+  file="$(gate_map_file)"
+  TRANSITION="$transition" INCLUDE_REVIEW="$include_review" yq eval -r '
+    .transitions[strenv(TRANSITION)].gates[]
+    | select(strenv(INCLUDE_REVIEW) == "yes" or .gate != "review-quality")
+    | [.gate, ((.env // {}) | to_entries | map(.key + "=" + .value) | join(" "))]
+    | @tsv
+  ' "$file"
+}
+
+gate_command_string() {
+  local gate="$1"
+  local envs="${2:-}"
+  if [ -n "$envs" ]; then
+    printf '%s codespec check-gate %s\n' "$envs" "$gate"
+  else
+    printf 'codespec check-gate %s\n' "$gate"
+  fi
+}
+
+run_mapped_gate() {
+  local project_root="$1"
+  local gate="$2"
+  local envs="${3:-}"
+  local env_args=("CODESPEC_PROJECT_ROOT=$project_root")
+  local pair
+  for pair in $envs; do
+    [ -n "$pair" ] || continue
+    env_args+=("$pair")
+  done
+  env "${env_args[@]}" "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$gate"
+}
+
+run_transition_gates() {
+  local project_root="$1"
+  local transition="$2"
+  local include_review="${3:-yes}"
+  local rows=()
+  local row gate envs
+
+  transition_exists "$transition" || die "unknown transition: $transition"
+  mapfile -t rows < <(transition_gate_rows "$transition" "$include_review")
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r gate envs <<< "$row"
+    [ -n "$gate" ] || continue
+    run_mapped_gate "$project_root" "$gate" "$envs"
+  done
 }
 
 copy_dir_contents() {
@@ -316,6 +395,14 @@ ensure_clean_git_worktree() {
   git -C "$project_root" diff --cached --quiet --ignore-submodules -- || die 'submit-pr requires a clean git working tree'
 }
 
+ensure_reset_worktree_clean() {
+  local project_root="$1"
+  local status_output
+  git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  status_output="$(git -C "$project_root" status --porcelain --untracked-files=all)"
+  [ -z "$status_output" ] || die 'reset-to-requirement refuses to overwrite a dirty worktree; commit/stash changes or rerun with --force'
+}
+
 ensure_deployed_source_revision_current() {
   local project_root="$1"
   local deployment_file="$project_root/deployment.md"
@@ -327,7 +414,6 @@ ensure_deployed_source_revision_current() {
     "testing.md"
     "AGENTS.md"
     "CLAUDE.md"
-    "work-items/**"
     "contracts/**"
     "spec-appendices/**"
     "design-appendices/**"
@@ -471,20 +557,6 @@ resolve_promoted_base_version() {
     | cut -f4
 }
 
-branch_alignment_status() {
-  local project_root="$1"
-  local expected_branch="$2"
-  local actual_branch
-  actual_branch="$(current_git_branch "$project_root")"
-
-  if [ "$expected_branch" = "null" ]; then
-    printf 'not_applicable'
-    return
-  fi
-
-  [ "$actual_branch" = "$expected_branch" ] && printf 'aligned' || printf 'mismatch'
-}
-
 meta_update() {
   local meta_file="$1"
   shift
@@ -538,7 +610,7 @@ is_placeholder_value() {
 
   normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr -d "'\"")"
   case "$normalized" in
-    null|pending|todo|tbd|placeholder|none|yyyy-mm-dd|待填写|待补充|待确认)
+    null|pending|todo|tbd|placeholder|pass/fail|yyyy-mm-dd|待填写|待补充|待确认)
       return 0
       ;;
   esac
@@ -640,7 +712,6 @@ archive_dossier() {
   [ -f "$project_root/deployment.md" ] && cp "$project_root/deployment.md" "$target_root/deployment.md"
   [ -f "$project_root/CLAUDE.md" ] && cp "$project_root/CLAUDE.md" "$target_root/CLAUDE.md"
   [ -f "$project_root/AGENTS.md" ] && cp "$project_root/AGENTS.md" "$target_root/AGENTS.md"
-  copy_dir_contents "$project_root/work-items" "$target_root/work-items"
   copy_dir_contents "$project_root/reviews" "$target_root/reviews"
   copy_dir_contents "$project_root/contracts" "$target_root/contracts"
   copy_dir_contents "$project_root/spec-appendices" "$target_root/spec-appendices"
@@ -650,14 +721,10 @@ archive_dossier() {
     cp "$project_root/scripts/codespec-deploy" "$target_root/scripts/codespec-deploy"
   fi
 
-  if [ -d "$project_root/src" ]; then
-    copy_dir_contents "$project_root/src" "$target_root/src"
-  fi
-
   TODAY="$(date +%F)" \
   STABLE_VERSION="$stable_version" \
   PROMOTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
-    yq eval '.status = "completed" | .stable_version = strenv(STABLE_VERSION) | .focus_work_item = null | .updated_at = env(TODAY) | .updated_by = "codespec-complete" | .promoted_version = strenv(STABLE_VERSION) | .promoted_at = strenv(PROMOTED_AT)' -i "$target_root/meta.yaml"
+    yq eval '.status = "completed" | .stable_version = strenv(STABLE_VERSION) | .updated_at = env(TODAY) | .updated_by = "codespec-complete" | .promoted_version = strenv(STABLE_VERSION) | .promoted_at = strenv(PROMOTED_AT)' -i "$target_root/meta.yaml"
 }
 
 
@@ -671,7 +738,7 @@ assert_phase_transition() {
       [ "$current_phase" = 'Requirement' ] || die "cannot move from ${current_phase} to ${target_phase}"
       ;;
     Implementation)
-      if [ "$current_phase" = 'Design' ] || [ "$current_phase" = 'Implementation' ]; then
+      if [ "$current_phase" = 'Design' ]; then
         return
       fi
       die "cannot move from ${current_phase} to ${target_phase}"
@@ -691,33 +758,6 @@ assert_phase_transition() {
   esac
 }
 
-parse_active_work_items_arg() {
-  local raw="$1"
-  if [ "$raw" = '[]' ]; then
-    printf '[]'
-    return
-  fi
-
-  local output='['
-  local first=1
-  local item
-  IFS=',' read -r -a items <<< "$raw"
-  for item in "${items[@]}"; do
-    [ -n "$item" ] || continue
-    # Validate WI ID format to prevent YAML injection
-    if ! [[ "$item" =~ ^WI-[0-9]{3}$ ]]; then
-      die "Invalid work item ID format: '$item' (expected WI-XXX where X is a digit)"
-    fi
-    if [ "$first" -eq 0 ]; then
-      output+=', '
-    fi
-    output+="\"$item\""
-    first=0
-  done
-  output+=']'
-  printf '%s' "$output"
-}
-
 contains_exact_line() {
   local needle="$1"
   shift || true
@@ -731,7 +771,7 @@ contains_exact_line() {
 validate_authority_repair_gate() {
   local gate="$1"
   case "$gate" in
-    design-quality|design-readiness|implementation-ready|implementation-start|active-work-items-complete|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria)
+    design-quality|design-readiness|implementation-ready|implementation-start|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria)
       ;;
     *)
       die "unsupported authority repair gate: $gate"
@@ -772,16 +812,6 @@ validate_authority_repair_path() {
       return 0
       ;;
   esac
-
-  if [[ "$path" =~ ^work-items/(WI-[0-9]{3})\.yaml$ ]]; then
-    local wi_id="${BASH_REMATCH[1]}"
-    local active=()
-    mapfile -t active < <(yaml_list "$meta" active_work_items | grep -vE '^(|null)$' || true)
-    [ "${#active[@]}" -gt 0 ] || die 'authority repair work-item path requires active_work_items'
-    contains_exact_line "$wi_id" "${active[@]}" || die "authority repair work-item path must reference an active work item: $path"
-    [ -f "$project_root/$path" ] || die "authority repair work-item path does not exist: $path"
-    return 0
-  fi
 
   die "authority repair path is not allowed: $path"
 }
@@ -914,8 +944,8 @@ authority_repair_close() {
   done
   is_placeholder_value "$evidence" && die 'authority repair close requires --evidence'
 
-  local project_root meta repair_id repair_file gate gate_output smoke_output closed_at closed_revision backup_meta backup_repair metadata_output
-  local gate_rc smoke_rc metadata_rc
+  local project_root meta repair_id repair_file gate gate_output closed_at closed_revision backup_meta backup_repair metadata_output
+  local gate_rc metadata_rc
   project_root="$(find_project_root)"
   meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
@@ -933,12 +963,6 @@ authority_repair_close() {
   set -e
   [ "$gate_rc" -eq 0 ] || die "authority repair close gate failed (${gate}): $gate_output"
 
-  set +e
-  smoke_output="$(CODESPEC_AUTHORITY_REPAIR_SMOKE_RUNNING=1 "$FRAMEWORK_ROOT/scripts/smoke.sh" 2>&1)"
-  smoke_rc=$?
-  set -e
-  [ "$smoke_rc" -eq 0 ] || die "authority repair close smoke failed: $smoke_output"
-
   closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   closed_revision="$(current_git_revision "$project_root")"
   backup_meta="$(mktemp)"
@@ -948,7 +972,7 @@ authority_repair_close() {
 
   set +e
   EVIDENCE="$evidence" CLOSED_AT="$closed_at" CLOSED_REVISION="$closed_revision" \
-    yq eval '.status = "closed" | .closed_at = env(CLOSED_AT) | .closed_revision = env(CLOSED_REVISION) | .evidence = env(EVIDENCE) | .gate_result = "pass" | .smoke_result = "pass"' -i "$repair_file"
+    yq eval '.status = "closed" | .closed_at = env(CLOSED_AT) | .closed_revision = env(CLOSED_REVISION) | .evidence = env(EVIDENCE) | .gate_result = "pass" | .smoke_result = "not-run"' -i "$repair_file"
   metadata_rc=$?
   if [ "$metadata_rc" -eq 0 ]; then
     meta_update "$meta" '.active_authority_repair = null'
@@ -1006,22 +1030,6 @@ authority_repair_cmd() {
 
 
 
-add_work_item() {
-  require_yq
-  local wi_id="${1:?usage: codespec add-work-item <WI-ID>}"
-  validate_work_item_id "$wi_id"
-  local project_root
-  project_root="$(find_project_root)"
-  local wi_file="$project_root/work-items/$wi_id.yaml"
-  [ ! -f "$wi_file" ] || die "work item already exists: $wi_id"
-
-  RENDER_WI_ID="$wi_id" \
-  RENDER_DERIVED_FROM="design.md#work-item-derivation" \
-  render_template "$FRAMEWORK_ROOT/templates/work-item.yaml" "$wi_file"
-
-  log "created work item: work-items/$wi_id.yaml"
-}
-
 materialize_deployment() {
   require_yq
   local project_root
@@ -1057,10 +1065,7 @@ start_design() {
     log "created testing.md"
   fi
 
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" requirement-complete >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" spec-quality >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" test-plan-complete >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Design' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-quality >/dev/null
+  run_transition_gates "$project_root" start-design >/dev/null
 
   meta_update "$meta" '.phase = "Design" | .status = "active"'
   log "started Design phase"
@@ -1068,39 +1073,30 @@ start_design() {
 
 start_implementation() {
   require_yq
-  local wi_id="${1:?usage: codespec start-implementation <WI-ID>}"
-  validate_work_item_id "$wi_id"
   local project_root
   project_root="$(find_project_root)"
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
-  [ -f "$project_root/work-items/$wi_id.yaml" ] || die "missing work item: work-items/$wi_id.yaml"
 
-  local current_phase current_status active_count implementation_base_revision design_quality_checked_at design_quality_revision
+  local current_phase current_status implementation_base_revision design_quality_checked_at design_quality_revision
   current_phase="$(yaml_scalar "$meta" phase)"
   current_status="$(yaml_scalar "$meta" status)"
   assert_phase_transition "$current_phase" 'Implementation' "$current_status"
 
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_FOCUS_WI="$wi_id" CODESPEC_TARGET_PHASE='Implementation' "$FRAMEWORK_ROOT/scripts/check-gate.sh" implementation-ready >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_TARGET_PHASE='Implementation' "$FRAMEWORK_ROOT/scripts/check-gate.sh" review-quality >/dev/null
+  if [ "$current_phase" = 'Implementation' ]; then
+    die "already in Implementation phase; use reopen-implementation if you need to re-enter after Testing/Deployment"
+  fi
+
+  run_transition_gates "$project_root" start-implementation >/dev/null
   design_quality_checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   design_quality_revision="$(current_git_revision "$project_root")"
 
-  active_count="$(yq eval '.active_work_items | length' "$meta")"
   implementation_base_revision="$(yaml_scalar "$meta" implementation_base_revision)"
   if [ "$current_phase" != 'Implementation' ] || [ "$implementation_base_revision" = 'null' ] || [ -z "$implementation_base_revision" ]; then
     implementation_base_revision="$(current_git_revision "$project_root")"
   fi
-  if [ "$active_count" = '0' ]; then
-    atomic_meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .implementation_base_revision = \"$implementation_base_revision\" | .active_work_items = [\"$wi_id\"] | .gate_evidence.implementation_entry = {\"gate\": \"design-quality\", \"status\": \"pass\", \"checked_at\": \"$design_quality_checked_at\", \"checked_revision\": \"$design_quality_revision\", \"focus_work_item\": \"$wi_id\"}"
-  else
-    if ! yq eval ".active_work_items | any(. == \"$wi_id\")" "$meta" 2>/dev/null | grep -Fxq "true"; then
-      atomic_meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .implementation_base_revision = \"$implementation_base_revision\" | .active_work_items = (.active_work_items + [\"$wi_id\"] | unique) | .gate_evidence.implementation_entry = {\"gate\": \"design-quality\", \"status\": \"pass\", \"checked_at\": \"$design_quality_checked_at\", \"checked_revision\": \"$design_quality_revision\", \"focus_work_item\": \"$wi_id\"}"
-    else
-      atomic_meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"$wi_id\" | .implementation_base_revision = \"$implementation_base_revision\" | .gate_evidence.implementation_entry = {\"gate\": \"design-quality\", \"status\": \"pass\", \"checked_at\": \"$design_quality_checked_at\", \"checked_revision\": \"$design_quality_revision\", \"focus_work_item\": \"$wi_id\"}"
-    fi
-  fi
-  log "started Implementation phase: focus=$wi_id"
+  atomic_meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .implementation_base_revision = \"$implementation_base_revision\" | .gate_evidence.implementation_entry = {\"gate\": \"implementation-ready\", \"status\": \"pass\", \"checked_at\": \"$design_quality_checked_at\", \"checked_revision\": \"$design_quality_revision\"}"
+  log "started Implementation phase"
 }
 
 start_testing() {
@@ -1115,14 +1111,9 @@ start_testing() {
   current_status="$(yaml_scalar "$meta" status)"
   assert_phase_transition "$current_phase" 'Testing' "$current_status"
 
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" metadata-consistency
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" active-work-items-complete
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_SCOPE_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" scope
-  CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_CONTRACT_BOUNDARY_MODE=implementation-span "$FRAMEWORK_ROOT/scripts/check-gate.sh" contract-boundary
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" semantic-handoff
+  run_transition_gates "$project_root" start-testing
 
-  meta_update "$meta" '.phase = "Testing" | .status = "active" | .focus_work_item = null | .execution_branch = null | .execution_group = null'
+  meta_update "$meta" '.phase = "Testing" | .status = "active"'
   log "started Testing phase"
 }
 
@@ -1139,7 +1130,7 @@ start_deployment() {
   current_status="$(yaml_scalar "$meta" status)"
   assert_phase_transition "$current_phase" 'Deployment' "$current_status"
 
-  # 如果是 reopen 场景（completed -> active），恢复 active_work_items
+  # 如果是 reopen 场景（completed -> active）
   if [ "$current_status" = 'completed' ]; then
     local stable_version change_id archived_meta
     stable_version="$(yaml_scalar "$meta" stable_version)"
@@ -1153,13 +1144,12 @@ start_deployment() {
     fi
 
     if [ -f "$archived_meta" ]; then
-      local archived_active_items archived_change_id meta_before gate_output gate_status
+      local archived_change_id meta_before gate_output gate_status
       archived_change_id="$(yaml_scalar "$archived_meta" change_id)"
       [ "$archived_change_id" = "$change_id" ] || die "cannot reopen Deployment: archived meta change_id mismatch at $archived_meta"
-      archived_active_items="$(yq -o json '.active_work_items' "$archived_meta")"
       meta_before="$(mktemp)"
       cp "$meta" "$meta_before"
-      meta_update "$meta" ".phase = \"Deployment\" | .status = \"active\" | .stable_version = null | .focus_work_item = null | .active_work_items = ${archived_active_items}"
+      meta_update "$meta" ".phase = \"Deployment\" | .status = \"active\" | .stable_version = null"
       set +e
       gate_output="$(
         CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" trace-consistency &&
@@ -1174,23 +1164,21 @@ start_deployment() {
         die 'cannot reopen Deployment: verification gates failed'
       fi
       rm -f "$meta_before"
-      log "reopened Deployment phase (restored active_work_items from $(basename "$(dirname "$archived_meta")")/meta.yaml)"
+      log "reopened Deployment phase"
       return
     else
       die "cannot reopen Deployment: archived meta not found at $archived_meta"
     fi
   fi
 
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" trace-consistency >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" verification >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" semantic-handoff >/dev/null
+  run_transition_gates "$project_root" start-deployment >/dev/null
 
   deployment_file="$project_root/deployment.md"
   if [ ! -f "$deployment_file" ]; then
     cp "$FRAMEWORK_ROOT/templates/deployment.md" "$deployment_file"
   fi
 
-  meta_update "$meta" '.phase = "Deployment" | .status = "active" | .focus_work_item = null'
+  meta_update "$meta" '.phase = "Deployment" | .status = "active"'
   log "started Deployment phase"
 }
 
@@ -1301,28 +1289,31 @@ manual_verification_ready: $manual_verification_ready
 EOF
 )"
 
-  replace_markdown_section "$deployment_file" '## Acceptance Conclusion' "$(cat <<'EOF'
+  local current_acceptance_status
+  current_acceptance_status="$(markdown_section_scalar "$deployment_file" '## Acceptance Conclusion' 'status')"
+  if [ "$current_acceptance_status" = 'pass' ] || [ "$current_acceptance_status" = 'fail' ]; then
+    log "preserving existing acceptance conclusion (status: $current_acceptance_status)"
+  else
+    replace_markdown_section "$deployment_file" '## Acceptance Conclusion' "$(cat <<'EOF'
 status: pending
 notes: pending manual acceptance
 approved_by: pending
 approved_at: pending
 EOF
 )"
+  fi
 
   log "deployment executed"
 }
 
 reopen_implementation() {
   require_yq
-  local wi_id="${1:?usage: codespec reopen-implementation <WI-ID>}"
-  validate_work_item_id "$wi_id"
   local project_root
   project_root="$(find_project_root)"
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
-  [ -f "$project_root/work-items/$wi_id.yaml" ] || die "missing work item: work-items/$wi_id.yaml"
 
-  local current_phase current_status existing_csv yaml_array item
+  local current_phase current_status
   current_phase="$(yaml_scalar "$meta" phase)"
   current_status="$(yaml_scalar "$meta" status)"
   [ "$current_status" = 'active' ] || die 'reopen-implementation requires active status'
@@ -1331,18 +1322,25 @@ reopen_implementation() {
     *) die 'reopen-implementation requires Testing or Deployment phase' ;;
   esac
 
-  existing_csv="$(yaml_list "$meta" active_work_items | grep -vE '^(|null)$' | sort -u | paste -sd ',' - || true)"
-  if [ -n "$existing_csv" ]; then
-    if ! printf '%s\n' "$existing_csv" | tr ',' '\n' | grep -Fxq "$wi_id"; then
-      existing_csv="${existing_csv},${wi_id}"
-    fi
-  else
-    existing_csv="$wi_id"
-  fi
-  yaml_array="$(parse_active_work_items_arg "$existing_csv")"
+  atomic_meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .implementation_base_revision = \"$(current_git_revision "$project_root")\""
+  log "reopened Implementation phase"
+}
 
-  atomic_meta_update "$meta" ".phase = \"Implementation\" | .status = \"active\" | .focus_work_item = \"${wi_id}\" | .execution_branch = null | .execution_group = null | .implementation_base_revision = \"$(current_git_revision "$project_root")\" | .active_work_items = ${yaml_array}"
-  log "reopened Implementation phase for ${wi_id}"
+reopen_testing() {
+  require_yq
+  local project_root
+  project_root="$(find_project_root)"
+  local meta="$project_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml"
+
+  local current_phase current_status
+  current_phase="$(yaml_scalar "$meta" phase)"
+  current_status="$(yaml_scalar "$meta" status)"
+  [ "$current_status" = 'active' ] || die 'reopen-testing requires active status'
+  [ "$current_phase" = 'Deployment' ] || die 'reopen-testing requires Deployment phase'
+
+  atomic_meta_update "$meta" ".phase = \"Testing\" | .status = \"active\""
+  log "reopened Testing phase"
 }
 
 complete_change() {
@@ -1361,11 +1359,10 @@ complete_change() {
   [ "$current_phase" = 'Deployment' ] || die 'complete-change requires Deployment phase'
   [ "$current_status" = 'active' ] || die 'complete-change requires active Deployment status'
 
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" promotion-criteria >/dev/null
-  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" semantic-handoff >/dev/null
+  run_transition_gates "$project_root" complete-change >/dev/null
 
   archive_dossier "$stable_version" "$project_root" "$workspace_root"
-  meta_update "$meta" '.status = "completed" | .stable_version = "'"$stable_version"'" | .focus_work_item = null | .active_work_items = []'
+  meta_update "$meta" '.status = "completed" | .stable_version = "'"$stable_version"'"'
   log "completed change"
   log "archived stable version: versions/$stable_version"
 }
@@ -1394,7 +1391,7 @@ submit_pr() {
     shift || true
   done
 
-  local project_root meta phase status current_branch feature_branch execution_group recorded_stable_version
+  local project_root meta phase status current_branch recorded_stable_version
   project_root="$(find_project_root)"
   meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
@@ -1411,12 +1408,6 @@ submit_pr() {
   [ "$current_branch" != 'detached' ] || die 'submit-pr requires a branch checkout'
   [ "$current_branch" != 'none' ] || die 'submit-pr requires a git branch'
 
-  feature_branch="$(yaml_scalar "$meta" feature_branch)"
-  execution_group="$(yaml_scalar "$meta" execution_group)"
-  if [ "$execution_group" != 'null' ] && [ "$current_branch" != "$feature_branch" ]; then
-    die 'submit-pr must run from feature_branch, not an execution branch'
-  fi
-
   if [ -z "$base_branch" ]; then
     base_branch="$(resolve_default_branch "$project_root")"
   fi
@@ -1427,7 +1418,7 @@ submit_pr() {
     ensure_deployed_source_revision_current "$project_root"
     complete_change "$stable_version"
     git -C "$project_root" add meta.yaml
-    git -C "$project_root" commit --no-verify -m "chore: complete change $stable_version" >/dev/null
+    git -C "$project_root" commit -m "chore: complete change $stable_version" >/dev/null
   elif [ "$status" = 'completed' ]; then
     ensure_clean_git_worktree "$project_root"
     recorded_stable_version="$(yaml_scalar "$meta" stable_version)"
@@ -1508,7 +1499,6 @@ scaffold_project_docs() {
 请参考源文件：
 - spec.md - 完整需求规格
 - design.md - 技术设计
-- work-items/*.yaml - 工作项详情
 
 EOF
 
@@ -1624,6 +1614,66 @@ generate_project_docs() {
   scaffold_project_docs "$@"
 }
 
+migrate_requirement_phase() {
+  require_yq
+  local project_root="${1:?usage: codespec migrate-requirement-phase <project_root> [--apply]}"
+  shift || true
+
+  local apply_mode=false
+  if find_optional_arg '--apply' "$@"; then
+    apply_mode=true
+  fi
+
+  [ -d "$project_root" ] || die "project_root does not exist: $project_root"
+  project_root="$(cd "$project_root" && pwd)"
+  local meta="$project_root/meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml in $project_root"
+
+  local phase
+  phase="$(yaml_scalar "$meta" phase)"
+  case "$phase" in
+    Proposal|Requirements) ;;
+    Requirement)
+      log "project is already in Requirement phase"
+      return
+      ;;
+    *)
+      log "project is in $phase phase; no Requirement phase migration needed"
+      return
+      ;;
+  esac
+
+  if [ "$apply_mode" = false ]; then
+    log "=== DRY RUN ==="
+    log "project_root: $project_root"
+    log "current phase: $phase"
+    log "would update meta.yaml phase to Requirement"
+    if [ -f "$project_root/reviews/requirements-review.yaml" ]; then
+      log "would move reviews/requirements-review.yaml to reviews/design-review.yaml"
+    fi
+    log "run again with --apply to execute"
+    return
+  fi
+
+  [ ! -f "$project_root/meta.yaml.bak" ] || die "backup already exists: meta.yaml.bak"
+  cp "$meta" "$project_root/meta.yaml.bak"
+
+  if [ -f "$project_root/reviews/requirements-review.yaml" ]; then
+    [ ! -f "$project_root/reviews/design-review.yaml" ] || die "target review already exists: reviews/design-review.yaml"
+    cp "$project_root/reviews/requirements-review.yaml" "$project_root/reviews/requirements-review.yaml.bak"
+  fi
+
+  yq eval '.phase = "Requirement"' -i "$meta"
+
+  if [ -f "$project_root/reviews/requirements-review.yaml" ]; then
+    sed -i 's/^phase: Proposal$/phase: Requirement/g; s/^phase: Requirements$/phase: Requirement/g' "$project_root/reviews/requirements-review.yaml"
+    mv "$project_root/reviews/requirements-review.yaml" "$project_root/reviews/design-review.yaml"
+  fi
+
+  CODESPEC_PROJECT_ROOT="$project_root" "$FRAMEWORK_ROOT/scripts/check-gate.sh" metadata-consistency >/dev/null
+  log "migrated project to Requirement phase"
+}
+
 reset_to_requirement() {
   require_yq
   local project_root workspace_root
@@ -1642,9 +1692,28 @@ reset_to_requirement() {
   [ "$current_phase" = 'Deployment' ] || die 'reset-to-requirement requires Deployment phase'
   base_version="$(resolve_promoted_base_version "$workspace_root" "$change_id")"
 
-  local keep_contracts=false
-  if find_optional_arg '--keep-contracts' "$@"; then
-    keep_contracts=true
+  local keep_contracts=true
+  local force=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --reset-contracts)
+        keep_contracts=false
+        ;;
+      --keep-contracts)
+        keep_contracts=true
+        ;;
+      --force)
+        force=true
+        ;;
+      *)
+        die "unknown reset-to-requirement option: $1"
+        ;;
+    esac
+    shift || true
+  done
+
+  if [ "$force" = false ]; then
+    ensure_reset_worktree_clean "$project_root"
   fi
 
   log "resetting dossier to Requirement phase..."
@@ -1652,10 +1721,13 @@ reset_to_requirement() {
   cp "$workspace_root/.codespec/templates/spec.md" "$project_root/spec.md"
   cp "$workspace_root/.codespec/templates/design.md" "$project_root/design.md"
 
-  rm -f "$project_root/testing.md"
+  if [ -f "$workspace_root/.codespec/templates/testing.md" ]; then
+    RENDER_PHASE="Requirement" \
+      render_template "$workspace_root/.codespec/templates/testing.md" "$project_root/testing.md"
+  else
+    rm -f "$project_root/testing.md"
+  fi
   rm -f "$project_root/deployment.md"
-  rm -rf "$project_root/work-items"
-  mkdir -p "$project_root/work-items"
 
   rm -rf "$project_root/reviews"
   mkdir -p "$project_root/reviews"
@@ -1668,13 +1740,8 @@ reset_to_requirement() {
   RENDER_DATE="$TODAY" \
   RENDER_CHANGE_ID="$base_version-next" \
   RENDER_BASE_VERSION="$base_version" \
-  RENDER_FEATURE_BRANCH="$(current_git_branch "$project_root")" \
-  RENDER_EXECUTION_GROUP="null" \
-  RENDER_EXECUTION_BRANCH="null" \
   RENDER_PHASE="Requirement" \
   RENDER_STATUS="active" \
-  RENDER_FOCUS_WORK_ITEM="null" \
-  RENDER_ACTIVE_WORK_ITEMS="[]" \
   RENDER_IMPLEMENTATION_BASE_REVISION="null" \
   RENDER_UPDATED_BY="codespec-reset" \
   render_template "$workspace_root/.codespec/templates/meta.yaml" "$project_root/meta.yaml"
@@ -1684,64 +1751,264 @@ reset_to_requirement() {
   log "new change_id: $base_version-next"
 }
 
-set_active_work_items() {
+migrate_remove_wi() {
   require_yq
-  local raw="${1:?usage: codespec set-active-work-items <WI-001,WI-002|[]>}"
-  local project_root
-  project_root="$(find_project_root)"
+  local project_root="${1:?usage: codespec migrate-remove-wi <project_root> [--apply]}"
+  shift || true
+
+  local apply_mode=false
+  if find_optional_arg '--apply' "$@"; then
+    apply_mode=true
+  fi
+
+  [ -d "$project_root" ] || die "project_root does not exist: $project_root"
   local meta="$project_root/meta.yaml"
-  [ -f "$meta" ] || die "missing meta.yaml"
+  [ -f "$meta" ] || die "missing meta.yaml in $project_root"
 
-  local yaml_array item
-  yaml_array="$(parse_active_work_items_arg "$raw")"
-
-  local phase focus_wi
+  local phase
   phase="$(yaml_scalar "$meta" phase)"
-  focus_wi="$(yaml_scalar "$meta" focus_work_item)"
 
-  if [ "$phase" = 'Implementation' ] && [ "$yaml_array" = '[]' ] && [ "$focus_wi" != 'null' ]; then
-    die 'cannot clear active_work_items while focus_work_item is set in Implementation phase'
+  if [ "$apply_mode" = false ]; then
+    log "=== DRY RUN ==="
+    log "project_root: $project_root"
+    log "current phase: $phase"
+    log ""
   fi
-  if [ "$phase" = 'Implementation' ] && [ "$focus_wi" != 'null' ] && [ "$yaml_array" != '[]' ]; then
-    printf '%s\n' "$raw" | tr ',' '\n' | grep -Fxq "$focus_wi" || die "focus_work_item ${focus_wi} must be included in active_work_items"
-  fi
 
-  atomic_meta_update "$meta" ".active_work_items = ${yaml_array}"
-  log "updated active work items"
-}
-
-set_execution_context() {
-  require_yq
-  local mode="${1:?usage: codespec set-execution-context <single|parallel> <feature-branch> [execution-group]}"
-  local feature_branch="${2:?usage: codespec set-execution-context <single|parallel> <feature-branch> [execution-group]}"
-  local project_root
-  project_root="$(find_project_root)"
-  local meta="$project_root/meta.yaml"
-  [ -f "$meta" ] || die "missing meta.yaml"
-
-  local git_branch
-  git_branch="$(current_git_branch "$project_root")"
-  [ "$git_branch" != 'none' ] || die 'set-execution-context requires a git repository'
-  [ "$git_branch" != 'detached' ] || die 'set-execution-context requires a named git branch'
-
-  case "$mode" in
-    single)
-      [ "$#" -eq 2 ] || die 'usage: codespec set-execution-context single <feature-branch>'
-      [ "$git_branch" = "$feature_branch" ] || die "single execution context requires current git branch (${git_branch}) to match feature_branch (${feature_branch})"
-      meta_update "$meta" ".feature_branch = \"$feature_branch\" | .execution_group = null | .execution_branch = null"
-      log "set execution context: single feature=${feature_branch}"
+  case "$phase" in
+    Requirement|Design)
+      if [ "$apply_mode" = false ]; then
+        log "Phase is $phase - migration can proceed automatically."
+      fi
       ;;
-    parallel)
-      local execution_group="${3:?usage: codespec set-execution-context parallel <feature-branch> <execution-group>}"
-      [ "$#" -eq 3 ] || die 'usage: codespec set-execution-context parallel <feature-branch> <execution-group>'
-      [ "$execution_group" != 'null' ] || die 'execution-group must be non-null'
-      meta_update "$meta" ".feature_branch = \"$feature_branch\" | .execution_group = \"$execution_group\" | .execution_branch = \"$git_branch\""
-      log "set execution context: parallel feature=${feature_branch} group=${execution_group} branch=${git_branch}"
+    Implementation|Testing|Deployment)
+      if [ "$apply_mode" = true ]; then
+        die "Cannot auto-migrate project in $phase phase. Please complete the current loop or migrate manually."
+      else
+        log "WARNING: Phase is $phase - automatic migration is not allowed."
+        log "  Please complete the current loop or migrate manually."
+        return 0
+      fi
       ;;
     *)
-      die 'usage: codespec set-execution-context <single|parallel> <feature-branch> [execution-group]'
+      die "Unknown phase: $phase"
       ;;
   esac
+
+  # Step 1: Backup work-items/ if it exists
+  if [ -d "$project_root/work-items" ]; then
+    local backup_dir="$project_root/work-items.bak.$(date +%Y%m%d)"
+    if [ "$apply_mode" = false ]; then
+      log "Would backup: work-items/ -> $(basename "$backup_dir")/"
+      # Show WI summary
+      local wi_file wi_id
+      for wi_file in "$project_root/work-items"/WI-*.yaml; do
+        [ -f "$wi_file" ] || continue
+        wi_id="$(basename "$wi_file" .yaml)"
+        local allowed forbidden
+        allowed="$(yaml_list "$wi_file" allowed_paths | tr '\n' ',' | sed 's/,$//')"
+        forbidden="$(yaml_list "$wi_file" forbidden_paths | tr '\n' ',' | sed 's/,$//')"
+        log "  $wi_id: allowed_paths=$allowed, forbidden_paths=$forbidden"
+      done
+    else
+      if [ -d "$backup_dir" ]; then
+        die "backup directory already exists: $backup_dir"
+      fi
+      mv "$project_root/work-items" "$backup_dir"
+      log "backed up: work-items/ -> $(basename "$backup_dir")/"
+    fi
+  else
+    if [ "$apply_mode" = false ]; then
+      log "No work-items/ directory found - nothing to backup."
+    fi
+  fi
+
+  # Step 2: Clean meta.yaml
+  local fields_to_remove=(focus_work_item active_work_items execution_group execution_branch feature_branch)
+  local field
+  for field in "${fields_to_remove[@]}"; do
+    local current_value
+    current_value="$(yq eval ".${field} // \"absent\"" "$meta")"
+    if [ "$current_value" != 'absent' ]; then
+      if [ "$apply_mode" = false ]; then
+        log "Would remove from meta.yaml: $field (current: $current_value)"
+      else
+        yq eval "del(.${field})" -i "$meta"
+        log "removed from meta.yaml: $field"
+      fi
+    fi
+  done
+
+  if [ "$apply_mode" = false ]; then
+    log ""
+    log "=== After migration, please update: ==="
+    log "  - CLAUDE.md: replace WI references with design.md §4/§7"
+    log "  - AGENTS.md: replace WI references with design.md §4/§7"
+    log ""
+    log "Run with --apply to execute."
+  else
+    log ""
+    log "=== Migration applied. Please update: ==="
+    log "  - CLAUDE.md: replace WI references with design.md §4/§7"
+    log "  - AGENTS.md: replace WI references with design.md §4/§7"
+  fi
+}
+
+migrate_testing_legacy_section() {
+  local file="$1"
+  local marker="$2"
+  awk -v marker="$marker" '
+    function is_current_heading(line) {
+      if (marker == "CASES") return line ~ /^## 1\. /
+      if (marker == "RUNS") return line ~ /^## 2\. /
+      if (marker == "RISKS") return line ~ /^## 3\. /
+      if (marker == "HANDOFFS") return line ~ /^## 4\. /
+      return 0
+    }
+    $0 == "<!-- CODESPEC:TESTING:" marker " -->" {
+      capture = 1
+      next
+    }
+    is_current_heading($0) {
+      capture = 1
+      next
+    }
+    capture && /^<!-- CODESPEC:TESTING:LEDGER -->/ {
+      exit
+    }
+    capture && /^<!-- CODESPEC:TESTING:/ {
+      exit
+    }
+    capture && /^## / && is_current_heading($0) {
+      next
+    }
+    capture && /^## / {
+      exit
+    }
+    capture {
+      print
+    }
+  ' "$file"
+}
+
+migrate_testing_legacy_section_json() {
+  local file="$1"
+  local marker="$2"
+  local section
+  section="$(migrate_testing_legacy_section "$file" "$marker")"
+  if ! grep -qE '^[[:space:]]*-[[:space:]]*' <<<"$section"; then
+    printf '[]\n'
+    return
+  fi
+  printf '%s\n' "$section" | yq eval -o=json '.' -
+}
+
+migrate_testing_structured_yaml() {
+  local file="$1"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+
+  migrate_testing_legacy_section_json "$file" CASES >"$tmpdir/cases.json"
+  migrate_testing_legacy_section_json "$file" RUNS >"$tmpdir/runs.json"
+  migrate_testing_legacy_section_json "$file" HANDOFFS >"$tmpdir/handoffs.json"
+
+  python3 - "$tmpdir/cases.json" "$tmpdir/runs.json" "$tmpdir/handoffs.json" <<'PY' | yq eval -P '.' -
+import json
+import sys
+
+def load(path):
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+def indexed(items, id_key):
+    result = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ident = item.get(id_key)
+        if not ident:
+            continue
+        body = {key: value for key, value in item.items() if key != id_key}
+        result[str(ident)] = body
+    return result
+
+ledger = {
+    "schema_version": 1,
+    "test_cases": indexed(load(sys.argv[1]), "tc_id"),
+    "runs": indexed(load(sys.argv[2]), "run_id"),
+    "handoffs": indexed(load(sys.argv[3]), "handoff_id"),
+}
+print(json.dumps(ledger, ensure_ascii=False))
+PY
+  rm -rf "$tmpdir"
+}
+
+migrate_testing_structured_block() {
+  local file="$1"
+  printf '<!-- CODESPEC:TESTING:LEDGER -->\n'
+  printf '```yaml\n'
+  migrate_testing_structured_yaml "$file"
+  printf '```\n'
+  printf '<!-- CODESPEC:TESTING:LEDGER_END -->\n'
+}
+
+migrate_testing_ledger() {
+  require_yq
+  command -v python3 >/dev/null 2>&1 || die "python3 is required"
+
+  local write_mode=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --write)
+        write_mode=true
+        ;;
+      *)
+        die "usage: codespec migrate-testing-ledger [--write]"
+        ;;
+    esac
+    shift || true
+  done
+
+  local project_root testing_file block
+  project_root="$(find_project_root)"
+  testing_file="$project_root/testing.md"
+  [ -f "$testing_file" ] || die "missing testing.md"
+
+  block="$(migrate_testing_structured_block "$testing_file")"
+  if [ "$write_mode" = false ]; then
+    printf '%s\n' "$block"
+    return
+  fi
+
+  BLOCK="$block" python3 - "$testing_file" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+block = os.environ["BLOCK"].rstrip() + "\n"
+pattern = (
+    r"\n?<!-- CODESPEC:TESTING:LEDGER -->\n"
+    r"```ya?ml\n"
+    r".*?\n"
+    r"```\n"
+    r"<!-- CODESPEC:TESTING:LEDGER_END -->\n?"
+)
+replacement = "\n\n" + block
+if re.search(pattern, text, flags=re.S):
+    text = re.sub(pattern, replacement, text, flags=re.S).rstrip() + "\n"
+else:
+    text = text.rstrip() + "\n\n" + block
+path.write_text(text, encoding="utf-8")
+PY
+  log "wrote structured testing ledger: $testing_file"
 }
 
 promote_version() {
@@ -1834,25 +2101,212 @@ status_cmd() {
 
   build_readset_model "$project_root"
 
-  local git_branch execution_branch branch_alignment
+  local git_branch
   git_branch="$(current_git_branch "$project_root")"
-  execution_branch="$(yaml_scalar "$meta" execution_branch)"
-  branch_alignment="$(branch_alignment_status "$project_root" "$execution_branch")"
 
   printf 'project_root: %s\n' "$project_root"
   printf 'phase: %s\n' "$(yaml_scalar "$meta" phase)"
   printf 'status: %s\n' "$(yaml_scalar "$meta" status)"
-  printf 'focus_work_item: %s\n' "$(yaml_scalar "$meta" focus_work_item)"
-  printf 'feature_branch: %s\n' "$(yaml_scalar "$meta" feature_branch)"
-  printf 'execution_group: %s\n' "$(yaml_scalar "$meta" execution_group)"
-  printf 'execution_branch: %s\n' "$execution_branch"
   printf 'git_branch: %s\n' "$git_branch"
-  printf 'branch_alignment: %s\n' "$branch_alignment"
   printf 'phase_capabilities.allowed:\n'
   render_text_string_list READSET_MODEL_PHASE_CAP_ALLOWED
   printf 'phase_capabilities.forbidden:\n'
   render_text_string_list READSET_MODEL_PHASE_CAP_FORBIDDEN
   printf 'authority.phase_policy: %s\n' "$READSET_MODEL_PHASE_POLICY"
+}
+
+gate_sequence_cmd() {
+  require_yq
+  local transition="${1:?usage: codespec gate-sequence <transition> [--json]}"
+  shift || true
+
+  local output_json=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        output_json=true
+        ;;
+      *)
+        die "unknown gate-sequence option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  transition_exists "$transition" || die "unknown transition: $transition"
+
+  local file
+  file="$(gate_map_file)"
+  if [ "$output_json" = true ]; then
+    TRANSITION="$transition" yq eval -o=json '.transitions[strenv(TRANSITION)] as $t | {"transition": strenv(TRANSITION)} + $t' "$file"
+    return
+  fi
+
+  printf 'transition: %s\n' "$transition"
+  TRANSITION="$transition" yq eval '.transitions[strenv(TRANSITION)]' "$file"
+}
+
+transition_for_target_phase() {
+  local target_phase="$1"
+  local file
+  file="$(gate_map_file)"
+  TARGET_PHASE="$target_phase" yq eval -r '.transitions | to_entries[] | select(.value.target_phase == strenv(TARGET_PHASE)) | .key' "$file" | head -1
+}
+
+render_review_gate_evidence() {
+  local transition="$1"
+  local rows=()
+  local row gate envs command
+  mapfile -t rows < <(transition_gate_rows "$transition")
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r gate envs <<< "$row"
+    [ -n "$gate" ] || continue
+    command="$(gate_command_string "$gate" "$envs")"
+    printf '  - gate: %s\n' "$gate"
+    printf '    command: %s\n' "$command"
+    printf '    result: pending\n'
+    printf '    checked_at: pending\n'
+    printf '    checked_revision: pending\n'
+    printf '    output_summary: pending\n'
+  done
+}
+
+scaffold_review_cmd() {
+  require_yq
+  local target_phase="${1:?usage: codespec scaffold-review <target-phase>}"
+  case "$target_phase" in
+    Design|Implementation|Testing) ;;
+    *) die 'scaffold-review target-phase must be Design, Implementation, or Testing' ;;
+  esac
+
+  local transition file from_phase review_path project_root review_file
+  transition="$(transition_for_target_phase "$target_phase")"
+  [ -n "$transition" ] || die "no transition maps to target phase: $target_phase"
+  file="$(gate_map_file)"
+  TRANSITION="$transition" yq eval -r '.transitions[strenv(TRANSITION)].review_file' "$file" | {
+    read -r review_path
+    [ -n "$review_path" ] && [ "$review_path" != 'null' ] || die "transition has no review file: $transition"
+
+    project_root="$(find_project_root)"
+    review_file="$project_root/$review_path"
+    [ ! -e "$review_file" ] || die "review file already exists: $review_path"
+    mkdir -p "$(dirname "$review_file")"
+
+    from_phase="$(TRANSITION="$transition" yq eval -r '.transitions[strenv(TRANSITION)].from_phase' "$file")"
+    {
+      printf 'phase: %s\n' "$from_phase"
+      printf 'verdict: pending\n'
+      printf 'reviewed_by: pending\n'
+      printf 'reviewed_at: pending\n'
+      printf 'scope:\n'
+      printf '  - pending\n'
+      printf 'gate_evidence:\n'
+      render_review_gate_evidence "$transition"
+      printf 'findings:\n'
+      printf '  - severity: none\n'
+      printf '    summary: pending semantic review\n'
+      printf 'residual_risk: pending\n'
+      printf 'decision_notes: pending\n'
+    } > "$review_file"
+
+    log "created review scaffold: $review_path"
+    log "verdict remains pending until semantic review is complete"
+  }
+}
+
+review_file_path_for_transition() {
+  local project_root="$1"
+  local transition="$2"
+  local file review_path
+  file="$(gate_map_file)"
+  review_path="$(TRANSITION="$transition" yq eval -r '.transitions[strenv(TRANSITION)].review_file' "$file")"
+  [ -n "$review_path" ] && [ "$review_path" != 'null' ] || die "transition has no review file: $transition"
+  printf '%s/%s\n' "$project_root" "$review_path"
+}
+
+review_gates_cmd() {
+  require_yq
+  local target_phase="${1:?usage: codespec review-gates <target-phase> [--write]}"
+  shift || true
+  local write=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --write)
+        write=true
+        ;;
+      *)
+        die "unknown review-gates option: $1"
+        ;;
+    esac
+    shift || true
+  done
+
+  case "$target_phase" in
+    Design|Implementation|Testing) ;;
+    *) die 'review-gates target-phase must be Design, Implementation, or Testing' ;;
+  esac
+
+  local project_root transition file from_phase review_file evidence_file rows=()
+  local row gate envs command checked_at checked_revision output status result summary failures=0
+  project_root="$(find_project_root)"
+  transition="$(transition_for_target_phase "$target_phase")"
+  [ -n "$transition" ] || die "no transition maps to target phase: $target_phase"
+  file="$(gate_map_file)"
+  from_phase="$(TRANSITION="$transition" yq eval -r '.transitions[strenv(TRANSITION)].from_phase' "$file")"
+  review_file="$(review_file_path_for_transition "$project_root" "$transition")"
+  evidence_file="$(mktemp)"
+  printf 'gate_evidence: []\n' > "$evidence_file"
+
+  mapfile -t rows < <(transition_gate_rows "$transition" no)
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -r gate envs <<< "$row"
+    [ -n "$gate" ] || continue
+    command="$(gate_command_string "$gate" "$envs")"
+    checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    checked_revision="$(current_git_revision "$project_root")"
+    set +e
+    output="$(run_mapped_gate "$project_root" "$gate" "$envs" 2>&1)"
+    status=$?
+    set -e
+    if [ "$status" -eq 0 ]; then
+      result=pass
+    else
+      result=fail
+      failures=$((failures + 1))
+    fi
+    summary="$(printf '%s\n' "${output:-no output}" | tail -n 5 | tr '\n' '; ' | sed 's/[[:space:]]*;[[:space:]]*$//')"
+    GATE="$gate" COMMAND="$command" RESULT="$result" CHECKED_AT="$checked_at" CHECKED_REVISION="$checked_revision" OUTPUT_SUMMARY="$summary" \
+      yq eval '.gate_evidence += [{"gate": strenv(GATE), "command": strenv(COMMAND), "result": strenv(RESULT), "checked_at": strenv(CHECKED_AT), "checked_revision": strenv(CHECKED_REVISION), "output_summary": strenv(OUTPUT_SUMMARY)}]' -i "$evidence_file"
+  done
+
+  if [ "$write" = true ]; then
+    mkdir -p "$(dirname "$review_file")"
+    if [ ! -f "$review_file" ]; then
+      {
+        printf 'phase: %s\n' "$from_phase"
+        printf 'verdict: pending\n'
+        printf 'reviewed_by: pending\n'
+        printf 'reviewed_at: pending\n'
+        printf 'scope:\n'
+        printf '  - spec.md\n'
+        printf 'gate_evidence: []\n'
+        printf 'findings:\n'
+        printf '  - severity: none\n'
+        printf '    summary: pending semantic review\n'
+        printf 'residual_risk: pending\n'
+        printf 'decision_notes: pending\n'
+      } > "$review_file"
+    fi
+    yq eval-all 'select(fileIndex == 0).gate_evidence = select(fileIndex == 1).gate_evidence | select(fileIndex == 0)' "$review_file" "$evidence_file" > "$review_file.tmp"
+    mv "$review_file.tmp" "$review_file"
+    rm -f "$evidence_file"
+    log "wrote gate evidence: ${review_file#$project_root/}"
+  else
+    cat "$evidence_file"
+    rm -f "$evidence_file"
+  fi
+
+  [ "$failures" -eq 0 ] || die "$failures gate(s) failed while collecting review evidence"
 }
 
 codespec_completion_level_rank() {
@@ -1879,28 +2333,201 @@ codespec_completion_level_for_rank() {
   esac
 }
 
+completion_report_design_test_cases() {
+  local design_file="$1"
+  [ -f "$design_file" ] || return 0
+  awk '
+    /<!-- CODESPEC:DESIGN:SLICES -->/ { in_slices = 1; next }
+    /<!-- CODESPEC:DESIGN:SLICES_END -->/ { in_slices = 0; next }
+    !in_slices { next }
+    /^[[:space:]]*test_case_refs:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*test_case_refs:[[:space:]]*/, "", line)
+      gsub(/\[|\]/, "", line)
+      gsub(/[[:space:]]/, "", line)
+      count = split(line, refs, ",")
+      for (i = 1; i <= count; i++) {
+        if (refs[i] ~ /^TC-/) print refs[i]
+      }
+    }
+  ' "$design_file" | sort -u
+}
+
+completion_report_design_slices() {
+  local design_file="$1"
+  [ -f "$design_file" ] || return 0
+  awk '
+    /<!-- CODESPEC:DESIGN:SLICES -->/ { in_slices = 1; next }
+    /<!-- CODESPEC:DESIGN:SLICES_END -->/ { in_slices = 0; next }
+    !in_slices { next }
+    /^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*SLICE-/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*slice_id:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$design_file" | sort -u
+}
+
+completion_report_latest_level_for_tc() {
+  local testing_file="$1"
+  local tc="$2"
+  [ -f "$testing_file" ] || return 0
+  codespec_testing_ledger_text "$testing_file" | awk -v tc="$tc" '
+    function reset_record() {
+      in_record = 0
+      record_tc = ""
+      record_result = ""
+      record_level = ""
+    }
+
+    function flush_record() {
+      if (!in_record) return
+      if (record_tc == tc && record_result == "pass" && record_level != "") {
+        latest = record_level
+      }
+    }
+
+    BEGIN {
+      reset_record()
+    }
+
+    /^[[:space:]]*-[[:space:]]*run_id:[[:space:]]*RUN-[A-Za-z0-9._-]+[[:space:]]*$/ {
+      flush_record()
+      reset_record()
+      in_record = 1
+      next
+    }
+
+    /^[[:space:]]*-[[:space:]]*(tc_id|handoff_id|residual_risk):[[:space:]]*/ {
+      flush_record()
+      reset_record()
+      next
+    }
+
+    !in_record { next }
+
+    /^[[:space:]]*test_case_ref:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*test_case_ref:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_tc = line
+      next
+    }
+
+    /^[[:space:]]*result:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*result:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_result = line
+      next
+    }
+
+    /^[[:space:]]*completion_level:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*completion_level:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_level = line
+      next
+    }
+
+    END {
+      flush_record()
+      if (latest != "") print latest
+    }
+  '
+}
+
+completion_report_all_passed_levels() {
+  local testing_file="$1"
+  [ -f "$testing_file" ] || return 0
+  codespec_testing_ledger_text "$testing_file" | awk '
+    function reset_record() {
+      in_record = 0
+      record_result = ""
+      record_level = ""
+    }
+
+    function flush_record() {
+      if (!in_record) return
+      if (record_result == "pass" && record_level != "") {
+        print record_level
+      }
+    }
+
+    BEGIN {
+      reset_record()
+    }
+
+    /^[[:space:]]*-[[:space:]]*run_id:[[:space:]]*RUN-[A-Za-z0-9._-]+[[:space:]]*$/ {
+      flush_record()
+      reset_record()
+      in_record = 1
+      next
+    }
+
+    /^[[:space:]]*-[[:space:]]*(tc_id|handoff_id|residual_risk):[[:space:]]*/ {
+      flush_record()
+      reset_record()
+      next
+    }
+
+    !in_record { next }
+
+    /^[[:space:]]*result:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*result:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_result = line
+      next
+    }
+
+    /^[[:space:]]*completion_level:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*completion_level:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      record_level = line
+      next
+    }
+
+    END {
+      flush_record()
+    }
+  '
+}
+
 completion_report_highest_level() {
   local project_root="$1"
   local phase="$2"
-  local meta="$project_root/meta.yaml"
   local highest_rank=1
-  local item rank wi_file
+  local rank
 
   if [ "$phase" = 'Implementation' ]; then
-    while IFS= read -r item; do
-      [ -n "$item" ] || continue
-      [ "$item" != 'null' ] || continue
-      wi_file="$project_root/work-items/$item.yaml"
-      [ -f "$wi_file" ] || continue
-      rank="$(codespec_completion_level_rank "$(yaml_scalar "$wi_file" completion_level)")" || rank=1
-      [ "$rank" -gt "$highest_rank" ] && highest_rank="$rank"
-    done < <(yaml_list "$meta" active_work_items)
+    local design_file="$project_root/design.md"
+    local testing_file="$project_root/testing.md"
+    if [ -f "$design_file" ]; then
+      local tc_ref slice_rank
+      while IFS= read -r tc_ref; do
+        [ -n "$tc_ref" ] || continue
+        local run_level
+        if [ -f "$testing_file" ]; then
+          run_level="$(completion_report_latest_level_for_tc "$testing_file" "$tc_ref" || true)"
+        fi
+        if [ -n "$run_level" ]; then
+          slice_rank="$(codespec_completion_level_rank "$run_level")" || slice_rank=1
+        else
+          slice_rank=1
+        fi
+        [ "$slice_rank" -gt "$highest_rank" ] && highest_rank="$slice_rank"
+      done < <(completion_report_design_test_cases "$design_file")
+    fi
   elif [ -f "$project_root/testing.md" ]; then
+    local item
     while IFS= read -r item; do
       [ -n "$item" ] || continue
       rank="$(codespec_completion_level_rank "$item")" || rank=1
       [ "$rank" -gt "$highest_rank" ] && highest_rank="$rank"
-    done < <(grep -E '^[[:space:]]*completion_level:[[:space:]]*' "$project_root/testing.md" | sed -E 's/^[[:space:]]*completion_level:[[:space:]]*//' || true)
+    done < <(completion_report_all_passed_levels "$project_root/testing.md")
   fi
 
   codespec_completion_level_for_rank "$highest_rank"
@@ -1934,29 +2561,77 @@ completion_report_unfinished_required() {
   printf 'no\n'
 }
 
+completion_report_handoff_template() {
+  local project_root="$1"
+  local phase="$2"
+  local highest="$3"
+  local unfinished_required="$4"
+  local timestamp first_tc slice_refs=()
+
+  timestamp="$(date +%Y%m%d-%H%M%S)"
+  first_tc="$(completion_report_design_test_cases "$project_root/design.md" | head -1 || true)"
+  [ -n "$first_tc" ] || first_tc='TC-000'
+  mapfile -t slice_refs < <(completion_report_design_slices "$project_root/design.md")
+
+  printf -- '- handoff_id: HANDOFF-%s\n' "$timestamp"
+  printf '  phase: %s\n' "$phase"
+  if [ "$phase" = 'Implementation' ] && [ "${#slice_refs[@]}" -gt 0 ]; then
+    printf '  slice_refs: [%s]\n' "$(IFS=,; printf '%s' "${slice_refs[*]}")"
+  fi
+  printf '  highest_completion_level: %s\n' "$highest"
+  printf '  current_completion_level: %s\n' "$highest"
+  printf '  evidence_refs:\n'
+  printf '    - testing.md#RUN-...\n'
+  printf '  unfinished_items:\n'
+  if [ "$unfinished_required" = 'yes' ]; then
+    printf '    - source_ref: testing.md#%s\n' "$first_tc"
+    printf '      priority: P0\n'
+    printf '      current_completion_level: %s\n' "$highest"
+    printf '      target_completion_level: integrated_runtime\n'
+    printf '      blocker: pending higher-level verification evidence\n'
+    printf '      next_step: run the missing verification and append RUN evidence\n'
+  else
+    printf '    - none\n'
+  fi
+  printf '  fixture_or_fallback_paths:\n'
+  if codespec_completion_level_rank "$highest" >/dev/null 2>&1 && [ "$(codespec_completion_level_rank "$highest")" -lt "$(codespec_completion_level_rank integrated_runtime)" ]; then
+    printf '    - surface: current verified surface\n'
+    printf '      completion_level: %s\n' "$highest"
+    printf '      real_api_verified: false\n'
+    printf '      visible_failure_state: false\n'
+    printf '      trace_retry_verified: false\n'
+  else
+    printf '    - none\n'
+  fi
+  printf '  wording_guard: "Report only the verified completion level; do not claim owner_verified unless owner evidence exists."\n'
+}
+
 completion_report_cmd() {
   require_yq
-  local project_root meta phase status focus highest unfinished_required active=()
+  local project_root meta phase status highest unfinished_required mode
+  mode="${1:-summary}"
+  case "$mode" in
+    summary|'') ;;
+    --handoff-template) ;;
+    *) die "unknown completion-report option: $mode" ;;
+  esac
+
   project_root="$(find_project_root)"
   meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
 
   phase="$(yaml_scalar "$meta" phase)"
   status="$(yaml_scalar "$meta" status)"
-  focus="$(yaml_scalar "$meta" focus_work_item)"
   highest="$(completion_report_highest_level "$project_root" "$phase")"
   unfinished_required="$(completion_report_unfinished_required "$project_root" "$phase" "$highest")"
-  mapfile -t active < <(yaml_list "$meta" active_work_items | grep -vE '^(|null)$' || true)
+
+  if [ "$mode" = '--handoff-template' ]; then
+    completion_report_handoff_template "$project_root" "$phase" "$highest" "$unfinished_required"
+    return
+  fi
 
   printf 'phase: %s\n' "$phase"
   printf 'status: %s\n' "$status"
-  printf 'focus_work_item: %s\n' "$focus"
-  printf 'active_work_items:\n'
-  if [ "${#active[@]}" -eq 0 ]; then
-    printf -- '- none\n'
-  else
-    printf '%s\n' "${active[@]}" | sed 's/^/- /'
-  fi
   printf 'highest_completion_level: %s\n' "$highest"
   printf 'unfinished_items.required: %s\n' "$unfinished_required"
   printf 'required_report_sections:\n'
@@ -1968,14 +2643,48 @@ completion_report_cmd() {
   printf 'semantic_handoff_gate: codespec check-gate semantic-handoff\n'
 }
 
+design_contract_refs() {
+  local design_file="$1"
+  [ -f "$design_file" ] || return 0
+  awk '
+    BEGIN { in_contracts = 0 }
+    /<!-- CODESPEC:DESIGN:CONTRACTS -->/ {
+      in_contracts = 1
+      next
+    }
+    /^## 5\. 契约设计/ || /^## Contracts$/ {
+      in_contracts = 1
+      next
+    }
+    in_contracts && /<!-- CODESPEC:DESIGN:/ && $0 !~ /CONTRACTS/ {
+      exit
+    }
+    in_contracts && /^## [0-9]+\. / && $0 !~ /^## 5\. / {
+      exit
+    }
+    in_contracts && /^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      if (line != "" && line != "none" && line != "null" && line !~ /^\[/) print line
+      next
+    }
+    in_contracts && /^[[:space:]]*contract_ref:[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*contract_ref:[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      if (line != "" && line != "none" && line != "null" && line !~ /^\[/) print line
+      next
+    }
+  ' "$design_file" | sort -u
+}
+
 build_readset_model() {
   local project_root="$1"
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
 
   READSET_MODEL_PHASE="$(yaml_scalar "$meta" phase)"
-  READSET_MODEL_FOCUS_WI="$(yaml_scalar "$meta" focus_work_item)"
-  READSET_MODEL_WORK_ITEM_PATH='null'
   READSET_MODEL_PHASE_POLICY='../phase-review-policy.md'
   READSET_MODEL_PHASE_CAP_ALLOWED=()
   READSET_MODEL_PHASE_CAP_FORBIDDEN=()
@@ -1989,7 +2698,6 @@ build_readset_model() {
     "../phase-review-policy.md" "" ""
     "meta.yaml" "" ""
   )
-  READSET_MODEL_WORK_ITEM_ENTRY=()
   READSET_MODEL_CONTRACT_REFS=()
   READSET_MODEL_PHASE_DOCS=()
   READSET_MODEL_APPENDIX_SPEC=("spec-appendices/*" "only when default layer is insufficient" "")
@@ -2013,7 +2721,7 @@ build_readset_model() {
       READSET_MODEL_MINIMAL_READSET+=("testing.md" "" "planned TC-* to drive design verification")
       READSET_MODEL_MINIMAL_READSET+=("design.md" "" "draft architecture/design authority")
       READSET_MODEL_PHASE_CAP_ALLOWED=(
-        "design.md, work-items/*.yaml, contracts/*.md draft, testing.md plan refinement"
+        "design.md, contracts/*.md draft, testing.md plan refinement"
       )
       READSET_MODEL_PHASE_CAP_FORBIDDEN=(
         "src/** and Dockerfile until Implementation"
@@ -2021,24 +2729,23 @@ build_readset_model() {
       ;;
     Implementation)
       READSET_MODEL_MINIMAL_READSET+=("design.md" "" "implementation authority")
-      READSET_MODEL_MINIMAL_READSET+=("testing.md" "" "read current WI TC-* obligations")
-      READSET_MODEL_MINIMAL_READSET+=("spec.md" "only when design/WI is ambiguous or reopen is needed" "requirement authority fallback")
+      READSET_MODEL_MINIMAL_READSET+=("testing.md" "" "read TC-* obligations")
+      READSET_MODEL_MINIMAL_READSET+=("spec.md" "only when design is ambiguous or reopen is needed" "requirement authority fallback")
       READSET_MODEL_PHASE_CAP_ALLOWED=(
-        "current work item allowed_paths and testing.md RUN evidence"
+        "design.md §4 allowed paths and testing.md RUN evidence"
       )
       READSET_MODEL_PHASE_CAP_FORBIDDEN=(
-        "current work item forbidden_paths, frozen contracts, unapproved scope expansion"
+        "design.md §4 forbidden paths, frozen contracts, unapproved scope expansion"
       )
       ;;
     Testing)
       READSET_MODEL_MINIMAL_READSET+=("testing.md" "" "verify TC-* with full-integration RUN-* evidence")
-      READSET_MODEL_MINIMAL_READSET+=("work-items/*.yaml" "" "trace active work item coverage")
       READSET_MODEL_MINIMAL_READSET+=("design.md" "" "verification design and boundaries")
       READSET_MODEL_PHASE_CAP_ALLOWED=(
         "testing.md evidence recording and test execution"
       )
       READSET_MODEL_PHASE_CAP_FORBIDDEN=(
-        "src/**, Dockerfile, spec.md, design.md, work-items/**, contracts/**, deployment.md"
+        "src/**, Dockerfile, spec.md, design.md, contracts/**, deployment.md"
       )
       ;;
     Deployment)
@@ -2048,31 +2755,32 @@ build_readset_model() {
         "deployment.md evidence, runtime verification, manual acceptance records"
       )
       READSET_MODEL_PHASE_CAP_FORBIDDEN=(
-        "src/**, Dockerfile, spec.md, design.md, work-items/**, contracts/**"
+        "src/**, Dockerfile, spec.md, design.md, contracts/**"
       )
       ;;
   esac
 
-  if [ "$READSET_MODEL_FOCUS_WI" != "null" ] && [ -f "$project_root/work-items/$READSET_MODEL_FOCUS_WI.yaml" ]; then
-    READSET_MODEL_WORK_ITEM_PATH="work-items/$READSET_MODEL_FOCUS_WI.yaml"
-    READSET_MODEL_WORK_ITEM_ENTRY=("$READSET_MODEL_WORK_ITEM_PATH" "when focus_work_item is set" "implementation authority for current slice")
-    while IFS= read -r ref; do
-      [ -n "$ref" ] || continue
-      [ "$ref" != "null" ] || continue
-      READSET_MODEL_CONTRACT_REFS+=("$ref" "when current work item contract_refs is non-empty" "")
-    done < <(yaml_list "$project_root/work-items/$READSET_MODEL_FOCUS_WI.yaml" contract_refs)
-  fi
-
   case "$READSET_MODEL_PHASE" in
     Testing)
       READSET_MODEL_PHASE_DOCS+=("testing.md" "during Testing phase" "verify every required TC has full-integration evidence")
-      READSET_MODEL_PHASE_DOCS+=("work-items/*.yaml" "during Testing phase" "trace TC/ACC coverage for all active work items")
       ;;
     Deployment)
       READSET_MODEL_PHASE_DOCS+=("testing.md" "during Deployment phase" "check deployment/manual TC evidence")
       READSET_MODEL_PHASE_DOCS+=("deployment.md" "during Deployment phase" "record release evidence and manual acceptance")
       ;;
   esac
+
+  local contract_refs=()
+  local contract_ref
+  mapfile -t contract_refs < <(design_contract_refs "$project_root/design.md")
+  for contract_ref in "${contract_refs[@]}"; do
+    READSET_MODEL_CONTRACT_REFS+=("$contract_ref" "" "contract referenced by design.md §5")
+    case "$READSET_MODEL_PHASE" in
+      Design|Implementation|Testing|Deployment)
+        READSET_MODEL_MINIMAL_READSET+=("$contract_ref" "" "contract referenced by design.md §5")
+        ;;
+    esac
+  done
 }
 
 render_readset_json() {
@@ -2084,11 +2792,6 @@ render_readset_json() {
   printf '  "minimal_readset": %s,\n' "$(json_path_entries "${READSET_MODEL_MINIMAL_READSET[@]}")"
   printf '  "layered_readset": {\n'
   printf '    "default": %s,\n' "$(json_path_entries "${READSET_MODEL_MINIMAL_READSET[@]}")"
-  if [ "$READSET_MODEL_WORK_ITEM_PATH" = 'null' ]; then
-    printf '    "work_item": [],\n'
-  else
-    printf '    "work_item": %s,\n' "$(json_path_entries "${READSET_MODEL_WORK_ITEM_ENTRY[@]}")"
-  fi
   printf '    "phase": %s,\n' "$(json_path_entries "${READSET_MODEL_PHASE_DOCS[@]}")"
   printf '    "on_demand": %s\n' "$(json_path_entries "${on_demand_entries[@]}")"
   printf '  },\n'
@@ -2099,20 +2802,6 @@ render_readset_json() {
   printf '  "authority": {\n'
   printf '    "phase_policy": %s\n' "$(json_quote "$READSET_MODEL_PHASE_POLICY")"
   printf '  },\n'
-  printf '  "focus_work_item": '
-  if [ "$READSET_MODEL_FOCUS_WI" = 'null' ]; then
-    printf 'null'
-  else
-    printf '%s' "$(json_quote "$READSET_MODEL_FOCUS_WI")"
-  fi
-  printf ',\n'
-  printf '  "work_item": '
-  if [ "$READSET_MODEL_WORK_ITEM_PATH" = 'null' ]; then
-    printf 'null'
-  else
-    printf '%s' "$(json_path_entry_object "${READSET_MODEL_WORK_ITEM_ENTRY[0]}" "${READSET_MODEL_WORK_ITEM_ENTRY[1]}" "${READSET_MODEL_WORK_ITEM_ENTRY[2]}")"
-  fi
-  printf ',\n'
   printf '  "contract_refs": %s,\n' "$(json_path_entries "${READSET_MODEL_CONTRACT_REFS[@]}")"
   printf '  "phase_docs": %s,\n' "$(json_path_entries "${READSET_MODEL_PHASE_DOCS[@]}")"
   printf '  "appendix_rules": {\n'
@@ -2127,16 +2816,12 @@ render_readset_text() {
   render_text_entry_choice READSET_MODEL_ENTRY_FILES
   printf 'layered_readset.default:\n'
   render_text_triplets READSET_MODEL_MINIMAL_READSET
-  printf 'layered_readset.work_item:\n'
-  if [ "$READSET_MODEL_WORK_ITEM_PATH" != 'null' ]; then
-    render_text_triplets READSET_MODEL_WORK_ITEM_ENTRY
-    render_text_triplets READSET_MODEL_CONTRACT_REFS
-  fi
   printf 'layered_readset.phase:\n'
   render_text_triplets READSET_MODEL_PHASE_DOCS
   printf 'layered_readset.on_demand:\n'
   render_text_triplets READSET_MODEL_APPENDIX_SPEC
   render_text_triplets READSET_MODEL_APPENDIX_DESIGN
+  render_text_triplets READSET_MODEL_CONTRACT_REFS
   printf 'phase_capabilities.allowed:\n'
   render_text_string_list READSET_MODEL_PHASE_CAP_ALLOWED
   printf 'phase_capabilities.forbidden:\n'
@@ -2190,13 +2875,11 @@ EOF
 usage() {
   cat <<'EOF'
 Usage:
-  codespec add-work-item <WI-ID>
   codespec start-design
-  codespec start-implementation <WI-ID>
-  codespec reopen-implementation <WI-ID>
+  codespec start-implementation
+  codespec reopen-implementation
+  codespec reopen-testing
   codespec authority-repair <begin|close|status>
-  codespec set-active-work-items <WI-001,WI-002|[]>
-  codespec set-execution-context <single|parallel> <feature-branch> [execution-group]
   codespec start-testing
   codespec start-deployment
   codespec deploy
@@ -2204,15 +2887,21 @@ Usage:
   codespec submit-pr <stable-version> [--base <branch>] [--draft]
   codespec scaffold-project-docs <version>
   codespec generate-project-docs <version>
-  codespec reset-to-requirement [--keep-contracts]
+  codespec reset-to-requirement [--reset-contracts] [--force]
   codespec install-hooks
   codespec check-gate <name>
   codespec status
-  codespec completion-report
+  codespec completion-report [--handoff-template]
+  codespec gate-sequence <transition> [--json]
+  codespec scaffold-review <target-phase>
+  codespec review-gates <target-phase> [--write]
   codespec readset
   codespec materialize-deployment
   codespec promote-version <stable-version>
   codespec list-versions [--json]
+  codespec migrate-requirement-phase <project_root> [--apply]
+  codespec migrate-remove-wi <project_root> [--apply]
+  codespec migrate-testing-ledger [--write]
 
 Installation:
   /path/to/.codespec/scripts/install-workspace.sh <workspace_root>
@@ -2223,45 +2912,50 @@ Version lifecycle:
   complete-change -> archive accepted stable version and mark the Deployment change completed
   submit-pr -> complete an accepted Deployment change, push the current branch, and open a GitHub PR
   completion-report -> print the current phase handoff obligations and unfinished disclosure requirement
+  completion-report --handoff-template -> print a draft HANDOFF-* record for testing.md
+  gate-sequence -> print the canonical gate sequence for a lifecycle transition
+  scaffold-review -> create a pending review record scaffold for a target phase
+  review-gates -> run target phase objective gates and optionally write structured gate_evidence
   scaffold-project-docs -> scaffold project document shells from dossier artifacts
   generate-project-docs -> deprecated compatibility alias for scaffold-project-docs
   promote-version -> compatibility alias for complete-change <stable-version>
   reset-to-requirement -> reset dossier to Requirement phase for next version
   list-versions -> list all archived versions
+  migrate-requirement-phase -> migrate Proposal/Requirements projects to Requirement with dry-run default
+  migrate-remove-wi -> migrate project from WI model to design.md authority model
+  migrate-testing-ledger -> generate structured testing.md ledger from legacy TC/RUN/HANDOFF sections
 
 Gate views:
   requirement-complete -> Requirement dossier is structurally complete and fully traceable
   spec-quality -> spec.md is self-contained and free of template placeholders
   test-plan-complete -> every ACC has planned TC-* coverage before Design
-  design-structure-complete -> design artifacts are structurally complete and aligned with work item derivation
+  design-structure-complete -> design artifacts are structurally complete and aligned with slice derivation
   design-quality -> design.md covers architecture, contracts/data, security, environment, verification, and traceability
   design-readiness -> alias of design-quality
-  review-quality -> review artifact is approved, dated, and non-placeholder
-  implementation-ready -> design-quality + implementation-start
-  active-work-items-complete -> active_work_items covers every design-derived WI before Testing
-  scope -> staged changes stay within allowed_paths / outside forbidden_paths; start-testing rechecks the full Implementation span
+  review-quality -> review record is dated, scoped to existing files, and includes approved verdict, findings, and required gate evidence
+  implementation-ready -> design-quality + implementation-start, including full REQ/ACC/VO/TC design coverage
+  scope -> staged changes stay within design.md §4 allowed paths / outside forbidden paths; start-testing rechecks the full Implementation span
   contract-boundary -> contract refs resolve, frozen contracts stay unchanged, and frozen contracts require freeze review evidence
-  trace-consistency -> REQ->ACC->VO->TC->WI->RUN coverage in Testing/Deployment
-  verification -> dependency/current WI TC pass checks; testing/deployment use the latest matching RUN record
+  trace-consistency -> REQ->ACC->VO->TC->RUN coverage in Testing/Deployment
+  verification -> TC pass checks; testing/deployment use the latest matching RUN record
   semantic-handoff -> R15 active unfinished disclosure and wording guard
   deployment-plan-ready -> deployment.md plan, date, checklist, rollback, and monitoring are non-placeholder before deploy
-  promotion -> trace-consistency + deployment-readiness + promotion-criteria
+  promotion -> metadata-consistency + deployment-readiness + promotion-criteria (promotion-criteria internally checks trace-consistency and testing-coverage)
 
 Lifecycle commands:
   start-design -> Requirement -> Design
-  start-implementation -> Design -> Implementation or Implementation -> Implementation, and set/switch focus_work_item
+  start-implementation -> Design -> Implementation
   reopen-implementation -> Testing/Deployment -> Implementation for failed verification follow-up
+  reopen-testing -> Deployment -> Testing for re-running failed deployment verification
   authority-repair -> audited temporary path for repairing upstream authority gaps
-  set-active-work-items -> update active_work_items explicitly; before Testing it must cover every design-derived WI
-  set-execution-context -> write the runtime branch-execution context into meta.yaml without hand-editing it
-  start-testing -> Implementation -> Testing (requires complete active_work_items and rechecks the full Implementation span)
+  start-testing -> Implementation -> Testing (rechecks the full Implementation span; requires implementation review)
   start-deployment -> Testing -> Deployment (or Deployment completed -> Deployment active reopen; auto-materializes deployment.md if missing)
-  deploy -> run scripts/codespec-deploy and refresh deployment.md evidence
+  deploy -> check deployment-plan-ready gate, run scripts/codespec-deploy, and refresh deployment.md evidence
   complete-change -> archive an accepted stable version and mark Deployment completed
   submit-pr -> complete/push/create PR for an accepted Deployment change
 
 Review rule:
-  check-gate pass != semantic review pass; phase advancement still requires phase-review-policy/rfr approval
+  check-gate pass != semantic review pass; phase advancement still requires the review record required by phase-review-policy/rfr
 
 Internal gates:
   metadata-consistency
@@ -2269,7 +2963,6 @@ Internal gates:
   requirement-complete | spec-quality | test-plan-complete
   design-structure-complete | design-quality (alias: design-readiness)
   implementation-ready | implementation-start
-  active-work-items-complete
   phase-capability | scope | contract-boundary
   trace-consistency | verification | testing-coverage
   semantic-handoff
@@ -2286,7 +2979,8 @@ main() {
       install_cmd "$@"
       ;;
     add-work-item)
-      add_work_item "$@"
+      log "ERROR: add-work-item has been removed. Please edit design.md §7 directly." >&2
+      exit 1
       ;;
     start-design)
       start_design "$@"
@@ -2297,14 +2991,19 @@ main() {
     reopen-implementation)
       reopen_implementation "$@"
       ;;
+    reopen-testing)
+      reopen_testing "$@"
+      ;;
     authority-repair)
       authority_repair_cmd "$@"
       ;;
     set-active-work-items)
-      set_active_work_items "$@"
+      log "ERROR: set-active-work-items has been removed. Please edit design.md §7 directly." >&2
+      exit 1
       ;;
     set-execution-context)
-      set_execution_context "$@"
+      log "ERROR: set-execution-context has been removed. Parallel execution mode is deprecated; use single-branch sequential workflow." >&2
+      exit 1
       ;;
     start-testing)
       start_testing "$@"
@@ -2345,6 +3044,15 @@ main() {
     completion-report)
       completion_report_cmd "$@"
       ;;
+    gate-sequence)
+      gate_sequence_cmd "$@"
+      ;;
+    scaffold-review)
+      scaffold_review_cmd "$@"
+      ;;
+    review-gates)
+      review_gates_cmd "$@"
+      ;;
     readset)
       readset_cmd "$@"
       ;;
@@ -2353,6 +3061,15 @@ main() {
       ;;
     promote-version)
       promote_version "$@"
+      ;;
+    migrate-requirement-phase)
+      migrate_requirement_phase "$@"
+      ;;
+    migrate-remove-wi)
+      migrate_remove_wi "$@"
+      ;;
+    migrate-testing-ledger)
+      migrate_testing_ledger "$@"
       ;;
     render-template)
       render_template "$@"

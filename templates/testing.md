@@ -4,6 +4,7 @@
 ## 0. AI 阅读契约
 
 - 本文件不是测试说明书模板，而是“测试用例计划 + 测试执行证据”的权威账本。
+- 可使用下方 legacy 分节记录，也可用 `codespec migrate-testing-ledger --write` 生成 `CODESPEC:TESTING:LEDGER` 结构化块；结构化块存在时 gate 以结构化块为准。
 - `TC-*` 在需求确认后生成，用于说明每条验收如何被证明；`RUN-*` 在实际执行后追加，用于记录证据。
 - `HANDOFF-*` 在 Implementation / Testing / Deployment 阶段性收口前追加，用于主动披露语义未完成项、最高完成等级、阻塞原因和下一步；测试绿灯不能替代 handoff。
 - `spec.md` 的 `VO-*` 定义必须验证什么和证据类型；本文件的 `TC-*` 定义如何用场景、fixture、命令、步骤和 `RUN-*` 证据执行验证。
@@ -15,7 +16,7 @@
 <!-- CODESPEC:TESTING:LEVELS -->
 ## 0.1 测试层级定义
 
-- `branch-local`: 在当前分支本地运行，验证 WI 级别的功能正确性。允许使用 fixture / mock。
+- `branch-local`: 在当前分支本地运行，验证 slice 级别的功能正确性。允许使用 fixture / mock。
 - `full-integration`: 必须在集成环境中运行，覆盖完整链路。最低要求：
   - 真实外部依赖已连接（非 fixture / mock）
   - 数据已持久化（非仅内存）
@@ -32,11 +33,10 @@
   requirement_refs: [REQ-001]
   acceptance_ref: ACC-001
   verification_ref: VO-001
-  work_item_refs: [WI-001]
   test_type: integration
   verification_mode: automated
   required_stage: testing
-  required_completion_level: integrated_runtime  # fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
+  required_completion_level: integrated_runtime  # 目标：该 TC 必须达到的最低 completion level；fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
   scenario: [要验证的用户场景或系统行为]
   given: [前置条件]
   when: [触发动作]
@@ -53,17 +53,17 @@
 - run_id: RUN-001
   test_case_ref: TC-ACC-001-01
   acceptance_ref: ACC-001
-  work_item_ref: WI-001
+  slice_ref: SLICE-001
   test_type: integration
   test_scope: branch-local
   verification_type: automated
-  completion_level: fixture_contract  # fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
+  completion_level: fixture_contract  # 实际：本次 RUN 达到的 completion level；不得高于实际验证深度
   command_or_steps: [真实命令或人工步骤]  # 必填：记录实际执行的命令或人工步骤，不得留空或使用占位符
   artifact_ref: [可复核证据路径或链接]
-  result: pass/fail
+  result: [pass 或 fail]
   tested_at: YYYY-MM-DD
   tested_by: [执行者]
-  residual_risk: none/low/medium/high
+  residual_risk: [none/low/medium/high]
   reopen_required: false
 
 <!-- CODESPEC:TESTING:RISKS -->
@@ -79,7 +79,7 @@
 
 - handoff_id: HANDOFF-001
   phase: Implementation  # Implementation / Testing / Deployment
-  work_item_refs: [WI-001]
+  slice_refs: [SLICE-001]
   highest_completion_level: fixture_contract  # fixture_contract / in_memory_domain / api_connected / db_persistent / integrated_runtime / owner_verified
   evidence_refs:
     - testing.md#RUN-001

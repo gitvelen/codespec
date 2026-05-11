@@ -17,50 +17,81 @@ find_workspace_root() {
   return 1
 }
 
-# Find project root
-find_project_root() {
+repo_meta_paths() {
+  if [ -n "${PUSH_SNAPSHOT_SHA:-}" ]; then
+    git -C "$GIT_ROOT" ls-tree -r --name-only "$PUSH_SNAPSHOT_SHA" -- 'meta.yaml' '*/meta.yaml' 2>/dev/null |
+      grep -vE '(^|/)(\.codespec|versions|project-docs)/' |
+      sort -u
+    return
+  fi
+
+  git -C "$GIT_ROOT" ls-files -co --exclude-standard -- 'meta.yaml' '*/meta.yaml' 2>/dev/null |
+    grep -vE '(^|/)(\.codespec|versions|project-docs)/' |
+    sort -u
+}
+
+project_root_for_meta_path() {
+  local meta_path="$1"
+  local meta_dir
+  meta_dir="$(dirname "$meta_path")"
+  if [ "$meta_dir" = "." ]; then
+    printf '%s\n' "$GIT_ROOT"
+  else
+    (cd "$GIT_ROOT/$meta_dir" && pwd)
+  fi
+}
+
+best_meta_for_file() {
+  local file="$1"
+  local best="" best_len=-1 meta_path meta_dir len
+  while IFS= read -r meta_path; do
+    [ -n "$meta_path" ] || continue
+    meta_dir="$(dirname "$meta_path")"
+    if [ "$meta_dir" = "." ]; then
+      len=0
+      if [ "$len" -gt "$best_len" ]; then
+        best="$meta_path"
+        best_len="$len"
+      fi
+      continue
+    fi
+    case "$file" in
+      "$meta_dir"|"$meta_dir"/*)
+        len="${#meta_dir}"
+        if [ "$len" -gt "$best_len" ]; then
+          best="$meta_path"
+          best_len="$len"
+        fi
+        ;;
+    esac
+  done < <(repo_meta_paths)
+  [ -n "$best" ] && printf '%s\n' "$best"
+}
+
+# Find project roots touched by this push
+find_project_roots() {
   if [ -n "${CODESPEC_PROJECT_ROOT:-}" ]; then
     (cd "$CODESPEC_PROJECT_ROOT" && pwd)
     return
   fi
 
-  local dir
-  dir="$PWD"
-  while [ "$dir" != "/" ]; do
-    if [ -f "$dir/meta.yaml" ]; then
-      printf '%s\n' "$dir"
-      return
-    fi
-    dir="$(dirname "$dir")"
+  local metas=() candidates=() file meta_path
+  mapfile -t metas < <(repo_meta_paths)
+  [ "${#metas[@]}" -gt 0 ] || return 0
+  [ -s "$CHANGED_FILES_FILE" ] || return 0
+
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    meta_path="$(best_meta_for_file "$file" || true)"
+    [ -n "$meta_path" ] || continue
+    candidates+=("$meta_path")
+  done < "$CHANGED_FILES_FILE"
+
+  [ "${#candidates[@]}" -gt 0 ] || return 0
+  mapfile -t candidates < <(printf '%s\n' "${candidates[@]}" | sort -u)
+  for meta_path in "${candidates[@]}"; do
+    project_root_for_meta_path "$meta_path"
   done
-
-  local git_root metas meta_dir
-  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    if [ -f "$git_root/meta.yaml" ]; then
-      printf '%s\n' "$git_root"
-      return
-    fi
-
-    mapfile -t metas < <(
-      git -C "$git_root" ls-files -co --exclude-standard -- 'meta.yaml' '*/meta.yaml' 2>/dev/null |
-        grep -vE '(^|/)(\.codespec|versions|project-docs)/' |
-        sort -u
-    )
-    if [ "${#metas[@]}" -eq 1 ]; then
-      meta_dir="$(dirname "${metas[0]}")"
-      if [ "$meta_dir" = "." ]; then
-        printf '%s\n' "$git_root"
-      else
-        (cd "$git_root/$meta_dir" && pwd)
-      fi
-      return
-    fi
-
-    printf '%s\n' "$git_root"
-    return
-  fi
-
-  printf '%s\n' "$PWD"
 }
 
 project_git_prefix() {
@@ -70,14 +101,25 @@ project_git_prefix() {
   fi
 }
 
+snapshot_project_root() {
+  local snapshot_repo_root="$1"
+  local project_prefix="$2"
+  if [ -z "$project_prefix" ]; then
+    printf '%s\n' "$snapshot_repo_root"
+  else
+    printf '%s/%s\n' "$snapshot_repo_root" "$project_prefix"
+  fi
+}
+
 WORKSPACE_ROOT="$(find_workspace_root || echo "")"
-PROJECT_ROOT="$(find_project_root)"
-GIT_ROOT="$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PROJECT_ROOT")"
-PROJECT_PREFIX="$(project_git_prefix "$PROJECT_ROOT")"
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CHANGED_FILES_FILE="$(mktemp /tmp/codespec-pre-push-files-XXXXXX)"
+PUSH_REFS_FILE="$(mktemp /tmp/codespec-pre-push-refs-XXXXXX)"
+SNAPSHOT_REPO_ROOT=""
 
 cleanup() {
-  rm -f "$CHANGED_FILES_FILE"
+  rm -f "$CHANGED_FILES_FILE" "$PUSH_REFS_FILE"
+  [ -z "$SNAPSHOT_REPO_ROOT" ] || rm -rf "$SNAPSHOT_REPO_ROOT"
 }
 trap cleanup EXIT
 
@@ -86,7 +128,7 @@ if [ -n "$WORKSPACE_ROOT" ] && [ -x "$WORKSPACE_ROOT/.codespec/scripts/check-gat
 elif [ -x "$LOCAL_CHECK_SCRIPT" ]; then
   CHECK_SCRIPT="$LOCAL_CHECK_SCRIPT"
 else
-  CHECK_SCRIPT="$PROJECT_ROOT/.codespec/scripts/check-gate.sh"
+  CHECK_SCRIPT="$GIT_ROOT/.codespec/scripts/check-gate.sh"
 fi
 
 [ -x "$CHECK_SCRIPT" ] || {
@@ -101,6 +143,7 @@ empty_tree() {
 collect_push_files() {
   local local_ref local_sha remote_ref remote_sha zero_sha base
   zero_sha="0000000000000000000000000000000000000000"
+  : > "$PUSH_REFS_FILE"
 
   {
   while read -r local_ref local_sha remote_ref remote_sha; do
@@ -110,11 +153,15 @@ collect_push_files() {
     if [ "$remote_sha" = "$zero_sha" ]; then
       base="$(git -C "$GIT_ROOT" merge-base "$local_sha" refs/remotes/origin/HEAD 2>/dev/null || true)"
       if [ -n "$base" ]; then
+        printf '%s %s %s\n' "$local_sha" "$remote_sha" "$base" >> "$PUSH_REFS_FILE"
         git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD "$base..$local_sha"
       else
+        base="$(empty_tree)"
+        printf '%s %s %s\n' "$local_sha" "$remote_sha" "$base" >> "$PUSH_REFS_FILE"
         git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD "$(empty_tree)" "$local_sha"
       fi
     else
+      printf '%s %s %s\n' "$local_sha" "$remote_sha" "$remote_sha" >> "$PUSH_REFS_FILE"
       git -C "$GIT_ROOT" diff --name-only --diff-filter=ACMRD "$remote_sha..$local_sha"
     fi
   done
@@ -122,19 +169,38 @@ collect_push_files() {
 }
 
 collect_push_files
+PUSH_SNAPSHOT_SHA="$(awk 'NF { sha = $1 } END { print sha }' "$PUSH_REFS_FILE")"
+PUSH_BASE_REVISION="$(awk 'NF { base = $3 } END { print base }' "$PUSH_REFS_FILE")"
 
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" metadata-consistency
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_PHASE_CAPABILITY_MODE=changed-files "$CHECK_SCRIPT" phase-capability
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_SCOPE_MODE=changed-files "$CHECK_SCRIPT" scope
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" contract-boundary
-CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" verification
-
-# Run trace-consistency gate for Testing/Deployment phases
-if [ -f "$PROJECT_ROOT/meta.yaml" ]; then
-  phase="$(yq eval '.phase' "$PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "")"
-  if [ "$phase" = "Testing" ] || [ "$phase" = "Deployment" ]; then
-    CODESPEC_PROJECT_ROOT="$PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" "$CHECK_SCRIPT" trace-consistency
-  fi
+if [ -n "$PUSH_SNAPSHOT_SHA" ]; then
+  SNAPSHOT_REPO_ROOT="$(mktemp -d /tmp/codespec-pre-push-snapshot-XXXXXX)"
+  git -C "$GIT_ROOT" archive "$PUSH_SNAPSHOT_SHA" | tar -x -C "$SNAPSHOT_REPO_ROOT"
 fi
+
+mapfile -t PROJECT_ROOTS < <(find_project_roots)
+if [ "${#PROJECT_ROOTS[@]}" -eq 0 ]; then
+  printf '✓ pre-push checks passed (no codespec dossier touched)\n'
+  exit 0
+fi
+
+for PROJECT_ROOT in "${PROJECT_ROOTS[@]}"; do
+  PROJECT_PREFIX="$(project_git_prefix "$PROJECT_ROOT")"
+  SNAPSHOT_PROJECT_ROOT="$(snapshot_project_root "$SNAPSHOT_REPO_ROOT" "$PROJECT_PREFIX")"
+  [ -d "$SNAPSHOT_PROJECT_ROOT" ] || continue
+
+  CODESPEC_PROJECT_ROOT="$SNAPSHOT_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=push-snapshot "$CHECK_SCRIPT" metadata-consistency
+  CODESPEC_PROJECT_ROOT="$SNAPSHOT_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=push-snapshot CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_PHASE_CAPABILITY_MODE=changed-files "$CHECK_SCRIPT" phase-capability
+  CODESPEC_PROJECT_ROOT="$SNAPSHOT_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=push-snapshot CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_SCOPE_MODE=changed-files "$CHECK_SCRIPT" scope
+  CODESPEC_PROJECT_ROOT="$SNAPSHOT_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=push-snapshot CODESPEC_CHANGED_FILES_FILE="$CHANGED_FILES_FILE" CODESPEC_CONTRACT_BOUNDARY_MODE=changed-files CODESPEC_CONTRACT_BASE_REVISION="$PUSH_BASE_REVISION" "$CHECK_SCRIPT" contract-boundary
+  CODESPEC_PROJECT_ROOT="$SNAPSHOT_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=push-snapshot "$CHECK_SCRIPT" verification
+
+  # Run trace-consistency gate for Testing/Deployment phases
+  if [ -f "$SNAPSHOT_PROJECT_ROOT/meta.yaml" ]; then
+    phase="$(yq eval '.phase' "$SNAPSHOT_PROJECT_ROOT/meta.yaml" 2>/dev/null || echo "")"
+    if [ "$phase" = "Testing" ] || [ "$phase" = "Deployment" ]; then
+      CODESPEC_PROJECT_ROOT="$SNAPSHOT_PROJECT_ROOT" CODESPEC_GIT_ROOT="$GIT_ROOT" CODESPEC_PROJECT_PREFIX="$PROJECT_PREFIX" CODESPEC_CHECK_CONTEXT=push-snapshot "$CHECK_SCRIPT" trace-consistency
+    fi
+  fi
+done
 
 printf '✓ pre-push checks passed\n'

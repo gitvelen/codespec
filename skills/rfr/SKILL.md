@@ -11,8 +11,8 @@ description: Use when a codespec change dossier has reviewable phase output and 
 
 ## 先读什么
 
-1. `codespec status` — 获取 project_root、phase、focus_work_item、phase_capabilities
-2. `codespec readset --json` — 按 `layered_readset.default -> work_item/phase -> on_demand` 分层读取；`entry_files` 字段指明读 `AGENTS.md` 还是 `CLAUDE.md`，不要两个都读
+1. `codespec status` — 获取 project_root、phase、phase_capabilities
+2. `codespec readset --json` — 按 `layered_readset.default -> phase -> on_demand` 分层读取；`entry_files` 字段指明读 `AGENTS.md` 还是 `CLAUDE.md`，不要两个都读
 3. `../lessons_learned.md` — 读取快速索引中的全部硬规则，不要写死只读某几个编号
 4. `phase-review-policy.md` — 阶段切换规则权威源
 5. 权威文档先读 `0. AI 阅读契约`；空/冲突/不足时停止
@@ -20,7 +20,7 @@ description: Use when a codespec change dossier has reviewable phase output and 
 `phase_capabilities.allowed/forbidden` 决定修复时能动什么、不能动什么。
 
 如果 `phase` 与当前工作内容不匹配，先指出错位，不要硬做 review。
-如果 `phase` 仍是旧的 `Proposal` / `Requirements`，先要求执行迁移脚本再继续。
+如果 `phase` 不是合法值（Requirement / Design / Implementation / Testing / Deployment），先要求用户确认项目状态再继续。
 
 ## 路径说明
 - 审查业务项目：读项目根的 `phase-review-policy.md`
@@ -37,23 +37,24 @@ description: Use when a codespec change dossier has reviewable phase output and 
 - 只想看一段代码有没有 bug 的普通 review
 
 ## 执行顺序
-1. `codespec status` — 确认 project_root、phase、focus_work_item、phase_capabilities
+1. `codespec status` — 确认 project_root、phase、phase_capabilities
 2. `codespec readset --json` — 按 layered_readset 分层读取全部必读文件
 3. 读 `../lessons_learned.md` 硬规则 + `phase-review-policy.md`
-4. 按当前 phase 对应的 gate 序列执行 `codespec check-gate`（见"门禁序列"），记录全部失败点；不要边扫边修
+4. 用 `codespec gate-sequence <transition> --json` 读取当前 phase 对应的权威 gate 序列，逐项执行并记录全部失败点；不要边扫边修
 5. 按当前 phase 做语义全量检查（见"阶段提示"），先找全问题再统一分级
 6. 只修"修复边界"内允许的问题
 7. 重跑失败 gate + 同口径复审，直到 P0/P1 收敛或暴露真实阻塞
 
 ## 门禁序列
 
-每个阶段切换对应的 gate 序列，必须全部 pass 才能推进。带环境变量的 gate 必须在执行前设置。gate pass != phase 已批准；语义复审仍是必要条件。
+每个阶段切换对应的 gate 序列以 `codespec gate-sequence <transition> --json` 为准，不在 skill 中重复维护。带环境变量的 gate 必须在执行前设置。gate pass != phase 已批准；语义复审仍是必要条件。
 
-- **start-design**：`requirement-complete` → `spec-quality` → `test-plan-complete` → `CODESPEC_TARGET_PHASE=Design check-gate review-quality`
-- **start-implementation**：`CODESPEC_FOCUS_WI=<WI> CODESPEC_TARGET_PHASE=Implementation check-gate implementation-ready` → `CODESPEC_TARGET_PHASE=Implementation check-gate review-quality`
-- **start-testing**：`metadata-consistency` → `active-work-items-complete` → `CODESPEC_SCOPE_MODE=implementation-span check-gate scope` → `CODESPEC_CONTRACT_BOUNDARY_MODE=implementation-span check-gate contract-boundary` → `verification`
-- **start-deployment**：`trace-consistency` → `verification`
-- **complete-change**：`promotion-criteria`
+transition 选择：
+- Requirement → Design：`start-design`
+- Design → Implementation：`start-implementation`
+- Implementation → Testing：`start-testing`
+- Testing → Deployment：`start-deployment`
+- Deployment → completed：`complete-change`
 
 ## 阶段提示
 
@@ -85,8 +86,8 @@ description: Use when a codespec change dossier has reviewable phase output and 
 额外关注：
 - architecture boundary 是否真正回答"改哪里、不改哪里、共享面受不受影响"
 - 技术栈选择、外部交互、安全设计、环境配置、可靠性、可观测性、性能、兼容/迁移/回滚是否有实质内容
-- work item 是否被切成可执行垂直切片，而不是整块需求原样下发
-- 每个 work item 是否引用 `REQ/ACC/VO/TC`，且 `goal` 能说明为哪条需求服务
+- 实现切片是否被切成可执行垂直切片，而不是整块需求原样下发
+- 每个 slice 是否引用 `REQ/ACC/VO/TC`，且 `goal` 能说明为哪条需求服务
 - 应该建 contract 却没建的共享边界是否被漏掉
 - reopen trigger 是否足以约束何时必须回写 spec/design
 
@@ -96,8 +97,8 @@ description: Use when a codespec change dossier has reviewable phase output and 
 额外关注：
 - 是否隐性扩大了 scope 或绕开既定 design slice
 - shared boundary 是否只停留在约定，没有落到可复核证据
-- 当前 WI 的自动化 `TC-*` 是否已有 branch-local `RUN-*` pass，且 artifact 可复核
-- 当前实现是否仍能被 `spec.md`、`design.md`、当前 work item 合法解释
+- 当前 slice 的自动化 `TC-*` 是否已有 branch-local `RUN-*` pass，且 artifact 可复核
+- 当前实现是否仍能被 `spec.md`、`design.md` 合法解释
 
 ### Testing / 准备进入 Deployment
 权威阶段规则：见 `phase-review-policy.md` 对应章节。
@@ -120,16 +121,16 @@ description: Use when a codespec change dossier has reviewable phase output and 
 
 ## 修复边界
 只有同时满足下面条件时才直接修复：
-- 修复方向已被 `spec.md`、`design.md`、`work-items/*.yaml`、`testing.md`、`deployment.md` 或 gate 明确限定
+- 修复方向已被 `spec.md`、`design.md`、`testing.md`、`deployment.md` 或 gate 明确限定
 - 不会改变产品方向、公共契约、业务规则或 scope 决策
 - 修复范围不超出当前 phase 的 `phase_capabilities.allowed`
 - 能立刻通过命令、测试、文档证据或 gate 重新验证
 
 遇到以下情况必须停下问用户：
 - 需要改 acceptance、verification obligation、scope、contract 或对外行为
-- 需求、设计、work item 之间互相冲突
+- 需求、设计之间互相冲突
 - 需要 Accept / Defer 一个 P0/P1
-- 需要扩大 allowed_paths 或动 `forbidden_paths`
+- 需要扩大 design.md §4 可修改路径或修改不可修改路径
 - 需要修复但 `phase_capabilities.forbidden` 阻止了必要改动
 
 ## 对话输出
