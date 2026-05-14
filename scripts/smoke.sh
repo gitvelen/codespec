@@ -1257,6 +1257,30 @@ EOF
   CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" CODESPEC_SCOPE_MODE=implementation-span "$TMP_WORKSPACE/.codespec/codespec" check-gate scope
   log "ok closed authority repair lets implementation-span scope accept audited design repair"
 
+  "$TMP_WORKSPACE/.codespec/codespec" authority-repair begin trace-consistency --kind source-trace --paths spec.md --reason "trace-consistency gate found source_ref closure metadata drift"
+  source_trace_repair_id="$(yq eval '.active_authority_repair' meta.yaml)"
+  [ "$(yq eval '.kind' "authority-repairs/$source_trace_repair_id.yaml")" = "source-trace" ] || die "source-trace repair did not record kind"
+  sed -i 's/docs\/test.md#intent/docs\/test.md#source-trace/g' spec.md
+  git add meta.yaml "authority-repairs/$source_trace_repair_id.yaml" spec.md
+  "$TMP_WORKSPACE/.codespec/codespec" check-gate scope
+  "$TMP_WORKSPACE/.codespec/codespec" authority-repair close --evidence "source_ref closure metadata repaired without changing requirement semantics"
+  [ "$(yq eval '.active_authority_repair' meta.yaml)" = "null" ] || die "source-trace repair close did not clear active_authority_repair"
+  git add meta.yaml "authority-repairs/$source_trace_repair_id.yaml" spec.md
+  git commit -m "docs: repair source trace metadata"
+  log "ok source-trace authority repair allows audited spec trace metadata edits"
+
+  "$TMP_WORKSPACE/.codespec/codespec" authority-repair begin trace-consistency --kind source-trace --paths spec.md --reason "attempt invalid semantic source-trace edit"
+  bad_source_trace_repair_id="$(yq eval '.active_authority_repair' meta.yaml)"
+  sed -i '0,/summary: test requirement/s//summary: changed requirement semantics/' spec.md
+  git add meta.yaml "authority-repairs/$bad_source_trace_repair_id.yaml" spec.md
+  expect_fail_cmd \
+    "source-trace repair changed spec.md requirement semantics" \
+    "cd '$TMP_WORKSPACE/test-project' && '$TMP_WORKSPACE/.codespec/codespec' authority-repair close --evidence 'should fail because summary changed'"
+  git reset HEAD meta.yaml "authority-repairs/$bad_source_trace_repair_id.yaml" spec.md >/dev/null 2>&1 || true
+  git checkout -- meta.yaml spec.md
+  rm -f "authority-repairs/$bad_source_trace_repair_id.yaml"
+  log "ok source-trace authority repair rejects spec requirement semantic edits"
+
   yq eval '.evidence = "tampered after close"' -i "authority-repairs/$repair_id.yaml"
   git add "authority-repairs/$repair_id.yaml"
   expect_fail_cmd \
@@ -1884,8 +1908,8 @@ git commit -m "docs: record deployment semantic handoff"
 status=$(yq eval '.status' meta.yaml)
 [ "$status" = "completed" ] || die "complete-change did not set status to completed"
 [ "$(yq eval '.stable_version' meta.yaml)" = "smoke-v1" ] || die "complete-change did not set stable_version in workspace meta"
-[ -f "$TMP_WORKSPACE/versions/smoke-v1/meta.yaml" ] || die "complete-change did not archive stable version"
-git add meta.yaml
+[ -f "$TMP_WORKSPACE/test-project/versions/smoke-v1/meta.yaml" ] || die "complete-change did not archive stable version"
+git add meta.yaml versions/smoke-v1
 git commit -m "chore: complete smoke-v1"
 log "ok complete-change archived the accepted stable version"
 
@@ -2491,6 +2515,54 @@ log "ok phase-capability blocks deployment.md in Testing phase"
 git reset HEAD deployment.md
 git checkout -- deployment.md
 
+yq eval '.phase = "Deployment" | .status = "completed"' -i meta.yaml
+CURRENT_HEAD="$(git rev-parse HEAD)"
+cat > authority-repairs/REPAIR-SMOKE-LEGACY.yaml <<EOF
+repair_id: REPAIR-SMOKE-LEGACY
+status: closed
+phase: Implementation
+gate: verification
+reason: Legacy closed repair from the removed work-items model
+allowed_paths:
+  - design.md
+  - work-items/WI-001.yaml
+opened_at: 2026-04-16T00:00:00Z
+opened_revision: $CURRENT_HEAD
+closed_at: 2026-04-16T00:00:00Z
+closed_revision: $CURRENT_HEAD
+evidence: historical record
+gate_result: pass
+smoke_result: pass
+EOF
+cat > authority-repairs/REPAIR-SMOKE-DESIGN.yaml <<EOF
+repair_id: REPAIR-SMOKE-DESIGN
+status: closed
+phase: Deployment
+gate: design-quality
+reason: Valid closed design repair for changed-files phase-capability lookup
+allowed_paths:
+  - design.md
+opened_at: 2026-04-16T00:00:00Z
+opened_revision: $CURRENT_HEAD
+closed_at: 2026-04-16T00:00:00Z
+closed_revision: $CURRENT_HEAD
+evidence: historical record
+gate_result: pass
+smoke_result: pass
+EOF
+printf '\n# deployment closed repair drift\n' >> design.md
+
+set +e
+output=$(CODESPEC_PROJECT_ROOT="$TMP_WORKSPACE/test-project" CODESPEC_PHASE_CAPABILITY_MODE=changed-files CODESPEC_CHANGED_FILES=design.md "$TMP_WORKSPACE/.codespec/codespec" check-gate phase-capability 2>&1)
+status=$?
+set -e
+
+[ "$status" -eq 0 ] || die "phase-capability should ignore unrelated legacy closed repairs when a matching closed repair allows the file: $output"
+log "ok phase-capability ignores unrelated legacy closed repairs"
+
+rm -f authority-repairs/REPAIR-SMOKE-LEGACY.yaml authority-repairs/REPAIR-SMOKE-DESIGN.yaml
+git checkout -- design.md meta.yaml
+
 # Test 13: promotion trace consistency
 log "\n=== Test 13: promotion trace consistency ==="
 
@@ -2689,10 +2761,10 @@ git commit --no-verify -m "test: prepare promoted baseline fixture"
 
 "$TMP_WORKSPACE/.codespec/codespec" promote-version smoke-v2.8
 
-[ -f "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml" ] || die "promote-version did not archive baseline version"
-promoted_version=$(yq eval '.promoted_version' "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml")
+[ -f "$TMP_WORKSPACE/test-project/versions/smoke-v2.8/meta.yaml" ] || die "promote-version did not archive baseline version"
+promoted_version=$(yq eval '.promoted_version' "$TMP_WORKSPACE/test-project/versions/smoke-v2.8/meta.yaml")
 [ "$promoted_version" = "smoke-v2.8" ] || die "promoted_version metadata missing from archived meta"
-promoted_at=$(yq eval '.promoted_at' "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml")
+promoted_at=$(yq eval '.promoted_at' "$TMP_WORKSPACE/test-project/versions/smoke-v2.8/meta.yaml")
 [ "$promoted_at" != "null" ] || die "promoted_at metadata missing from archived meta"
 
 list_versions_output=$("$TMP_WORKSPACE/.codespec/codespec" list-versions)
@@ -2706,7 +2778,7 @@ assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].p
 assert_json_eq "$list_versions_json" 'map(select(.version == "smoke-v2.8"))[0].promoted_at | length > 0' 'true'
 log "ok list-versions JSON output includes promoted metadata"
 
-git add meta.yaml
+git add meta.yaml versions/smoke-v2.8
 git commit --no-verify -m "chore: complete promoted baseline fixture" >/dev/null
 "$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
 
@@ -2721,9 +2793,9 @@ reset_change_id=$(yq eval '.change_id' meta.yaml)
 log "ok reset-to-requirement resolves promoted baseline version"
 
 # Legacy compatibility: same-name archive should still reset through the direct path.
-mkdir -p "$TMP_WORKSPACE/versions/release-1"
-cp "$TMP_WORKSPACE/versions/smoke-v2.8/meta.yaml" "$TMP_WORKSPACE/versions/release-1/meta.yaml"
-yq eval '.change_id = "release-1" | .promoted_version = "release-1"' -i "$TMP_WORKSPACE/versions/release-1/meta.yaml"
+mkdir -p "$TMP_WORKSPACE/test-project/versions/release-1"
+cp "$TMP_WORKSPACE/test-project/versions/smoke-v2.8/meta.yaml" "$TMP_WORKSPACE/test-project/versions/release-1/meta.yaml"
+yq eval '.change_id = "release-1" | .promoted_version = "release-1"' -i "$TMP_WORKSPACE/test-project/versions/release-1/meta.yaml"
 yq eval '.change_id = "release-1" | .base_version = null | .phase = "Deployment" | .status = "completed" | .stable_version = "release-1"' -i meta.yaml
 
 "$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement --force
@@ -3139,7 +3211,7 @@ git reset --hard HEAD >/dev/null
 rm -f "$TMP_WORKSPACE/gh.log"
 submit_output="$(PATH="$TMP_WORKSPACE/bin:$PATH" TMP_GH_LOG="$TMP_WORKSPACE/gh.log" "$TMP_WORKSPACE/.codespec/codespec" submit-pr smoke-v3)"
 assert_contains "$submit_output" "https://example.test/pr/123"
-[ -f "$TMP_WORKSPACE/versions/smoke-v3/meta.yaml" ] || die "submit-pr did not archive the submitted version"
+[ -f "$TMP_WORKSPACE/test-project/versions/smoke-v3/meta.yaml" ] || die "submit-pr did not archive the submitted version"
 assert_eq "$(yq eval '.status' meta.yaml)" "completed"
 assert_eq "$(yq eval '.stable_version' meta.yaml)" "smoke-v3"
 assert_eq "$(git log -1 --pretty=%s)" "chore: complete change smoke-v3"

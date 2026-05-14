@@ -419,6 +419,7 @@ ensure_deployed_source_revision_current() {
     "design-appendices/**"
     "reviews/**"
     "scripts/codespec-deploy"
+    "versions/**"
   )
 
   [ -f "$deployment_file" ] || die 'submit-pr requires deployment.md'
@@ -519,9 +520,9 @@ EOF
 }
 
 resolve_promoted_base_version() {
-  local workspace_root="$1"
+  local project_root="$1"
   local current_change_id="$2"
-  local versions_dir="$workspace_root/versions"
+  local versions_dir="$project_root/versions"
   local direct_meta="$versions_dir/$current_change_id/meta.yaml"
 
   if [ -f "$direct_meta" ] && [ "$(yaml_scalar "$direct_meta" change_id)" = "$current_change_id" ]; then
@@ -700,8 +701,7 @@ replace_markdown_section() {
 archive_dossier() {
   local stable_version="$1"
   local project_root="$2"
-  local workspace_root="$3"
-  local target_root="$workspace_root/versions/$stable_version"
+  local target_root="$project_root/versions/$stable_version"
   [ ! -e "$target_root" ] || die "target version already exists: versions/$stable_version"
 
   mkdir -p "$target_root"
@@ -771,7 +771,7 @@ contains_exact_line() {
 validate_authority_repair_gate() {
   local gate="$1"
   case "$gate" in
-    design-quality|design-readiness|implementation-ready|implementation-start|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria)
+    requirement-complete|spec-quality|design-quality|design-readiness|implementation-ready|implementation-start|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria)
       ;;
     *)
       die "unsupported authority repair gate: $gate"
@@ -779,18 +779,42 @@ validate_authority_repair_gate() {
   esac
 }
 
+validate_authority_repair_kind() {
+  local kind="$1"
+  case "$kind" in
+    standard|source-trace)
+      ;;
+    *)
+      die "unsupported authority repair kind: $kind"
+      ;;
+  esac
+}
+
 validate_authority_repair_path() {
   local project_root="$1"
   local phase="$2"
-  local path="$3"
+  local kind="$3"
+  local path="$4"
   local meta="$project_root/meta.yaml"
 
   [ -n "$path" ] || die 'authority repair path must be non-empty'
   [[ "$path" != /* ]] || die "authority repair path must be relative: $path"
   [[ "$path" != *..* ]] || die "authority repair path must not contain '..': $path"
 
+  validate_authority_repair_kind "$kind"
+  if [ "$kind" = 'source-trace' ]; then
+    case "$path" in
+      spec.md|spec-appendices/*.md|design.md)
+        return 0
+        ;;
+      *)
+        die "source-trace authority repair path is not allowed: $path"
+        ;;
+    esac
+  fi
+
   case "$path" in
-    meta.yaml|spec.md|src/**|src/*|Dockerfile|versions/**|versions/*|authority-repairs/**|authority-repairs/*)
+    meta.yaml|spec.md|src/**|src/*|Dockerfile|versions/**|versions/*|authority-repairs/**|authority-repairs/*|spec-appendices/**|spec-appendices/*)
       die "authority repair path is not allowed: $path"
       ;;
   esac
@@ -820,6 +844,7 @@ parse_authority_repair_paths_arg() {
   local raw="$1"
   local project_root="$2"
   local phase="$3"
+  local kind="$4"
   [ -n "$raw" ] || die 'authority repair requires --paths'
 
   local item count=0
@@ -827,7 +852,7 @@ parse_authority_repair_paths_arg() {
   for item in "${items[@]}"; do
     item="$(trim_value "$item")"
     [ -n "$item" ] || continue
-    validate_authority_repair_path "$project_root" "$phase" "$item"
+    validate_authority_repair_path "$project_root" "$phase" "$kind" "$item"
     printf '%s\n' "$item"
     count=$((count + 1))
   done
@@ -858,7 +883,7 @@ authority_repair_begin() {
   shift
   validate_authority_repair_gate "$gate"
 
-  local paths_arg="" reason=""
+  local paths_arg="" reason="" kind="standard"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --paths)
@@ -871,12 +896,24 @@ authority_repair_begin() {
         reason="$2"
         shift 2
         ;;
+      --kind)
+        [ "$#" -ge 2 ] || die 'authority-repair begin --kind requires a value'
+        kind="$2"
+        shift 2
+        ;;
       *)
         die "unknown authority-repair begin option: $1"
         ;;
     esac
   done
 
+  validate_authority_repair_kind "$kind"
+  if [ "$kind" = 'source-trace' ]; then
+    case "$gate" in
+      requirement-complete|spec-quality|design-quality|trace-consistency) ;;
+      *) die "source-trace authority repair does not support gate: $gate" ;;
+    esac
+  fi
   is_placeholder_value "$reason" && die 'authority repair reason is required'
 
   local project_root meta phase active repair_dir repair_id repair_file opened_at opened_revision paths=() path
@@ -892,7 +929,7 @@ authority_repair_begin() {
   active="$(active_authority_repair_id "$meta")"
   [ "$active" = 'null' ] || die "authority repair already active: $active"
 
-  mapfile -t paths < <(parse_authority_repair_paths_arg "$paths_arg" "$project_root" "$phase")
+  mapfile -t paths < <(parse_authority_repair_paths_arg "$paths_arg" "$project_root" "$phase" "$kind")
 
   repair_dir="$project_root/authority-repairs"
   mkdir -p "$repair_dir"
@@ -904,10 +941,11 @@ authority_repair_begin() {
   REPAIR_ID="$repair_id" \
   PHASE="$phase" \
   GATE="$gate" \
+  KIND="$kind" \
   REASON="$reason" \
   OPENED_AT="$opened_at" \
   OPENED_REVISION="$opened_revision" \
-    yq eval -n '.repair_id = env(REPAIR_ID) | .status = "open" | .phase = env(PHASE) | .gate = env(GATE) | .reason = env(REASON) | .allowed_paths = [] | .opened_at = env(OPENED_AT) | .opened_revision = env(OPENED_REVISION) | .closed_at = null | .closed_revision = null | .evidence = null | .gate_result = null | .smoke_result = null' > "$repair_file"
+    yq eval -n '.repair_id = env(REPAIR_ID) | .status = "open" | .phase = env(PHASE) | .gate = env(GATE) | .kind = env(KIND) | .reason = env(REASON) | .allowed_paths = [] | .opened_at = env(OPENED_AT) | .opened_revision = env(OPENED_REVISION) | .closed_at = null | .closed_revision = null | .evidence = null | .gate_result = null | .smoke_result = null' > "$repair_file"
 
   for path in "${paths[@]}"; do
     PATH_VALUE="$path" yq eval '.allowed_paths += [env(PATH_VALUE)]' -i "$repair_file"
@@ -924,7 +962,57 @@ authority_repair_begin() {
 
   log "started authority repair: $repair_id"
   log "gate: $gate"
+  log "kind: $kind"
   log "allowed_paths: ${paths[*]}"
+}
+
+spec_requirements_semantic_fingerprint() {
+  local file="$1"
+  awk '
+    /^## Requirements$/ || /^## 4\. 需求与验收$/ {
+      in_section = 1
+      print
+      next
+    }
+    in_section && /^## / {
+      exit
+    }
+    !in_section {
+      next
+    }
+    /^[[:space:]]*source_ref:[[:space:]]*/ || /^[[:space:]]*-[[:space:]]*source_ref:[[:space:]]*/ {
+      next
+    }
+    /^[[:space:]]*decision_refs:[[:space:]]*/ || /^[[:space:]]*-[[:space:]]*decision_refs:[[:space:]]*/ {
+      next
+    }
+    /^[[:space:]]*-[[:space:]]*DEC-[0-9]{3}[[:space:]]*$/ {
+      next
+    }
+    {
+      gsub(/[[:space:]]+$/, "")
+      print
+    }
+  ' "$file" | sha256sum | awk '{print $1}'
+}
+
+validate_source_trace_repair_semantics() {
+  local project_root="$1"
+  local repair_file="$2"
+  local opened_revision base_tmp base_hash current_hash
+  opened_revision="$(yaml_scalar "$repair_file" opened_revision)"
+  [ -n "$opened_revision" ] && [ "$opened_revision" != 'null' ] || die 'source-trace repair requires opened_revision'
+
+  base_tmp="$(mktemp)"
+  if ! git -C "$project_root" show "$opened_revision:spec.md" > "$base_tmp" 2>/dev/null; then
+    rm -f "$base_tmp"
+    die "source-trace repair cannot read opened spec.md at $opened_revision"
+  fi
+
+  base_hash="$(spec_requirements_semantic_fingerprint "$base_tmp")"
+  current_hash="$(spec_requirements_semantic_fingerprint "$project_root/spec.md")"
+  rm -f "$base_tmp"
+  [ "$base_hash" = "$current_hash" ] || die 'source-trace repair changed spec.md requirement semantics'
 }
 
 authority_repair_close() {
@@ -944,7 +1032,7 @@ authority_repair_close() {
   done
   is_placeholder_value "$evidence" && die 'authority repair close requires --evidence'
 
-  local project_root meta repair_id repair_file gate gate_output closed_at closed_revision backup_meta backup_repair metadata_output
+  local project_root meta repair_id repair_file gate kind gate_output closed_at closed_revision backup_meta backup_repair metadata_output
   local gate_rc metadata_rc
   project_root="$(find_project_root)"
   meta="$project_root/meta.yaml"
@@ -956,12 +1044,17 @@ authority_repair_close() {
   [ "$(yaml_scalar "$repair_file" status)" = 'open' ] || die "authority repair is not open: $repair_id"
   gate="$(yaml_scalar "$repair_file" gate)"
   validate_authority_repair_gate "$gate"
+  kind="$(yq eval '.kind // "standard"' "$repair_file")"
+  validate_authority_repair_kind "$kind"
 
   set +e
   gate_output="$(CODESPEC_PROJECT_ROOT="$project_root" CODESPEC_AUTHORITY_REPAIR_CLOSING=1 "$FRAMEWORK_ROOT/scripts/check-gate.sh" "$gate" 2>&1)"
   gate_rc=$?
   set -e
   [ "$gate_rc" -eq 0 ] || die "authority repair close gate failed (${gate}): $gate_output"
+  if [ "$kind" = 'source-trace' ]; then
+    validate_source_trace_repair_semantics "$project_root" "$repair_file"
+  fi
 
   closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   closed_revision="$(current_git_revision "$project_root")"
@@ -1138,9 +1231,9 @@ start_deployment() {
 
     # 优先使用 stable_version，fallback 到 change_id（兼容旧版本）
     if [ "$stable_version" != 'null' ] && [ -n "$stable_version" ]; then
-      archived_meta="$workspace_root/versions/$stable_version/meta.yaml"
+      archived_meta="$project_root/versions/$stable_version/meta.yaml"
     else
-      archived_meta="$workspace_root/versions/$change_id/meta.yaml"
+      archived_meta="$project_root/versions/$change_id/meta.yaml"
     fi
 
     if [ -f "$archived_meta" ]; then
@@ -1347,9 +1440,8 @@ complete_change() {
   require_yq
   local stable_version="${1:?usage: codespec complete-change <stable-version>}"
   validate_stable_version "$stable_version"
-  local project_root workspace_root
+  local project_root
   project_root="$(find_project_root)"
-  workspace_root="$(find_workspace_root)"
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml"
 
@@ -1361,7 +1453,7 @@ complete_change() {
 
   run_transition_gates "$project_root" complete-change >/dev/null
 
-  archive_dossier "$stable_version" "$project_root" "$workspace_root"
+  archive_dossier "$stable_version" "$project_root"
   meta_update "$meta" '.status = "completed" | .stable_version = "'"$stable_version"'"'
   log "completed change"
   log "archived stable version: versions/$stable_version"
@@ -1417,7 +1509,7 @@ submit_pr() {
     ensure_clean_git_worktree "$project_root"
     ensure_deployed_source_revision_current "$project_root"
     complete_change "$stable_version"
-    git -C "$project_root" add meta.yaml
+    git -C "$project_root" add meta.yaml versions
     git -C "$project_root" commit -m "chore: complete change $stable_version" >/dev/null
   elif [ "$status" = 'completed' ]; then
     ensure_clean_git_worktree "$project_root"
@@ -1690,7 +1782,7 @@ reset_to_requirement() {
 
   [ "$current_status" = 'completed' ] || die 'reset-to-requirement requires completed status'
   [ "$current_phase" = 'Deployment' ] || die 'reset-to-requirement requires Deployment phase'
-  base_version="$(resolve_promoted_base_version "$workspace_root" "$change_id")"
+  base_version="$(resolve_promoted_base_version "$project_root" "$change_id")"
 
   local keep_contracts=true
   local force=false
@@ -2017,11 +2109,9 @@ promote_version() {
 
 list_versions() {
   require_yq
-  local workspace_root
-  workspace_root="$(find_workspace_root)"
-  local versions_dir="$workspace_root/versions"
-
-  [ -d "$versions_dir" ] || die "versions directory not found: $versions_dir"
+  local project_root
+  project_root="$(find_project_root)"
+  local versions_dir="$project_root/versions"
 
   local output_json=false
   if find_optional_arg '--json' "$@"; then

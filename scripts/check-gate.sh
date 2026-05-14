@@ -219,14 +219,81 @@ authority_repair_file_for_id() {
   printf '%s/authority-repairs/%s.yaml\n' "$PROJECT_ROOT" "$repair_id"
 }
 
+spec_requirements_semantic_fingerprint() {
+  local file="$1"
+  awk '
+    /^## Requirements$/ || /^## 4\. 需求与验收$/ {
+      in_section = 1
+      print
+      next
+    }
+    in_section && /^## / {
+      exit
+    }
+    !in_section {
+      next
+    }
+    /^[[:space:]]*source_ref:[[:space:]]*/ || /^[[:space:]]*-[[:space:]]*source_ref:[[:space:]]*/ {
+      next
+    }
+    /^[[:space:]]*decision_refs:[[:space:]]*/ || /^[[:space:]]*-[[:space:]]*decision_refs:[[:space:]]*/ {
+      next
+    }
+    /^[[:space:]]*-[[:space:]]*DEC-[0-9]{3}[[:space:]]*$/ {
+      next
+    }
+    {
+      gsub(/[[:space:]]+$/, "")
+      print
+    }
+  ' "$file" | sha256sum | awk '{print $1}'
+}
+
+validate_source_trace_repair_semantics() {
+  local repair_file="$1"
+  local repair_id opened_revision base_tmp base_hash current_hash
+  repair_id="$(yaml_scalar "$repair_file" repair_id)"
+  opened_revision="$(yaml_scalar "$repair_file" opened_revision)"
+  [ -n "$opened_revision" ] && [ "$opened_revision" != 'null' ] || die "source-trace authority repair $repair_id requires opened_revision"
+
+  base_tmp="$(mktemp)"
+  if ! git -C "$GIT_ROOT" show "$opened_revision:$(project_path_to_git_path spec.md)" > "$base_tmp" 2>/dev/null; then
+    rm -f "$base_tmp"
+    die "source-trace authority repair $repair_id cannot read opened spec.md at $opened_revision"
+  fi
+
+  base_hash="$(spec_requirements_semantic_fingerprint "$base_tmp")"
+  current_hash="$(spec_requirements_semantic_fingerprint "$SPEC_FILE")"
+  rm -f "$base_tmp"
+  [ "$base_hash" = "$current_hash" ] || die "source-trace authority repair $repair_id changed spec.md requirement semantics"
+}
+
 authority_repair_path_is_valid() {
   local path="$1"
+  local kind="${2:-standard}"
   [ -n "$path" ] || return 1
   [ "$path" != 'null' ] || return 1
   [[ "$path" != /* ]] || return 1
   [[ "$path" != *..* ]] || return 1
+
+  case "$kind" in
+    standard|source-trace) ;;
+    *) return 1 ;;
+  esac
+
+  if [ "$kind" = 'source-trace' ]; then
+    case "$path" in
+      spec.md|spec-appendices/*.md|design.md)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
   case "$path" in
-    meta.yaml|spec.md|src/**|src/*|Dockerfile|versions/**|versions/*|authority-repairs/**|authority-repairs/*)
+    meta.yaml|spec.md|src/**|src/*|Dockerfile|versions/**|versions/*|authority-repairs/**|authority-repairs/*|spec-appendices/**|spec-appendices/*)
       return 1
       ;;
     design.md|testing.md|deployment.md|contracts/*.md)
@@ -242,7 +309,7 @@ validate_authority_repair_record() {
   local repair_file="$1"
   [ -f "$repair_file" ] || die "missing authority repair record: ${repair_file#$PROJECT_ROOT/}"
 
-  local repair_id expected_id status phase gate reason allowed=() path gate_result smoke_result
+  local repair_id expected_id status phase gate kind reason allowed=() path gate_result smoke_result
   repair_id="$(yaml_scalar "$repair_file" repair_id)"
   expected_id="$(basename "$repair_file" .yaml)"
   [ "$repair_id" = "$expected_id" ] || die "authority repair record id mismatch: ${repair_file#$PROJECT_ROOT/}"
@@ -261,9 +328,21 @@ validate_authority_repair_record() {
 
   gate="$(yaml_scalar "$repair_file" gate)"
   case "$gate" in
-    design-quality|design-readiness|implementation-ready|implementation-start|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria) ;;
+    requirement-complete|spec-quality|design-quality|design-readiness|implementation-ready|implementation-start|scope|contract-boundary|trace-consistency|verification|testing-coverage|deployment-plan-ready|deployment-readiness|promotion-criteria) ;;
     *) die "authority repair $repair_id has unsupported gate: $gate" ;;
   esac
+
+  kind="$(yq eval '.kind // "standard"' "$repair_file")"
+  case "$kind" in
+    standard|source-trace) ;;
+    *) die "authority repair $repair_id has unsupported kind: $kind" ;;
+  esac
+  if [ "$kind" = 'source-trace' ]; then
+    case "$gate" in
+      requirement-complete|spec-quality|design-quality|trace-consistency) ;;
+      *) die "source-trace authority repair $repair_id does not support gate: $gate" ;;
+    esac
+  fi
 
   reason="$(yaml_scalar "$repair_file" reason)"
   is_placeholder_token "$reason" && die "authority repair $repair_id requires reason"
@@ -271,7 +350,7 @@ validate_authority_repair_record() {
   mapfile -t allowed < <(yaml_list "$repair_file" allowed_paths)
   [ "${#allowed[@]}" -gt 0 ] || die "authority repair $repair_id requires allowed_paths"
   for path in "${allowed[@]}"; do
-    authority_repair_path_is_valid "$path" || die "authority repair $repair_id has invalid allowed_path: $path"
+    authority_repair_path_is_valid "$path" "$kind" || die "authority repair $repair_id has invalid allowed_path: $path"
   done
 
   if [ "$status" = 'closed' ]; then
@@ -282,6 +361,9 @@ validate_authority_repair_record() {
       pass|not-run) ;;
       *) die "closed authority repair $repair_id requires smoke_result: pass or not-run" ;;
     esac
+    if [ "$kind" = 'source-trace' ]; then
+      validate_source_trace_repair_semantics "$repair_file"
+    fi
   fi
 }
 
@@ -375,10 +457,10 @@ staged_closed_authority_repair_allows_path() {
     [ -f "$repair_file" ] || continue
     status="$(yaml_scalar "$repair_file" status)"
     [ "$status" = 'closed' ] || continue
-    validate_authority_repair_record "$repair_file"
     mapfile -t allowed < <(yaml_list "$repair_file" allowed_paths)
     for pattern in "${allowed[@]}"; do
       if match_path "$file" "$pattern"; then
+        (validate_authority_repair_record "$repair_file") >/dev/null 2>&1 || continue
         return 0
       fi
     done
@@ -415,10 +497,10 @@ closed_authority_repair_allows_path() {
     [ -e "$repair_file" ] || continue
     status="$(yaml_scalar "$repair_file" status)"
     [ "$status" = 'closed' ] || continue
-    validate_authority_repair_record "$repair_file"
     mapfile -t allowed < <(yaml_list "$repair_file" allowed_paths)
     for pattern in "${allowed[@]}"; do
       if match_path "$file" "$pattern"; then
+        (validate_authority_repair_record "$repair_file") >/dev/null 2>&1 || continue
         return 0
       fi
     done
@@ -984,6 +1066,7 @@ require_declared_source_ref_closure() {
   for ref in "${used_refs[@]}"; do
     contains_exact_line "$ref" "${declared_refs[@]}" || die "source_ref is not declared in spec.md §2 source_refs: $ref"
   done
+  validate_input_evidence_refs "${declared_refs[@]}"
 }
 
 gate_metadata_consistency() {
@@ -3158,6 +3241,9 @@ gate_phase_capability() {
   local active_repair
   active_repair="$(active_authority_repair_id)"
   if [ "$active_repair" != 'null' ]; then
+    if [ "${CODESPEC_CHECK_CONTEXT:-live}" = 'push-snapshot' ]; then
+      die "active authority repair must be closed before push: $active_repair"
+    fi
     local file
     for file in "${changed[@]}"; do
       active_authority_repair_allows_path "$file" || die "phase-capability gate failed: changed file $file is outside active authority repair allowed_paths"
@@ -3259,6 +3345,9 @@ gate_scope() {
   local active_repair
   active_repair="$(active_authority_repair_id)"
   if [ "$active_repair" != 'null' ]; then
+    if [ "${CODESPEC_CHECK_CONTEXT:-live}" = 'push-snapshot' ]; then
+      die "active authority repair must be closed before push: $active_repair"
+    fi
     if [ "$mode" = 'implementation-span' ] && [ "${CODESPEC_AUTHORITY_REPAIR_CLOSING:-}" != '1' ]; then
       die "active authority repair must be closed before implementation-span scope checks: $active_repair"
     fi

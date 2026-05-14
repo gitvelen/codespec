@@ -604,9 +604,9 @@ test_reset_requires_clean_worktree_by_default() {
   project="$(new_project dirty-reset)"
   write_requirement_docs "$project" 'docs/source.md#intent' automated
   yq eval '.phase = "Deployment" | .status = "completed" | .change_id = "release-change" | .stable_version = "stable-v1"' -i "$project/meta.yaml"
-  mkdir -p "$WORKSPACE/versions/stable-v1"
-  cp "$project/meta.yaml" "$WORKSPACE/versions/stable-v1/meta.yaml"
-  yq eval '.promoted_at = "2026-05-10T00:00:00Z" | .promoted_version = "stable-v1"' -i "$WORKSPACE/versions/stable-v1/meta.yaml"
+  mkdir -p "$project/versions/stable-v1"
+  cp "$project/meta.yaml" "$project/versions/stable-v1/meta.yaml"
+  yq eval '.promoted_at = "2026-05-10T00:00:00Z" | .promoted_version = "stable-v1"' -i "$project/versions/stable-v1/meta.yaml"
   commit_project "$project"
   printf '\nUNCOMMITTED_MARKER\n' >> "$project/spec.md"
   set +e
