@@ -13,6 +13,18 @@ die() {
   exit 1
 }
 
+usage() {
+  cat <<'EOF'
+Usage:
+  install-workspace.sh [workspace_root] [--migrate-project <project_root>] [--apply-migration] [--reset-stale-contracts]
+
+Options:
+  --migrate-project <project_root>  Run legacy WI audit/migration for the given project after installing runtime.
+  --apply-migration                Apply the migration. Without this flag, migration runs as dry-run.
+  --reset-stale-contracts          With --apply-migration, reset contracts that still encode the removed WI model.
+EOF
+}
+
 resolve_codespec_cmd() {
   if command -v codespec >/dev/null 2>&1; then
     printf 'codespec'
@@ -27,7 +39,47 @@ resolve_codespec_cmd() {
   die "could not resolve codespec runtime; expected codespec in PATH or $WORKSPACE_ROOT/.codespec/codespec"
 }
 
-WORKSPACE_ROOT="${1:-$PWD}"
+WORKSPACE_ROOT="$PWD"
+MIGRATE_PROJECT=""
+APPLY_MIGRATION=false
+RESET_STALE_CONTRACTS=false
+
+if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then
+  WORKSPACE_ROOT="$1"
+  shift
+fi
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --migrate-project)
+      [ "$#" -ge 2 ] || die "--migrate-project requires a project_root"
+      MIGRATE_PROJECT="$2"
+      shift 2
+      ;;
+    --apply-migration)
+      APPLY_MIGRATION=true
+      shift
+      ;;
+    --reset-stale-contracts)
+      RESET_STALE_CONTRACTS=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+if [ "$APPLY_MIGRATION" = true ] && [ -z "$MIGRATE_PROJECT" ]; then
+  die "--apply-migration requires --migrate-project <project_root>"
+fi
+if [ "$RESET_STALE_CONTRACTS" = true ] && [ -z "$MIGRATE_PROJECT" ]; then
+  die "--reset-stale-contracts requires --migrate-project <project_root>"
+fi
 
 [ -d "$WORKSPACE_ROOT" ] || die "workspace root does not exist: $WORKSPACE_ROOT"
 
@@ -52,6 +104,7 @@ cp "$FRAMEWORK_ROOT/scripts/lint.sh" "$WORKSPACE_ROOT/.codespec/scripts/lint.sh"
 cp "$FRAMEWORK_ROOT/scripts/migrate-to-requirement-phase.sh" "$WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh"
 cp "$FRAMEWORK_ROOT/scripts/smoke.sh" "$WORKSPACE_ROOT/.codespec/scripts/smoke.sh"
 cp "$FRAMEWORK_ROOT/scripts/lib/testing-ledger.sh" "$WORKSPACE_ROOT/.codespec/scripts/lib/testing-ledger.sh"
+cp "$FRAMEWORK_ROOT/scripts/lib/legacy-wi-audit.sh" "$WORKSPACE_ROOT/.codespec/scripts/lib/legacy-wi-audit.sh"
 
 # 复制模板文件
 cp "$FRAMEWORK_ROOT/templates/AI_INSTRUCTIONS.md" "$WORKSPACE_ROOT/.codespec/templates/AI_INSTRUCTIONS.md"
@@ -122,6 +175,19 @@ fi
   "$WORKSPACE_ROOT/.codespec/templates/phase-review-policy.md" \
   "$WORKSPACE_ROOT/phase-review-policy.md"
 
+if [ -n "$MIGRATE_PROJECT" ]; then
+  migration_args=(migrate-remove-wi "$MIGRATE_PROJECT")
+  if [ "$APPLY_MIGRATION" = true ]; then
+    migration_args+=(--apply)
+  fi
+  if [ "$RESET_STALE_CONTRACTS" = true ]; then
+    migration_args+=(--reset-stale-contracts)
+  fi
+  log ""
+  log "running project legacy WI audit/migration: $MIGRATE_PROJECT"
+  "$WORKSPACE_ROOT/.codespec/codespec" "${migration_args[@]}"
+fi
+
 log "installed workspace runtime"
 log "workspace_root: $WORKSPACE_ROOT"
 log ""
@@ -129,4 +195,6 @@ log "Next steps:"
 log "1. For a new project: cd into the repository and run $WORKSPACE_ROOT/.codespec/scripts/init-dossier.sh"
 log "2. For an existing initialized project: run $WORKSPACE_ROOT/.codespec/scripts/install-hooks.sh <project_root>"
 log "3. If the project still uses Proposal/Requirements, run $WORKSPACE_ROOT/.codespec/scripts/migrate-to-requirement-phase.sh <project_root>"
-log "4. Continue phase transitions via: $(resolve_codespec_cmd) start-design"
+log "4. For an existing WI-era project, run $(resolve_codespec_cmd) audit-legacy-wi <project_root> --strict"
+log "5. If blocking residue exists, run $(resolve_codespec_cmd) migrate-remove-wi <project_root>, then rerun with --apply and add --reset-stale-contracts when contracts are stale"
+log "6. Continue phase transitions via: $(resolve_codespec_cmd) start-design"

@@ -13,6 +13,7 @@ transitions:
       - gate: test-plan-complete
         env:
           CODESPEC_TARGET_PHASE: Design
+      - gate: legacy-wi-clean
       - gate: review-quality
         env:
           CODESPEC_TARGET_PHASE: Design

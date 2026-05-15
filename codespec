@@ -7,6 +7,9 @@ FRAMEWORK_ROOT="$SCRIPT_DIR"
 # shellcheck source=scripts/lib/testing-ledger.sh
 . "$FRAMEWORK_ROOT/scripts/lib/testing-ledger.sh"
 
+# shellcheck source=scripts/lib/legacy-wi-audit.sh
+. "$FRAMEWORK_ROOT/scripts/lib/legacy-wi-audit.sh"
+
 log() {
   printf '%s\n' "$*"
 }
@@ -401,6 +404,35 @@ ensure_reset_worktree_clean() {
   git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   status_output="$(git -C "$project_root" status --porcelain --untracked-files=all)"
   [ -z "$status_output" ] || die 'reset-to-requirement refuses to overwrite a dirty worktree; commit/stash changes or rerun with --force'
+}
+
+project_migration_backup_root() {
+  local project_root="$1"
+  local workspace_root slug
+  workspace_root="$(find_workspace_root)"
+  slug="$(legacy_wi_project_slug "$(cd "$project_root" && pwd)")"
+  printf '%s/.codespec/migration-backups/%s\n' "$workspace_root" "$slug"
+}
+
+backup_project_directory() {
+  local project_root="$1"
+  local rel_dir="$2"
+  local backup_name="$3"
+  local src="$project_root/$rel_dir"
+  [ -d "$src" ] || return 0
+
+  local backup_root base dest suffix
+  backup_root="$(project_migration_backup_root "$project_root")"
+  mkdir -p "$backup_root"
+  base="$backup_root/$backup_name.$(date +%Y%m%d%H%M%S)"
+  dest="$base"
+  suffix=1
+  while [ -e "$dest" ]; do
+    dest="$base.$suffix"
+    suffix=$((suffix + 1))
+  done
+  mv "$src" "$dest"
+  log "backed up: $rel_dir/ -> $dest"
 }
 
 ensure_deployed_source_revision_current() {
@@ -1784,7 +1816,7 @@ reset_to_requirement() {
   [ "$current_phase" = 'Deployment' ] || die 'reset-to-requirement requires Deployment phase'
   base_version="$(resolve_promoted_base_version "$project_root" "$change_id")"
 
-  local keep_contracts=true
+  local keep_contracts=false
   local force=false
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1808,6 +1840,30 @@ reset_to_requirement() {
     ensure_reset_worktree_clean "$project_root"
   fi
 
+  local preserved_reviews=""
+  if [ "$keep_contracts" = true ]; then
+    local contract_blockers
+    contract_blockers="$(legacy_wi_blocking_contract_records "$project_root")"
+    if [ -n "$contract_blockers" ]; then
+      printf '%s\n' "$contract_blockers" | sed -n '1,20p' >&2
+      die "reset-to-requirement --keep-contracts requires contracts without legacy WI residue and valid freeze reviews"
+    fi
+
+    preserved_reviews="$(mktemp -d)"
+    local contract freeze_review_ref
+    if [ -d "$project_root/contracts" ]; then
+      while IFS= read -r contract; do
+        [ -f "$contract" ] || continue
+        freeze_review_ref="$(legacy_wi_contract_scalar "$contract" freeze_review_ref)"
+        [ -n "$freeze_review_ref" ] || continue
+        [ "$freeze_review_ref" != "null" ] || continue
+        [ -f "$project_root/$freeze_review_ref" ] || continue
+        mkdir -p "$preserved_reviews/$(dirname "$freeze_review_ref")"
+        cp "$project_root/$freeze_review_ref" "$preserved_reviews/$freeze_review_ref"
+      done < <(find "$project_root/contracts" -maxdepth 1 -type f -name '*.md' -print 2>/dev/null | sort)
+    fi
+  fi
+
   log "resetting dossier to Requirement phase..."
 
   cp "$workspace_root/.codespec/templates/spec.md" "$project_root/spec.md"
@@ -1823,9 +1879,13 @@ reset_to_requirement() {
 
   rm -rf "$project_root/reviews"
   mkdir -p "$project_root/reviews"
+  if [ -n "$preserved_reviews" ] && [ -d "$preserved_reviews/reviews" ]; then
+    cp -R "$preserved_reviews/reviews/." "$project_root/reviews/"
+  fi
+  [ -z "$preserved_reviews" ] || rm -rf "$preserved_reviews"
 
   if [ "$keep_contracts" = false ]; then
-    rm -rf "$project_root/contracts"
+    backup_project_directory "$project_root" contracts contracts.bak
     mkdir -p "$project_root/contracts"
   fi
 
@@ -1843,17 +1903,205 @@ reset_to_requirement() {
   log "new change_id: $base_version-next"
 }
 
+migrate_remove_wi_entry_file() {
+  local file="$1"
+  local apply_mode="$2"
+  [ -f "$file" ] || return 0
+
+  local mode="check"
+  [ "$apply_mode" = true ] && mode="apply"
+
+  python3 - "$file" "$mode" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+mode = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+original = text
+
+fast_lane = """## 快速通道
+
+用户在会话开始或首次任务中明确要求“本次走快速通道”时，先确认：“是否本会话跳过 Codespec 框架约束，只保留核心原则？”
+
+用户确认后：
+- 不主动读取 `meta.yaml`、`codespec readset`、阶段文档、review、gate
+- 不执行 Codespec 阶段流程、阶段切换检查、提交/PR 节奏
+- 只保留“核心原则”、更高优先级指令和用户当前明确要求
+
+快速通道只在当前会话有效，不写入 `meta.yaml`。明显高风险任务先说明风险。
+
+---
+
+"""
+
+changes: list[str] = []
+if "## 快速通道" not in text:
+    marker = "---\n\n"
+    if marker in text:
+        text = text.replace(marker, marker + fast_lane, 1)
+        changes.append("add fast lane section")
+
+replacements = [
+    (
+        "- 根据当前阶段执行 `codespec readset --json`，按 `layered_readset.default -> work_item/phase -> on_demand` 分层读取；不要凭记忆决定该读哪些文档",
+        "- 根据当前阶段执行 `codespec readset --json`，按 `layered_readset.default -> layered_readset.phase -> layered_readset.on_demand` 分层读取；不要凭记忆决定该读哪些文档",
+        "replace legacy readset layer",
+    ),
+    (
+        "- 需要修改不在当前 WI 的 `allowed_paths` 中的文件 → 停止",
+        "- 需要修改当前阶段不允许的文件，或 Implementation 阶段不在 `design.md §4` 可修改路径内的文件 → 停止",
+        "replace WI allowed_paths stop rule",
+    ),
+    (
+        "- 需要修改 `forbidden_paths` 中的文件 → 停止",
+        "- 需要修改 `codespec readset --json` 标记为禁止，或 `design.md §4` 标记为不可修改的路径 → 停止",
+        "replace forbidden_paths stop rule",
+    ),
+    (
+        "- 需要实现 `out_of_scope` 中的功能 → 停止",
+        "- 需要实现 `spec.md` / `design.md` 明确排除的功能 → 停止",
+        "replace out_of_scope stop rule",
+    ),
+    (
+        "- `spec.md` / `design.md` / `work-items/*.yaml` 之间描述不一致 → 先对齐",
+        "- 当前阶段权威文档（`spec.md` / `design.md` / `testing.md` / `contracts/*.md`）之间描述不一致 → 先对齐",
+        "replace work-items consistency rule",
+    ),
+    (
+        "- 依赖 Work Item 尚未完成，但当前任务需要其结果 → 停止，等待依赖",
+        "- 依赖的前置产物、契约、测试证据或实现结果尚未完成，但当前任务需要其结果 → 停止，先补齐前置条件",
+        "replace Work Item dependency rule",
+    ),
+    (
+        "- 测试失败且无法在当前 scope 内修复 → 回看 work-item.yaml，可能需要扩大 allowed_paths",
+        "- 测试失败且无法在当前 scope 内修复 → 停止；先回看 `design.md §4/§7` 与 `testing.md`，必要时按阶段规则回写权威文档",
+        "replace work-item.yaml test failure rule",
+    ),
+    (
+        "- Implementation 阶段发现当前 WI 没有引用 `TC-*` → 停止，先回写 `design.md` / `work-items/*.yaml`",
+        "- Implementation 阶段开始修改产品/业务行为前，当前 slice（`design.md §7`）必须绑定 `testing.md` 中存在的 `TC-*`；缺失则先补齐 `design.md §7` / `testing.md`",
+        "replace WI TC rule",
+    ),
+    (
+        "- Implementation 阶段发现当前实现 slice（`design.md §7`）未引用 `testing.md` 中存在的 `TC-*` → 停止，先补齐 `design.md §7` / `testing.md`",
+        "- Implementation 阶段开始修改产品/业务行为前，当前 slice（`design.md §7`）必须绑定 `testing.md` 中存在的 `TC-*`；缺失则先补齐 `design.md §7` / `testing.md`",
+        "narrow slice TC rule",
+    ),
+    (
+        "- 不要在 execution branch 上直接提 PR；并行模式下只允许在 `feature_branch` 上执行 `submit-pr`\n",
+        "",
+        "remove deprecated parallel PR rule",
+    ),
+]
+
+for old, new, label in replacements:
+    if old in text:
+        text = text.replace(old, new)
+        changes.append(label)
+
+if text != original and mode == "apply":
+    path.write_text(text, encoding="utf-8")
+
+if changes:
+    print(f"{path.name}: " + "; ".join(changes))
+PY
+}
+
+print_legacy_wi_audit_records() {
+  local records="$1"
+  local max_lines="${2:-80}"
+  [ -n "$records" ] || {
+    log "No legacy WI references found."
+    return 0
+  }
+
+  local blocking info total
+  blocking="$(printf '%s\n' "$records" | awk -F '\t' '$1 == "blocking"')"
+  info="$(printf '%s\n' "$records" | awk -F '\t' '$1 == "info"')"
+
+  if [ -n "$blocking" ]; then
+    log "Blocking legacy WI residue:"
+    printf '%s\n' "$blocking" | awk -F '\t' '{ printf "- [%s] %s: %s\n", $2, $3, $4 }' | sed -n "1,${max_lines}p"
+    total="$(printf '%s\n' "$blocking" | wc -l | tr -d ' ')"
+    if [ "$total" -gt "$max_lines" ]; then
+      log "... ($total blocking matches)"
+    fi
+  else
+    log "Blocking legacy WI residue: none"
+  fi
+
+  if [ -n "$info" ]; then
+    log ""
+    log "Informational legacy WI references:"
+    printf '%s\n' "$info" | awk -F '\t' '{ printf "- [%s] %s\n", $2, $3 }' | sed -n "1,${max_lines}p"
+    total="$(printf '%s\n' "$info" | wc -l | tr -d ' ')"
+    if [ "$total" -gt "$max_lines" ]; then
+      log "... ($total informational matches)"
+    fi
+  fi
+}
+
+audit_legacy_wi_cmd() {
+  require_yq
+  local project_root="${1:?usage: codespec audit-legacy-wi <project_root> [--strict] [--json]}"
+  shift || true
+  local strict=false
+  local output_json=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --strict) strict=true ;;
+      --json) output_json=true ;;
+      *) die "unknown audit-legacy-wi option: $1" ;;
+    esac
+    shift || true
+  done
+
+  [ -d "$project_root" ] || die "project_root does not exist: $project_root"
+  project_root="$(cd "$project_root" && pwd)"
+
+  local records blocking
+  records="$(legacy_wi_audit_records "$project_root" true)"
+  blocking="$(printf '%s\n' "$records" | awk -F '\t' '$1 == "blocking"')"
+
+  if [ "$output_json" = true ]; then
+    printf '%s\n' "$records" | legacy_wi_records_to_json
+  else
+    log "legacy WI audit: $project_root"
+    print_legacy_wi_audit_records "$records"
+  fi
+
+  if [ "$strict" = true ] && [ -n "$blocking" ]; then
+    return 1
+  fi
+}
+
 migrate_remove_wi() {
   require_yq
   local project_root="${1:?usage: codespec migrate-remove-wi <project_root> [--apply]}"
   shift || true
 
   local apply_mode=false
-  if find_optional_arg '--apply' "$@"; then
-    apply_mode=true
-  fi
+  local reset_stale_contracts=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --apply)
+        apply_mode=true
+        ;;
+      --reset-stale-contracts)
+        reset_stale_contracts=true
+        ;;
+      *)
+        die "unknown migrate-remove-wi option: $1"
+        ;;
+    esac
+    shift || true
+  done
 
   [ -d "$project_root" ] || die "project_root does not exist: $project_root"
+  project_root="$(cd "$project_root" && pwd)"
   local meta="$project_root/meta.yaml"
   [ -f "$meta" ] || die "missing meta.yaml in $project_root"
 
@@ -1889,9 +2137,10 @@ migrate_remove_wi() {
 
   # Step 1: Backup work-items/ if it exists
   if [ -d "$project_root/work-items" ]; then
-    local backup_dir="$project_root/work-items.bak.$(date +%Y%m%d)"
+    local backup_dir
+    backup_dir="$(project_migration_backup_root "$project_root")/work-items.bak.$(date +%Y%m%d%H%M%S)"
     if [ "$apply_mode" = false ]; then
-      log "Would backup: work-items/ -> $(basename "$backup_dir")/"
+      log "Would backup: work-items/ -> $backup_dir/"
       # Show WI summary
       local wi_file wi_id
       for wi_file in "$project_root/work-items"/WI-*.yaml; do
@@ -1903,11 +2152,7 @@ migrate_remove_wi() {
         log "  $wi_id: allowed_paths=$allowed, forbidden_paths=$forbidden"
       done
     else
-      if [ -d "$backup_dir" ]; then
-        die "backup directory already exists: $backup_dir"
-      fi
-      mv "$project_root/work-items" "$backup_dir"
-      log "backed up: work-items/ -> $(basename "$backup_dir")/"
+      backup_project_directory "$project_root" work-items work-items.bak
     fi
   else
     if [ "$apply_mode" = false ]; then
@@ -1931,18 +2176,49 @@ migrate_remove_wi() {
     fi
   done
 
+  # Step 3: Clean legacy WI wording from project entry files using exact old-template replacements.
+  local entry_file entry_output
+  for entry_file in "$project_root/AGENTS.md" "$project_root/CLAUDE.md" "$project_root/AI_INSTRUCTIONS.md"; do
+    [ -f "$entry_file" ] || continue
+    entry_output="$(migrate_remove_wi_entry_file "$entry_file" "$apply_mode")"
+    [ -n "$entry_output" ] || continue
+    if [ "$apply_mode" = false ]; then
+      log "Would update entry file: $entry_output"
+    else
+      log "updated entry file: $entry_output"
+    fi
+  done
+
+  # Step 4: Optionally reset stale contracts that still encode the removed WI model.
+  if [ "$reset_stale_contracts" = true ]; then
+    if [ -d "$project_root/contracts" ]; then
+      if [ "$apply_mode" = false ]; then
+        log "Would backup and reset: contracts/ -> $(project_migration_backup_root "$project_root")/contracts.bak.<timestamp>/"
+      else
+        backup_project_directory "$project_root" contracts contracts.bak
+        mkdir -p "$project_root/contracts"
+      fi
+    elif [ "$apply_mode" = false ]; then
+      log "No contracts/ directory found - nothing to reset."
+    else
+      mkdir -p "$project_root/contracts"
+    fi
+  fi
+
   if [ "$apply_mode" = false ]; then
-    log ""
-    log "=== After migration, please update: ==="
-    log "  - CLAUDE.md: replace WI references with design.md §4/§7"
-    log "  - AGENTS.md: replace WI references with design.md §4/§7"
     log ""
     log "Run with --apply to execute."
   else
-    log ""
-    log "=== Migration applied. Please update: ==="
-    log "  - CLAUDE.md: replace WI references with design.md §4/§7"
-    log "  - AGENTS.md: replace WI references with design.md §4/§7"
+    log "migration applied"
+  fi
+
+  local records blocking
+  records="$(legacy_wi_audit_records "$project_root" true)"
+  blocking="$(printf '%s\n' "$records" | awk -F '\t' '$1 == "blocking"')"
+  log ""
+  print_legacy_wi_audit_records "$records"
+  if [ "$apply_mode" = true ] && [ -n "$blocking" ]; then
+    die "legacy WI migration still has blocking residue; rerun with --reset-stale-contracts when contract reset is intended"
   fi
 }
 
@@ -2977,7 +3253,7 @@ Usage:
   codespec submit-pr <stable-version> [--base <branch>] [--draft]
   codespec scaffold-project-docs <version>
   codespec generate-project-docs <version>
-  codespec reset-to-requirement [--reset-contracts] [--force]
+  codespec reset-to-requirement [--keep-contracts] [--force]
   codespec install-hooks
   codespec check-gate <name>
   codespec status
@@ -2990,7 +3266,8 @@ Usage:
   codespec promote-version <stable-version>
   codespec list-versions [--json]
   codespec migrate-requirement-phase <project_root> [--apply]
-  codespec migrate-remove-wi <project_root> [--apply]
+  codespec audit-legacy-wi <project_root> [--strict] [--json]
+  codespec migrate-remove-wi <project_root> [--apply] [--reset-stale-contracts]
   codespec migrate-testing-ledger [--write]
 
 Installation:
@@ -3012,6 +3289,7 @@ Version lifecycle:
   reset-to-requirement -> reset dossier to Requirement phase for next version
   list-versions -> list all archived versions
   migrate-requirement-phase -> migrate Proposal/Requirements projects to Requirement with dry-run default
+  audit-legacy-wi -> classify active legacy WI residue before/after migration
   migrate-remove-wi -> migrate project from WI model to design.md authority model
   migrate-testing-ledger -> generate structured testing.md ledger from legacy TC/RUN/HANDOFF sections
 
@@ -3053,7 +3331,7 @@ Internal gates:
   requirement-complete | spec-quality | test-plan-complete
   design-structure-complete | design-quality (alias: design-readiness)
   implementation-ready | implementation-start
-  phase-capability | scope | contract-boundary
+  legacy-wi-clean | phase-capability | scope | contract-boundary
   trace-consistency | verification | testing-coverage
   semantic-handoff
   deployment-plan-ready | deployment-readiness | promotion-criteria | policy-consistency
@@ -3151,6 +3429,9 @@ main() {
       ;;
     promote-version)
       promote_version "$@"
+      ;;
+    audit-legacy-wi)
+      audit_legacy_wi_cmd "$@"
       ;;
     migrate-requirement-phase)
       migrate_requirement_phase "$@"

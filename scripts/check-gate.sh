@@ -8,6 +8,9 @@ GATE="${1:-}"
 # shellcheck source=scripts/lib/testing-ledger.sh
 . "$FRAMEWORK_ROOT/scripts/lib/testing-ledger.sh"
 
+# shellcheck source=scripts/lib/legacy-wi-audit.sh
+. "$FRAMEWORK_ROOT/scripts/lib/legacy-wi-audit.sh"
+
 log() {
   printf '%s\n' "$*"
 }
@@ -664,7 +667,7 @@ check_ai_reading_contract_matrix() {
   ' "$file" || die "${label} AI reading contract must define appendix reading matrix"
 }
 
-# Check for dirty worktree files that fall within active WI allowed_paths, or
+# Check for dirty worktree files that fall within design.md §4 scope, or
 # all dirty files when strict=true.
 check_dirty_worktree() {
   local strict="${1:-false}"
@@ -1116,6 +1119,16 @@ gate_metadata_consistency() {
   esac
 
   log '✓ metadata-consistency gate passed'
+}
+
+gate_legacy_wi_clean() {
+  local records
+  records="$(legacy_wi_blocking_records "$PROJECT_ROOT")"
+  if [ -n "$records" ]; then
+    printf '%s\n' "$records" | awk -F '\t' '{ printf "- [%s] %s: %s\n", $2, $3, $4 }' | sed -n '1,40p' >&2
+    die 'legacy WI blocking residue found; run codespec audit-legacy-wi <project_root> and migrate-remove-wi before continuing'
+  fi
+  log '✓ legacy-wi-clean gate passed'
 }
 
 collect_formal_requirement_ids() {
@@ -3443,23 +3456,31 @@ gate_contract_boundary() {
 
   local mode
   mode="${CODESPEC_CONTRACT_BOUNDARY_MODE:-staged}"
+  local phase
+  phase="$(yaml_scalar "$META_FILE" phase)"
 
-  # Check design.md §5 contract_refs exist
+  # Check design.md §5 contract_refs exist when design.md is present in the
+  # current snapshot. Requirement-stage commits may not carry design.md yet.
   local ref
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    [ "$ref" != 'null' ] || continue
-    [ "$ref" != 'none' ] || continue
-    [ -f "$PROJECT_ROOT/$ref" ] || die "design.md §5 references missing contract: $ref"
-  done < <(
-    awk '
-      /^## (5\. 契约设计|External Interactions & Contracts|Data & Storage Design)$/{f=1;next}
-      f && /^## /{f=0;next}
-      f && /^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/{
-        line=$0; sub(/^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line
-      }
-    ' "$DESIGN_FILE" | grep -vE '^(|null|none|\[.*\])$' || true
-  )
+  if [ -f "$DESIGN_FILE" ]; then
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      [ "$ref" != 'null' ] || continue
+      [ "$ref" != 'none' ] || continue
+      [ -f "$PROJECT_ROOT/$ref" ] || die "design.md §5 references missing contract: $ref"
+      if [ "$phase" != 'Requirement' ] && [ "$(contract_scalar_current "$PROJECT_ROOT/$ref" status)" = 'frozen' ]; then
+        validate_frozen_contract_file "$ref"
+      fi
+    done < <(
+      awk '
+        /^## (5\. 契约设计|External Interactions & Contracts|Data & Storage Design)$/{f=1;next}
+        f && /^## /{f=0;next}
+        f && /^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/{
+          line=$0; sub(/^[[:space:]]*-[[:space:]]*contract_ref:[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line); print line
+        }
+      ' "$DESIGN_FILE" | grep -vE '^(|null|none|\[.*\])$' || true
+    )
+  fi
 
   local rel_contract_root="contracts/"
   local file head_status current_status base_status implementation_base_revision
@@ -4024,6 +4045,9 @@ main() {
       ;;
     metadata-consistency)
       gate_metadata_consistency
+      ;;
+    legacy-wi-clean)
+      gate_legacy_wi_clean
       ;;
     phase-capability)
       gate_phase_capability

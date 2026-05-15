@@ -55,6 +55,81 @@ assert_eq() {
   [ "$actual" = "$expected" ] || die "expected '$expected', got '$actual'"
 }
 
+write_legacy_entry_file() {
+  local file="$1"
+  cat > "$file" <<'EOF'
+# AGENTS.md
+
+尽量用简体中文交流（除非涉及专业术语），禁止用 worktree。
+
+---
+
+## 一、每次启动必读
+
+- `../lessons_learned.md` - 只读取硬规则部分
+- `./meta.yaml`
+- 根据当前阶段执行 `codespec readset --json`，按 `layered_readset.default -> work_item/phase -> on_demand` 分层读取；不要凭记忆决定该读哪些文档
+- 读取权威文档时先读 `0. AI 阅读契约`；权威文档为空、冲突或不足以支撑当前任务时，停止并补文档或询问用户。
+
+---
+
+## 二、什么时候必须停下
+
+**范围越界**：
+- 需要修改不在当前 WI 的 `allowed_paths` 中的文件 → 停止
+- 需要修改 `forbidden_paths` 中的文件 → 停止
+- 需要实现 `out_of_scope` 中的功能 → 停止
+- 需要修改 frozen contract → 停止
+
+**目标不清**：
+- 目标/边界/验收不清楚 → 先问用户
+- `spec.md` / `design.md` / `work-items/*.yaml` 之间描述不一致 → 先对齐
+- 需要做产品判断（非纯工程判断）→ 先问用户
+
+**执行偏离**：
+- 发现需要先回写权威文件（spec/design/testing/deployment）→ 停止当前任务，先更新文档
+- 依赖 Work Item 尚未完成，但当前任务需要其结果 → 停止，等待依赖
+- 测试失败且无法在当前 scope 内修复 → 回看 work-item.yaml，可能需要扩大 allowed_paths
+- Implementation 阶段发现当前 WI 没有引用 `TC-*` → 停止，先回写 `design.md` / `work-items/*.yaml`
+
+custom legacy note that must stay
+
+## 五、提交与 PR 节奏
+
+- 不要在 execution branch 上直接提 PR；并行模式下只允许在 `feature_branch` 上执行 `submit-pr`
+EOF
+}
+
+create_legacy_wi_project() {
+  local repo="$1"
+  git init "$repo" >/dev/null
+  cd "$repo"
+  git config user.name "Smoke Test"
+  git config user.email "smoke@test.local"
+  "$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+  yq eval '.focus_work_item = "WI-001" | .active_work_items = ["WI-001"] | .execution_group = "legacy-group" | .execution_branch = "legacy/branch" | .feature_branch = "feature/legacy"' -i meta.yaml
+  mkdir -p work-items contracts versions/v1.0.0/work-items
+  cat > work-items/WI-001.yaml <<'EOF'
+wi_id: WI-001
+allowed_paths:
+  - src/**
+forbidden_paths:
+  - versions/**
+EOF
+  cat > versions/v1.0.0/work-items/WI-001.yaml <<'EOF'
+wi_id: WI-001
+archived: true
+EOF
+  cat > contracts/legacy-report.md <<'EOF'
+report_fields:
+  - work_item_refs
+example: WI-001
+EOF
+  write_legacy_entry_file AGENTS.md
+  write_legacy_entry_file CLAUDE.md
+  cd "$TMP_WORKSPACE"
+}
+
 # Helper: create a complete design.md for the main test-project
 write_complete_design() {
   cat > design.md <<'DESIGNEOF'
@@ -400,8 +475,101 @@ expect_fail_cmd \
   "cd '$TMP_WORKSPACE' && '$TMP_WORKSPACE/.codespec/codespec' set-execution-context parallel main test-group"
 log "ok removed commands output friendly errors"
 
+# Test 1b1: Removed WI model migration cleans project entry files explicitly
+log "\n=== Test 1b1: Removed WI migration command ==="
+remove_wi_project="$TMP_WORKSPACE/remove-wi-project"
+create_legacy_wi_project "$remove_wi_project"
+
+remove_wi_dry_output="$("$TMP_WORKSPACE/.codespec/codespec" migrate-remove-wi "$remove_wi_project")"
+assert_contains "$remove_wi_dry_output" "=== DRY RUN ==="
+assert_contains "$remove_wi_dry_output" "Would backup: work-items/ ->"
+assert_contains "$remove_wi_dry_output" "Would remove from meta.yaml: focus_work_item"
+assert_contains "$remove_wi_dry_output" "Would update entry file: AGENTS.md"
+assert_contains "$remove_wi_dry_output" "Would update entry file: CLAUDE.md"
+assert_contains "$remove_wi_dry_output" "Blocking legacy WI residue"
+[ -d "$remove_wi_project/work-items" ] || die "dry-run must not move work-items"
+grep -q "focus_work_item" "$remove_wi_project/meta.yaml" || die "dry-run must not edit meta.yaml"
+if grep -q "快速通道" "$remove_wi_project/AGENTS.md"; then
+  die "dry-run must not edit AGENTS.md"
+fi
+
+audit_json="$("$TMP_WORKSPACE/.codespec/codespec" audit-legacy-wi "$remove_wi_project" --json)"
+assert_json_eq "$audit_json" 'map(select(.severity == "blocking" and .category == "contract-legacy-wi")) | length > 0' 'true'
+expect_fail_cmd \
+  "legacy WI migration still has blocking residue" \
+  "'$TMP_WORKSPACE/.codespec/codespec' migrate-remove-wi '$remove_wi_project' --apply"
+
+[ ! -d "$remove_wi_project/work-items" ] || die "failed apply should still move work-items before blocking audit"
+work_items_backup_count="$(find "$TMP_WORKSPACE/.codespec/migration-backups" -path "*/work-items.bak.*/WI-001.yaml" | wc -l | tr -d ' ')"
+[ "$work_items_backup_count" = "1" ] || die "expected one workspace work-items backup, got $work_items_backup_count"
+
+remove_wi_apply_output="$("$TMP_WORKSPACE/.codespec/codespec" migrate-remove-wi "$remove_wi_project" --apply --reset-stale-contracts)"
+assert_contains "$remove_wi_apply_output" "backed up: contracts/ ->"
+assert_contains "$remove_wi_apply_output" "migration applied"
+[ ! -d "$remove_wi_project/work-items" ] || die "apply should move work-items"
+[ ! -f "$remove_wi_project/contracts/legacy-report.md" ] || die "reset-stale-contracts should remove stale contract from current dossier"
+contracts_backup_count="$(find "$TMP_WORKSPACE/.codespec/migration-backups" -path "*/contracts.bak.*/legacy-report.md" | wc -l | tr -d ' ')"
+[ "$contracts_backup_count" = "1" ] || die "expected one workspace contracts backup, got $contracts_backup_count"
+[ -f "$remove_wi_project/versions/v1.0.0/work-items/WI-001.yaml" ] || die "migration must not touch versions archive"
+[ "$(yq eval '.focus_work_item // "absent"' "$remove_wi_project/meta.yaml")" = "absent" ] || die "focus_work_item should be removed"
+[ "$(yq eval '.active_work_items // "absent"' "$remove_wi_project/meta.yaml")" = "absent" ] || die "active_work_items should be removed"
+for entry_file in AGENTS.md CLAUDE.md; do
+  grep -q "## 快速通道" "$remove_wi_project/$entry_file" || die "$entry_file missing fast lane"
+  grep -q "custom legacy note that must stay" "$remove_wi_project/$entry_file" || die "$entry_file custom content not preserved"
+  ! grep -q "work_item/phase" "$remove_wi_project/$entry_file" || die "$entry_file still has legacy readset layer"
+  ! grep -q "当前 WI" "$remove_wi_project/$entry_file" || die "$entry_file still has legacy WI wording"
+  ! grep -q "work-items/\\*.yaml" "$remove_wi_project/$entry_file" || die "$entry_file still has work-items authority"
+  ! grep -q "execution branch" "$remove_wi_project/$entry_file" || die "$entry_file still has parallel branch rule"
+done
+"$TMP_WORKSPACE/.codespec/codespec" audit-legacy-wi "$remove_wi_project" --strict >/dev/null
+log "ok migrate-remove-wi cleans standard legacy WI entry files and blocks stale contracts until reset"
+
+# Test 1b2: install-workspace can explicitly run migration without implicit project edits
+log "\n=== Test 1b2: install-workspace optional WI migration ==="
+install_migration_project="$TMP_WORKSPACE/install-migration-project"
+create_legacy_wi_project "$install_migration_project"
+install_migration_dry_output="$("$FRAMEWORK_ROOT/scripts/install-workspace.sh" "$TMP_WORKSPACE" --migrate-project "$install_migration_project")"
+assert_contains "$install_migration_dry_output" "running project legacy WI audit/migration: $install_migration_project"
+assert_contains "$install_migration_dry_output" "=== DRY RUN ==="
+[ -d "$install_migration_project/work-items" ] || die "install dry-run migration must not move work-items"
+grep -q "focus_work_item" "$install_migration_project/meta.yaml" || die "install dry-run migration must not edit meta.yaml"
+
+install_migration_apply_output="$("$FRAMEWORK_ROOT/scripts/install-workspace.sh" "$TMP_WORKSPACE" --migrate-project "$install_migration_project" --apply-migration --reset-stale-contracts)"
+assert_contains "$install_migration_apply_output" "running project legacy WI audit/migration: $install_migration_project"
+assert_contains "$install_migration_apply_output" "migration applied"
+[ ! -d "$install_migration_project/work-items" ] || die "install apply migration should move work-items"
+[ ! -f "$install_migration_project/contracts/legacy-report.md" ] || die "install apply migration should reset stale contracts"
+[ "$(yq eval '.focus_work_item // "absent"' "$install_migration_project/meta.yaml")" = "absent" ] || die "install apply migration should remove focus_work_item"
+grep -q "## 快速通道" "$install_migration_project/AGENTS.md" || die "install apply migration should update AGENTS.md"
+log "ok install-workspace runs WI migration only when explicitly requested"
+
+# Test 1b3: contract-boundary validates referenced frozen contract reviews even when contracts are not changed
+log "\n=== Test 1b3: Contract boundary catches stale frozen contract reviews ==="
+contract_boundary_project="$TMP_WORKSPACE/contract-boundary-project"
+git init "$contract_boundary_project" >/dev/null
+cd "$contract_boundary_project"
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+mkdir -p contracts
+cat > contracts/api.md <<'EOF'
+contract_id: CONTRACT-API
+status: frozen
+frozen_at: 2026-04-29
+freeze_review_ref: reviews/missing-freeze-review.yaml
+EOF
+perl -0pi -e 's/- contract_ref: \[contracts\/\*\.md 或 none\]/- contract_ref: contracts\/api.md/' design.md
+yq eval '.phase = "Design"' -i meta.yaml
+git add -A
+git commit --no-verify -m "test: stale frozen contract fixture" >/dev/null
+expect_fail_cmd \
+  "requires explicit review record" \
+  "cd '$contract_boundary_project' && '$TMP_WORKSPACE/.codespec/codespec' check-gate contract-boundary"
+cd "$TMP_WORKSPACE"
+log "ok contract-boundary validates referenced frozen contract review records"
+
 # Test 1b2: Requirement phase migration command is dry-run by default
-log "\n=== Test 1b2: Requirement migration command ==="
+log "\n=== Test 1b4: Requirement migration command ==="
 migration_project="$TMP_WORKSPACE/migration-project"
 git init "$migration_project" >/dev/null
 cd "$migration_project"
@@ -1036,6 +1204,12 @@ gate_evidence:
     output_summary: passed
   - gate: test-plan-complete
     command: CODESPEC_TARGET_PHASE=Design codespec check-gate test-plan-complete
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $design_review_revision
+    output_summary: passed
+  - gate: legacy-wi-clean
+    command: codespec check-gate legacy-wi-clean
     result: pass
     checked_at: 2026-04-16T00:00:00Z
     checked_revision: $design_review_revision
@@ -2792,6 +2966,36 @@ reset_change_id=$(yq eval '.change_id' meta.yaml)
 [ "$reset_change_id" = "smoke-v2.8-next" ] || die "reset-to-requirement did not derive next change_id from promoted version"
 log "ok reset-to-requirement resolves promoted baseline version"
 
+reset_contract_project="$TMP_WORKSPACE/reset-contract-project"
+git init "$reset_contract_project" >/dev/null
+cd "$reset_contract_project"
+git config user.name "Smoke Test"
+git config user.email "smoke@test.local"
+"$TMP_WORKSPACE/.codespec/scripts/init-dossier.sh" >/dev/null
+mkdir -p contracts versions/reset-base
+cat > contracts/legacy-report.md <<'EOF'
+contract_id: CONTRACT-LEGACY-REPORT
+status: frozen
+frozen_at: 2026-04-29
+freeze_review_ref: reviews/missing-freeze-review.yaml
+consumers:
+  - WI-001
+
+report_envelope:
+  required: [work_item_refs]
+EOF
+yq eval '.change_id = "baseline" | .phase = "Deployment" | .status = "completed"' -i meta.yaml
+cp meta.yaml versions/reset-base/meta.yaml
+yq eval '.promoted_version = "reset-base" | .promoted_at = "2026-04-16T00:00:00Z"' -i versions/reset-base/meta.yaml
+git add -A
+git commit --no-verify -m "test: reset stale contract fixture" >/dev/null
+"$TMP_WORKSPACE/.codespec/codespec" reset-to-requirement
+[ ! -f contracts/legacy-report.md ] || die "reset-to-requirement should reset stale contracts by default"
+reset_contract_backup_count="$(find "$TMP_WORKSPACE/.codespec/migration-backups" -path "*/contracts.bak.*/legacy-report.md" | wc -l | tr -d ' ')"
+[ "$reset_contract_backup_count" -ge 1 ] || die "reset-to-requirement should backup reset contracts outside the project"
+cd "$TMP_WORKSPACE/test-project"
+log "ok reset-to-requirement resets stale contracts by default"
+
 # Legacy compatibility: same-name archive should still reset through the direct path.
 mkdir -p "$TMP_WORKSPACE/test-project/versions/release-1"
 cp "$TMP_WORKSPACE/test-project/versions/smoke-v2.8/meta.yaml" "$TMP_WORKSPACE/test-project/versions/release-1/meta.yaml"
@@ -3618,6 +3822,12 @@ gate_evidence:
     output_summary: passed
   - gate: test-plan-complete
     command: CODESPEC_TARGET_PHASE=Design codespec check-gate test-plan-complete
+    result: pass
+    checked_at: 2026-04-16T00:00:00Z
+    checked_revision: $hardening_review_revision
+    output_summary: passed
+  - gate: legacy-wi-clean
+    command: codespec check-gate legacy-wi-clean
     result: pass
     checked_at: 2026-04-16T00:00:00Z
     checked_revision: $hardening_review_revision
